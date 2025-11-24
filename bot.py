@@ -123,7 +123,7 @@ def main():
     if not BOT_TOKEN:
         raise RuntimeError("请先设置 BOT_TOKEN 环境变量（Telegram Bot Token）")
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(8215522246:AAFUTR6uUt_RXEQHHAifQqyDpe_C8eVdgiY).build()
 
     app.add_handler(CommandHandler("start_trip", start_trip))
     app.add_handler(CommandHandler("end_trip", end_trip))
