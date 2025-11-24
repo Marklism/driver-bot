@@ -1,0 +1,21 @@
+cd ~/Desktop/driver-bot
+
+# 初始化 git（如果还没有）
+git init
+
+# 确保 .gitignore 有 venv、credentials.json
+cat > .gitignore <<'EOF'
+venv/
+credentials.json
+credentials.b64.txt
+__pycache__/
+*.pyc
+EOF
+
+git add .
+git commit -m "Initial commit - driver bot"
+
+# 把下面的 URL 替换为你 GitHub repo 的 HTTPS 地址
+git remote add origin https://github.com/你的用户名/driver-bot.git
+git branch -M main
+git push -u origin main
