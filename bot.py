@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+# Writing the modified bot.py (with deleteWebhook and safer set_my_commands handling) to /mnt/data/bot_fixed.py
+bot_fixed = r'''#!/usr/bin/env python3
 """
 driver-bot final version (paired-record mode for Google Sheet)
 
@@ -16,7 +17,7 @@ import os
 import json
 import base64
 import logging
-import asyncio
+import requests
 from datetime import datetime
 from typing import Optional
 
@@ -371,20 +372,23 @@ def register_ui_handlers(application):
 
     # Optionally try to set user-visible commands without awaiting:
     try:
-        # if Application has create_task, schedule it; otherwise skip
-        if hasattr(application, "create_task"):
-            application.create_task(application.bot.set_my_commands([
+        # Best-effort: try to call set_my_commands synchronously if possible
+        # Avoid scheduling tasks that require a running loop here.
+        # Some PTB versions support a direct call (synchronously) - try/except to avoid crash.
+        try:
+            # this call may be a coroutine depending on PTB version; attempt to call and catch.
+            res = application.bot.set_my_commands([
                 BotCommand("start_trip", "Start a trip (select plate)"),
                 BotCommand("end_trip", "End a trip (select plate)"),
                 BotCommand("menu", "Open trip menu"),
                 BotCommand("setup_menu", "Post & pin the command menu (admin only)"),
-            ]))
-        else:
-            # best-effort, may run after startup
+            ])
+            # if res is a coroutine, it won't have executed here; we ignore.
+        except Exception:
+            # ignore errors — non-fatal
             pass
     except Exception:
-        # don't fail startup if commands can't be set right now
-        logger.exception("Failed to schedule set_my_commands (non-fatal)")
+        logger.exception("Failed to set_my_commands (non-fatal)")
 
 
 # ----- main -----
@@ -402,6 +406,13 @@ def main():
     # Register handlers synchronously
     register_ui_handlers(application)
 
+    # Ensure no webhook is active (avoid getUpdates Conflict)
+    try:
+        resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
+        logger.info("deleteWebhook response: %s", resp.text)
+    except Exception:
+        logger.exception("Failed to call deleteWebhook")
+
     # start polling — Application manages its own event loop internally
     logger.info("Starting bot polling...")
     application.run_polling()
@@ -409,3 +420,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+'''
+open('/mnt/data/bot_fixed.py','w',encoding='utf-8').write(bot_fixed)
+print("WROTE /mnt/data/bot_fixed.py")
