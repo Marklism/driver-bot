@@ -71,7 +71,10 @@ def get_gspread_client():
     if not GOOGLE_CREDS_BASE64:
         raise RuntimeError("GOOGLE_CREDS_BASE64 environment variable is missing")
     try:
-        decoded = base64.b64decode(GOOGLE_CREDS_BASE64)
+        # clean up whitespace/newlines and fix padding if needed
+        s = "".join(GOOGLE_CREDS_BASE64.split())
+        s += "=" * ((4 - len(s) % 4) % 4)
+        decoded = base64.b64decode(s)
         creds_json = json.loads(decoded)
     except Exception:
         logger.exception("Failed to decode GOOGLE_CREDS_BASE64")
@@ -182,6 +185,58 @@ def build_plate_keyboard(prefix: str):
     return InlineKeyboardMarkup(buttons)
 
 
+# --- Command Menu for groups (new) ---
+def build_command_menu():
+    """Return InlineKeyboardMarkup with top-level command buttons."""
+    keyboard = [
+        [
+            InlineKeyboardButton("Start trip (select plate)", callback_data="cmd|start_trip"),
+            InlineKeyboardButton("End trip (select plate)", callback_data="cmd|end_trip"),
+        ],
+        [
+            InlineKeyboardButton("Open menu", callback_data="cmd|menu"),
+            InlineKeyboardButton("Help", callback_data="cmd|help"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /setup_menu - admin command in group to post the persistent command panel and pin it.
+    Usage: in group, group admin runs /setup_menu
+    """
+    chat = update.effective_chat
+    user = update.effective_user
+
+    # only allow in groups
+    if chat.type not in ("group", "supergroup"):
+        await update.effective_chat.send_message("This command only works in groups.")
+        return
+
+    # check if caller is admin (best-effort)
+    try:
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        if member.status not in ("administrator", "creator"):
+            await update.effective_chat.send_message("Only group admins can run /setup_menu.")
+            return
+    except Exception:
+        # if check fails, still attempt - best effort
+        pass
+
+    msg = await update.effective_chat.send_message(
+        "Driver Bot Menu — tap a button to perform an action:",
+        reply_markup=build_command_menu()
+    )
+
+    # try to pin the message (requires bot to be admin with permission)
+    try:
+        await context.bot.pin_chat_message(chat_id=chat.id, message_id=msg.message_id, disable_notification=True)
+    except Exception:
+        # not fatal — notify admin
+        await update.effective_chat.send_message("Menu posted. (Bot couldn't pin — give bot pin/manage message rights to auto-pin.)")
+
+
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "Choose an action or select a plate below:\n\n• Start trip — record departure\n• End trip — record return"
     keyboard = [
@@ -212,24 +267,15 @@ async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_message("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
 
 
-async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    if data == "show_start":
-        await query.edit_message_text("Please choose the vehicle plate to START trip:", reply_markup=build_plate_keyboard("start"))
-        return
-    if data == "show_end":
-        await query.edit_message_text("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
-        return
-    try:
-        action, plate = data.split("|", 1)
-    except Exception:
-        await query.edit_message_text("Invalid selection.")
-        return
+# Extracted helper to process plate actions (used by router)
+async def handle_plate_action(action: str, plate: str, query, context: ContextTypes.DEFAULT_TYPE):
+    """
+    action: 'start' or 'end'
+    plate: plate string
+    query: CallbackQuery object (so we can edit the message)
+    """
     user = query.from_user
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
-    # call record functions
     if action == "start":
         res = record_start_trip(username, plate)
         if res["ok"]:
@@ -243,7 +289,48 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("❌ " + res["message"])
     else:
-        await query.edit_message_text("Unknown action.")
+        await query.edit_message_text("Unknown plate action.")
+
+
+# Unified callback router (handles cmd|... and plate actions)
+async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data or ""
+
+    # top-level command buttons from the menu
+    if data.startswith("cmd|"):
+        cmd = data.split("|", 1)[1]
+        if cmd == "start_trip":
+            await query.edit_message_text("Please choose the vehicle plate to START trip:", reply_markup=build_plate_keyboard("start"))
+            return
+        if cmd == "end_trip":
+            await query.edit_message_text("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
+            return
+        if cmd == "menu":
+            await query.edit_message_text("Choose an action or select a plate below:", reply_markup=build_command_menu())
+            return
+        if cmd == "help":
+            await query.edit_message_text("Help: use the buttons to Start/End trips. Admins: /setup_menu to pin this panel.")
+            return
+
+    # show_start / show_end legacy buttons
+    if data in ("show_start", "show_end"):
+        if data == "show_start":
+            await query.edit_message_text("Please choose the vehicle plate to START trip:", reply_markup=build_plate_keyboard("start"))
+        else:
+            await query.edit_message_text("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
+        return
+
+    # plate actions e.g. "start|2BB-3071" or "end|2BB-3071"
+    if "|" in data:
+        prefix, rest = data.split("|", 1)
+        if prefix in ("start", "end"):
+            await handle_plate_action(prefix, rest, query, context)
+            return
+
+    # fallback
+    await query.edit_message_text("Unknown action.")
 
 
 # Auto keyword listener (group)
@@ -274,9 +361,10 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("start_trip", start_trip_command))
     application.add_handler(CommandHandler("end_trip", end_trip_command))
+    application.add_handler(CommandHandler("setup_menu", setup_menu_command))  # admin command to post/pin menu
 
-    # Callback for inline buttons
-    application.add_handler(CallbackQueryHandler(plate_callback))
+    # Callback for inline buttons (use router)
+    application.add_handler(CallbackQueryHandler(callback_router))
 
     # Auto listener in groups
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
@@ -289,6 +377,7 @@ def register_ui_handlers(application):
                 BotCommand("start_trip", "Start a trip (select plate)"),
                 BotCommand("end_trip", "End a trip (select plate)"),
                 BotCommand("menu", "Open trip menu"),
+                BotCommand("setup_menu", "Post & pin the command menu (admin only)"),
             ]))
         else:
             # best-effort, may run after startup
@@ -305,22 +394,18 @@ def ensure_env():
     if not GOOGLE_CREDS_BASE64:
         raise RuntimeError("Please set GOOGLE_CREDS_BASE64 environment variable")
 
-async def _async_start(application):
-    # Register handlers (async)
-    await register_ui_handlers(application)
-    # run_polling() is an async coroutine in many PTB versions; await it inside event loop
-    await application.run_polling()
 
 def main():
     ensure_env()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Register handlers synchronously (no asyncio.run)
+    # Register handlers synchronously
     register_ui_handlers(application)
 
     # start polling — Application manages its own event loop internally
     logger.info("Starting bot polling...")
     application.run_polling()
+
 
 if __name__ == "__main__":
     main()
