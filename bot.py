@@ -2,14 +2,12 @@
 """
 Enhanced driver-bot (group UI + pinned menu + Google Sheet paired records)
 
-Save this file as bot.py (or the name you use) and deploy.
-Environment variables required:
-- BOT_TOKEN: Telegram bot token
-- GOOGLE_CREDS_BASE64: base64-encoded service account JSON (no newlines, or it will be cleaned)
-Optional:
-- PLATE_LIST: comma-separated plates (default provided)
-- GOOGLE_SHEET_NAME: default "Driver_Log"
-- GOOGLE_SHEET_TAB: optional worksheet/tab name
+Usage:
+- Save this file as bot.py
+- Set environment variables:
+  BOT_TOKEN (required)
+  GOOGLE_CREDS_BASE64 (required)  -- base64 of service account JSON (whitespace/newlines tolerated)
+  Optional: PLATE_LIST, GOOGLE_SHEET_NAME, GOOGLE_SHEET_TAB, TZ (e.g. Asia/Phnom_Penh)
 """
 import os
 import json
@@ -20,9 +18,22 @@ import time
 import requests
 from datetime import datetime
 
+# timezone support (zoneinfo preferred, pytz fallback)
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+    _HAS_ZONEINFO = True
+except Exception:
+    _HAS_ZONEINFO = False
+    try:
+        import pytz
+    except Exception:
+        pytz = None
+
+# Google sheets
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+# Telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -35,7 +46,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ----------------- Configuration & Logging -----------------
+# ----------------- Logging & Config -----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("driver-bot")
 
@@ -63,25 +74,64 @@ DATE_FMT = "%Y-%m-%d"
 
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# Auto keyword pattern (triggers in group messages)
+# Auto keyword pattern (group trigger)
 AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
 # In-memory rate-limiter for auto menu postings (per-process)
 LAST_POST_BY_CHAT = {}  # chat_id -> timestamp (seconds)
 AUTO_POST_COOLDOWN = int(os.getenv("AUTO_POST_COOLDOWN", "60"))  # seconds
 
+# Timezone name (default Cambodia / Phnom Penh)
+TZ_NAME = os.getenv("TZ", "Asia/Phnom_Penh")
+
+# ----------------- Time helpers -----------------
+def now_dt():
+    """Return timezone-aware datetime according to TZ_NAME if possible."""
+    if _HAS_ZONEINFO:
+        try:
+            return datetime.now(tz=ZoneInfo(TZ_NAME))
+        except Exception:
+            return datetime.now()
+    else:
+        if pytz:
+            try:
+                return datetime.now(tz=pytz.timezone(TZ_NAME))
+            except Exception:
+                return datetime.now()
+        else:
+            return datetime.now()
+
+def now_str():
+    return now_dt().strftime(TS_FMT)
+
+def today_date_str():
+    return now_dt().strftime(DATE_FMT)
+
+def compute_duration(start_ts: str, end_ts: str) -> str:
+    try:
+        s = datetime.strptime(start_ts, TS_FMT)
+        e = datetime.strptime(end_ts, TS_FMT)
+        delta = e - s
+        total_minutes = int(delta.total_seconds() // 60)
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+        return f"{hours}h{minutes}m"
+    except Exception:
+        return ""
+
 # ----------------- Google Sheets helpers -----------------
 def get_gspread_client():
+    """Decode GOOGLE_CREDS_BASE64 and return a gspread client."""
     if not GOOGLE_CREDS_BASE64:
         raise RuntimeError("GOOGLE_CREDS_BASE64 environment variable is missing")
     try:
-        # normalize: remove whitespace/newlines and pad
+        # Normalize base64: remove whitespace/newlines and pad
         s = "".join(GOOGLE_CREDS_BASE64.split())
         s += "=" * ((4 - len(s) % 4) % 4)
         decoded = base64.b64decode(s)
         creds_json = json.loads(decoded)
-    except Exception as e:
-        logger.exception("Failed to decode GOOGLE_CREDS_BASE64: %s", e)
+    except Exception:
+        logger.exception("Failed to decode GOOGLE_CREDS_BASE64")
         raise
 
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, SCOPES)
@@ -100,24 +150,7 @@ def open_worksheet():
         ws = sh.sheet1
     return ws
 
-def now_str():
-    return datetime.now().strftime(TS_FMT)
-
-def today_date_str():
-    return datetime.now().strftime(DATE_FMT)
-
-def compute_duration(start_ts: str, end_ts: str) -> str:
-    try:
-        s = datetime.strptime(start_ts, TS_FMT)
-        e = datetime.strptime(end_ts, TS_FMT)
-        delta = e - s
-        total_minutes = int(delta.total_seconds() // 60)
-        hours = total_minutes // 60
-        minutes = total_minutes % 60
-        return f"{hours}h{minutes}m"
-    except Exception:
-        return ""
-
+# ----------------- Record functions -----------------
 def record_start_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet()
     start_ts = now_str()
@@ -127,7 +160,7 @@ def record_start_trip(driver: str, plate: str) -> dict:
         logger.info("Recorded start trip: %s %s", driver, plate)
         return {"ok": True, "message": f"Start time recorded for {plate} at {start_ts}"}
     except Exception as e:
-        logger.exception("Failed to append start trip row: %s", e)
+        logger.exception("Failed to append start trip row")
         return {"ok": False, "message": "Failed to write start trip to sheet: " + str(e)}
 
 def record_end_trip(driver: str, plate: str) -> dict:
@@ -140,20 +173,21 @@ def record_end_trip(driver: str, plate: str) -> dict:
             end_val = str(rec.get("End date&time", rec.get("End", ""))).strip()
             start_val = str(rec.get("Start date&time", rec.get("Start", ""))).strip()
             if rec_plate == plate and (end_val == "" or end_val is None):
-                row_number = idx + 2
+                row_number = idx + 2  # header row + 1-indexing fix
                 end_ts = now_str()
                 duration_text = compute_duration(start_val, end_ts) if start_val else ""
                 ws.update_cell(row_number, COL_END, end_ts)
                 ws.update_cell(row_number, COL_DURATION, duration_text)
                 logger.info("Recorded end trip for %s row %d", plate, row_number)
                 return {"ok": True, "message": f"End time recorded for {plate} at {end_ts} (duration {duration_text})"}
+        # fallback: append end-only row
         end_ts = now_str()
         row = [today_date_str(), driver, plate, "", end_ts, ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("No open start found; appended end-only row for %s", plate)
         return {"ok": True, "message": f"End time recorded (no matching start found) for {plate} at {end_ts}"}
     except Exception as e:
-        logger.exception("Failed to update end trip: %s", e)
+        logger.exception("Failed to update end trip")
         return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
 
 # ----------------- Telegram UI helpers -----------------
@@ -188,6 +222,7 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if chat.type not in ("group", "supergroup"):
         await update.effective_chat.send_message("This command only works in groups.")
         return
+    # check caller is admin (best-effort)
     try:
         member = await context.bot.get_chat_member(chat.id, user.id)
         if member.status not in ("administrator", "creator"):
@@ -200,6 +235,7 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "Driver Bot Menu — tap a button to perform an action:",
         reply_markup=build_command_menu()
     )
+    # try to pin
     try:
         await context.bot.pin_chat_message(chat_id=chat.id, message_id=msg.message_id, disable_notification=True)
     except Exception:
@@ -231,7 +267,7 @@ async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     await update.effective_chat.send_message("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
 
-# Unified handling of plate actions
+# handle plate start/end
 async def handle_plate_action(action: str, plate: str, query, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
@@ -250,7 +286,7 @@ async def handle_plate_action(action: str, plate: str, query, context: ContextTy
     else:
         await query.edit_message_text("Unknown plate action.")
 
-# Callback query router
+# unified callback router
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -271,6 +307,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Help: use the buttons to Start/End trips. Admins: /setup_menu to pin this panel.")
             return
 
+    # legacy show_start/show_end
     if data in ("show_start", "show_end"):
         if data == "show_start":
             await query.edit_message_text("Please choose the vehicle plate to START trip:", reply_markup=build_plate_keyboard("start"))
@@ -278,6 +315,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
         return
 
+    # plate actions: start|PLATE or end|PLATE
     if "|" in data:
         prefix, rest = data.split("|", 1)
         if prefix in ("start", "end"):
@@ -286,20 +324,32 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text("Unknown action.")
 
-# Auto keyword listener (group) with rate limiting and bot-check
+# auto menu listener with rate limit + log
 async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # debug log for visibility
+    logger.info(
+        "auto_menu_listener triggered: chat=%s user=%s text=%s",
+        getattr(update.effective_chat, "id", None),
+        getattr(update.effective_user, "username", None),
+        (update.effective_message.text or "")[:200]
+    )
+
     if not update.effective_chat or update.effective_chat.type not in ("group", "supergroup"):
         return
     text = (update.effective_message.text or "").strip()
     if not text:
         return
+    # don't respond to bots
     if update.effective_user and update.effective_user.is_bot:
         return
+    # cooldown per chat
     now_ts = int(time.time())
     last = LAST_POST_BY_CHAT.get(update.effective_chat.id, 0)
     if now_ts - last < AUTO_POST_COOLDOWN:
+        logger.debug("Skipping auto menu due to cooldown for chat %s", update.effective_chat.id)
         return
     LAST_POST_BY_CHAT[update.effective_chat.id] = now_ts
+
     keyboard = [
         [InlineKeyboardButton("Start trip", callback_data="show_start"), InlineKeyboardButton("End trip", callback_data="show_end")],
         [InlineKeyboardButton("Open full menu", callback_data="menu_full")],
@@ -309,7 +359,7 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception:
         logger.exception("Failed to send auto menu")
 
-# Bot's own chat member updates (trigger when bot is added/promoted) -> post & pin menu
+# handle bot own chat member updates (auto post + pin)
 async def my_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         chat = update.effective_chat
@@ -328,16 +378,17 @@ async def my_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             logger.exception("Failed to auto-post menu on chat member update")
 
-# Register handlers
+# register handlers
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("start_trip", start_trip_command))
     application.add_handler(CommandHandler("end_trip", end_trip_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CallbackQueryHandler(callback_router))
-    # Chat member handler: triggers when bot's status changes
+    # ChatMember handler for bot membership changes
     application.add_handler(ChatMemberHandler(my_chat_member_update, ChatMemberHandler.MY_CHAT_MEMBER))
-    # Better filter for auto-menu
+
+    # Better filter: TEXT & not COMMAND & contains keywords & in groups
     try:
         application.add_handler(
             MessageHandler(
@@ -347,34 +398,34 @@ def register_ui_handlers(application):
             )
         )
     except Exception:
-        # fallback: register simpler regex-only handler
+        # fallback to simpler registration
         application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
 
     # Best-effort set_my_commands (non-blocking)
     try:
-        res = application.bot.set_my_commands([
+        _ = application.bot.set_my_commands([
             BotCommand("start_trip", "Start a trip (select plate)"),
             BotCommand("end_trip", "End a trip (select plate)"),
             BotCommand("menu", "Open trip menu"),
             BotCommand("setup_menu", "Post & pin the command menu (admin only)"),
         ])
-        # If this returns a coroutine in your PTB version it may not execute here; it's fine.
     except Exception:
         logger.exception("Failed to set_my_commands (non-fatal)")
 
-# ----------------- Main -----------------
+# sanity env checks
 def ensure_env():
     if not BOT_TOKEN:
         raise RuntimeError("Please set BOT_TOKEN environment variable")
     if not GOOGLE_CREDS_BASE64:
         raise RuntimeError("Please set GOOGLE_CREDS_BASE64 environment variable")
 
+# main
 def main():
     ensure_env()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     register_ui_handlers(application)
 
-    # Ensure no webhook active to avoid getUpdates conflict
+    # ensure no webhook active (avoid getUpdates conflict)
     try:
         resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
         logger.info("deleteWebhook response: %s", resp.text)
