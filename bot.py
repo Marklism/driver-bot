@@ -265,25 +265,37 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.effective_chat.send_message("Need to record a trip? Tap a button below:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-async def register_ui_handlers(application):
-    # set the bot's visible commands (English)
-    await application.bot.set_my_commands(
-        [
-            BotCommand("start_trip", "Start a trip (select plate)"),
-            BotCommand("end_trip", "End a trip (select plate)"),
-            BotCommand("menu", "Open trip menu"),
-        ]
-    )
-
+def register_ui_handlers(application):
+    """
+    Register command and message handlers synchronously.
+    We avoid awaiting application.bot.set_my_commands here to prevent event-loop issues.
+    """
+    # Add command handlers
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("start_trip", start_trip_command))
     application.add_handler(CommandHandler("end_trip", end_trip_command))
 
-    # callback for inline buttons
+    # Callback for inline buttons
     application.add_handler(CallbackQueryHandler(plate_callback))
 
-    # auto listener in groups (optional)
+    # Auto listener in groups
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
+
+    # Optionally try to set user-visible commands without awaiting:
+    try:
+        # if Application has create_task, schedule it; otherwise skip
+        if hasattr(application, "create_task"):
+            application.create_task(application.bot.set_my_commands([
+                BotCommand("start_trip", "Start a trip (select plate)"),
+                BotCommand("end_trip", "End a trip (select plate)"),
+                BotCommand("menu", "Open trip menu"),
+            ]))
+        else:
+            # best-effort, may run after startup
+            pass
+    except Exception:
+        # don't fail startup if commands can't be set right now
+        logger.exception("Failed to schedule set_my_commands (non-fatal)")
 
 
 # ----- main -----
@@ -303,15 +315,12 @@ def main():
     ensure_env()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Run the async startup + polling inside a fresh event loop
-    try:
-        asyncio.run(_async_start(application))
-    except KeyboardInterrupt:
-        # allow clean shutdown on Ctrl+C if running locally
-        pass
-    except Exception:
-        logger.exception("Error while running application")
-        raise
+    # Register handlers synchronously (no asyncio.run)
+    register_ui_handlers(application)
+
+    # start polling — Application manages its own event loop internally
+    logger.info("Starting bot polling...")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
