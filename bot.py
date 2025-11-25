@@ -34,10 +34,18 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Telegram
+# Telegram
+# 注意：Update 在较新的 PTB 版本中位于 telegram 而非 telegram.ext
 from telegram import (
-    InlineKeyboardButton, InlineKeyboardMarkup, BotCommand,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-    MenuButtonCommands, BotCommandScopeChat
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    BotCommand,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
+    MenuButtonCommands,
+    BotCommandScopeChat,
+    Update,  # <-- Update 从 telegram 导入
 )
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -48,7 +56,6 @@ from telegram.ext import (
     ChatMemberHandler,
     filters,
     ContextTypes,
-    Update,
 )
 
 # Logging
