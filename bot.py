@@ -1,5 +1,4 @@
-# Writing the modified bot.py (with deleteWebhook and safer set_my_commands handling) to /mnt/data/bot_fixed.py
-bot_fixed = r'''#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 driver-bot final version (paired-record mode for Google Sheet)
 
@@ -19,7 +18,6 @@ import base64
 import logging
 import requests
 from datetime import datetime
-from typing import Optional
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -420,6 +418,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-'''
-open('/mnt/data/bot_fixed.py','w',encoding='utf-8').write(bot_fixed)
-print("WROTE /mnt/data/bot_fixed.py")
