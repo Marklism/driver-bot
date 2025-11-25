@@ -297,9 +297,15 @@ def main():
     ensure_env()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # register handlers (async registration)
-    # register_ui_handlers is async, run it on the application's loop
-    application.run_async(register_ui_handlers(application))
+    # Register async handlers BEFORE starting polling.
+    # Some PTB versions don't have Application.run_async, so call the async register
+    # function synchronously using asyncio.run()
+    try:
+        asyncio.run(register_ui_handlers(application))
+    except Exception as e:
+        # If registration fails, log and raise to make the container crash so you can see error
+        logger.exception("Failed to register handlers")
+        raise
 
     # start polling (polling fine for Railway if container runs continuously)
     logger.info("Starting bot polling...")
