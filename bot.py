@@ -16,6 +16,7 @@ import os
 import json
 import base64
 import logging
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -292,26 +293,25 @@ def ensure_env():
     if not GOOGLE_CREDS_BASE64:
         raise RuntimeError("Please set GOOGLE_CREDS_BASE64 environment variable")
 
-import asyncio
+async def _async_start(application):
+    # Register handlers (async)
+    await register_ui_handlers(application)
+    # run_polling() is an async coroutine in many PTB versions; await it inside event loop
+    await application.run_polling()
 
 def main():
     ensure_env()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Register async handlers BEFORE starting polling.
-    # Some PTB versions don't have Application.run_async, so call the async register
-    # function synchronously using asyncio.run()
+    # Run the async startup + polling inside a fresh event loop
     try:
-        asyncio.run(register_ui_handlers(application))
-    except Exception as e:
-        # If registration fails, log and raise to make the container crash so you can see error
-        logger.exception("Failed to register handlers")
+        asyncio.run(_async_start(application))
+    except KeyboardInterrupt:
+        # allow clean shutdown on Ctrl+C if running locally
+        pass
+    except Exception:
+        logger.exception("Error while running application")
         raise
-
-    # start polling (polling fine for Railway if container runs continuously)
-    logger.info("Starting bot polling...")
-    application.run_polling()
-
 
 if __name__ == "__main__":
     main()
