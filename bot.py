@@ -1,51 +1,31 @@
 #!/usr/bin/env python3
 """
-driver-bot (final)
-功能亮点：
-- 群内置顶 Inline 菜单（Start/End/Open menu/Help）
-- 为当前群设置 chat-scoped commands，并设置 chat menu button（使大部分客户端显示输入框的“/”图标）
-- ReplyKeyboard（快捷键）发送到私聊或群内（提高在输入框显示选项的概率）
-- /setup_menu 仅限管理员使用，用于发布并置顶菜单
-- /start_trip 和 /end_trip：通过 Inline 按钮选择车牌并记录到 Google Sheets
-- 使用 GOOGLE_CREDS_BASE64 环境变量（base64 后的 service-account JSON）
-- 使用 BOT_TOKEN 环境变量
+driver-bot full script
+- Supports selecting plates in group with inline keyboard
+- After user issues command (e.g. /start_trip) the bot will try to delete that command message
+- Writes start/end (paired) records to Google Sheet
+- Reads Google service account from GOOGLE_CREDS_BASE64 (or GOOGLE_CREDS_PATH)
+- Configure via env vars: BOT_TOKEN, GOOGLE_CREDS_BASE64 (or GOOGLE_CREDS_PATH), GOOGLE_SHEET_NAME, GOOGLE_SHEET_TAB, PLATE_LIST
 """
+
 import os
 import json
 import base64
 import logging
-import time
 from datetime import datetime
-from typing import List
+from typing import Optional
 
-# timezone
-try:
-    from zoneinfo import ZoneInfo
-    _HAS_ZONEINFO = True
-except Exception:
-    _HAS_ZONEINFO = False
-    try:
-        import pytz  # type: ignore
-    except Exception:
-        pytz = None
-
-# Google Sheets
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Telegram
-# Telegram
-# 注意：Update 在较新的 PTB 版本中位于 telegram 而非 telegram.ext
+# Telegram imports (compatible with PTB 20.x where Update is in telegram)
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     BotCommand,
+    Update,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    ReplyKeyboardRemove,
-    MenuButtonCommands,
-    BotCommandScopeChat,
-    Update,  # <-- Update 从 telegram 导入
 )
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -53,7 +33,6 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    ChatMemberHandler,
     filters,
     ContextTypes,
 )
@@ -62,18 +41,20 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("driver-bot")
 
-# -------------------- Config via ENV --------------------
+# Environment / defaults
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GOOGLE_CREDS_BASE64 = os.getenv("GOOGLE_CREDS_BASE64")
+GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH")  # optional path to credentials.json
 PLATE_LIST = os.getenv(
     "PLATE_LIST",
     "2BB-3071,2BB-0809,2CI-8066,2CK-8066,2CJ-8066,3H-8066,2AV-6527,2AZ-6828,2AX-4635,2BV-8320",
 )
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Driver_Log")
-GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")  # optional
-PLATES: List[str] = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
+GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")  # optional tab name
 
-# Columns (1-indexed for gspread)
+PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
+
+# Column mapping (1-indexed for gspread)
 COL_DATE = 1
 COL_DRIVER = 2
 COL_PLATE = 3
@@ -81,45 +62,79 @@ COL_START = 4
 COL_END = 5
 COL_DURATION = 6
 
+# Time formats
 TS_FMT = "%Y-%m-%d %H:%M:%S"
 DATE_FMT = "%Y-%m-%d"
 
+# Google scopes
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# Auto menu cooldown (seconds) to avoid spamming group
-AUTO_POST_COOLDOWN = int(os.getenv("AUTO_POST_COOLDOWN", "60"))
-LAST_POST_BY_CHAT = {}
 
-# Timezone
-TZ_NAME = os.getenv("TZ", "Asia/Phnom_Penh")
+def _load_creds_from_base64(encoded: str) -> dict:
+    """Try decode base64 and parse JSON. Raise on failure."""
+    try:
+        # If value looks like raw JSON (not base64), try direct load
+        if encoded.strip().startswith("{"):
+            return json.loads(encoded)
+        # fix padding if needed
+        padded = encoded.strip()
+        # base64 strings sometimes get whitespace/newlines removed incorrectly; remove whitespace
+        padded = "".join(padded.split())
+        # add padding
+        missing = len(padded) % 4
+        if missing:
+            padded += "=" * (4 - missing)
+        decoded = base64.b64decode(padded)
+        return json.loads(decoded)
+    except Exception as e:
+        logger.exception("Failed to decode GOOGLE_CREDS_BASE64 (or parse JSON): %s", e)
+        raise
 
-# Regex keywords for auto menu (simple)
-AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
-
-# -------------------- Time helpers --------------------
-def now_dt():
-    if _HAS_ZONEINFO:
-        try:
-            return datetime.now(tz=ZoneInfo(TZ_NAME))
-        except Exception:
-            return datetime.now()
+def get_gspread_client():
+    """Return authorized gspread client. Supports GOOGLE_CREDS_BASE64 or GOOGLE_CREDS_PATH."""
+    # First prefer explicit base64 env
+    creds_json = None
+    if GOOGLE_CREDS_BASE64:
+        creds_json = _load_creds_from_base64(GOOGLE_CREDS_BASE64)
+    elif GOOGLE_CREDS_PATH and os.path.exists(GOOGLE_CREDS_PATH):
+        with open(GOOGLE_CREDS_PATH, "r", encoding="utf-8") as f:
+            creds_json = json.load(f)
     else:
-        if pytz:
-            try:
-                return datetime.now(tz=pytz.timezone(TZ_NAME))
-            except Exception:
-                return datetime.now()
-        else:
-            return datetime.now()
+        # Try commonly uploaded credential file in working dir
+        fallback = "credentials.json"
+        if os.path.exists(fallback):
+            with open(fallback, "r", encoding="utf-8") as f:
+                creds_json = json.load(f)
+
+    if not creds_json:
+        raise RuntimeError("Google credentials not found. Set GOOGLE_CREDS_BASE64 or GOOGLE_CREDS_PATH or include credentials.json")
+
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, SCOPES)
+    client = gspread.authorize(creds)
+    return client
+
+
+def open_worksheet():
+    """Open the configured worksheet (sheet/tab)."""
+    gc = get_gspread_client()
+    sh = gc.open(GOOGLE_SHEET_NAME)
+    if GOOGLE_SHEET_TAB:
+        try:
+            ws = sh.worksheet(GOOGLE_SHEET_TAB)
+        except Exception:
+            ws = sh.sheet1
+    else:
+        ws = sh.sheet1
+    return ws
 
 
 def now_str():
-    return now_dt().strftime(TS_FMT)
+    return datetime.now().strftime(TS_FMT)
 
 
 def today_date_str():
-    return now_dt().strftime(DATE_FMT)
+    return datetime.now().strftime(DATE_FMT)
 
 
 def compute_duration(start_ts: str, end_ts: str) -> str:
@@ -135,39 +150,8 @@ def compute_duration(start_ts: str, end_ts: str) -> str:
         return ""
 
 
-# -------------------- Google Sheets helpers --------------------
-def get_gspread_client():
-    if not GOOGLE_CREDS_BASE64:
-        raise RuntimeError("GOOGLE_CREDS_BASE64 environment variable is missing")
-    try:
-        # normalize base64 (strip whitespace, pad)
-        s = "".join(GOOGLE_CREDS_BASE64.split())
-        s += "=" * ((4 - len(s) % 4) % 4)
-        decoded = base64.b64decode(s)
-        creds_json = json.loads(decoded)
-    except Exception:
-        logger.exception("Failed to decode GOOGLE_CREDS_BASE64")
-        raise
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, SCOPES)
-    client = gspread.authorize(creds)
-    return client
-
-
-def open_worksheet():
-    gc = get_gspread_client()
-    sh = gc.open(GOOGLE_SHEET_NAME)
-    if GOOGLE_SHEET_TAB:
-        try:
-            ws = sh.worksheet(GOOGLE_SHEET_TAB)
-        except Exception:
-            ws = sh.sheet1
-    else:
-        ws = sh.sheet1
-    return ws
-
-
-# -------------------- Record functions --------------------
 def record_start_trip(driver: str, plate: str) -> dict:
+    """Append start row."""
     ws = open_worksheet()
     start_ts = now_str()
     row = [today_date_str(), driver, plate, start_ts, "", ""]
@@ -181,6 +165,7 @@ def record_start_trip(driver: str, plate: str) -> dict:
 
 
 def record_end_trip(driver: str, plate: str) -> dict:
+    """Find last row for plate with empty End and update."""
     ws = open_worksheet()
     try:
         records = ws.get_all_records()
@@ -190,14 +175,14 @@ def record_end_trip(driver: str, plate: str) -> dict:
             end_val = str(rec.get("End date&time", rec.get("End", ""))).strip()
             start_val = str(rec.get("Start date&time", rec.get("Start", ""))).strip()
             if rec_plate == plate and (end_val == "" or end_val is None):
-                row_number = idx + 2
+                row_number = idx + 2  # header row + 1-indexing
                 end_ts = now_str()
                 duration_text = compute_duration(start_val, end_ts) if start_val else ""
                 ws.update_cell(row_number, COL_END, end_ts)
                 ws.update_cell(row_number, COL_DURATION, duration_text)
                 logger.info("Recorded end trip for %s row %d", plate, row_number)
                 return {"ok": True, "message": f"End time recorded for {plate} at {end_ts} (duration {duration_text})"}
-        # fallback: append end-only row
+        # no matching start found -> append end-only row
         end_ts = now_str()
         row = [today_date_str(), driver, plate, "", end_ts, ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
@@ -208,7 +193,7 @@ def record_end_trip(driver: str, plate: str) -> dict:
         return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
 
 
-# -------------------- Telegram UI helpers --------------------
+# ----- Telegram UI helpers -----
 def build_plate_keyboard(prefix: str):
     buttons = []
     row = []
@@ -222,139 +207,114 @@ def build_plate_keyboard(prefix: str):
     return InlineKeyboardMarkup(buttons)
 
 
-def build_command_menu():
-    keyboard = [
-        [
-            InlineKeyboardButton("Start trip (select plate)", callback_data="cmd|start_trip"),
-            InlineKeyboardButton("End trip (select plate)", callback_data="cmd|end_trip"),
-        ],
-        [
-            InlineKeyboardButton("Open menu", callback_data="cmd|menu"),
-            InlineKeyboardButton("Help", callback_data="cmd|help"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
 def build_reply_keyboard_buttons():
+    """Reply keyboard (bottom-left quick buttons) - optional for private chat fallback."""
     kb = [
-        [KeyboardButton("/start_trip"), KeyboardButton("/end_trip")],
-        [KeyboardButton("/start"), KeyboardButton("/end")],
-        [KeyboardButton("/menu"), KeyboardButton("/setup_menu")],
+        [KeyboardButton("/start_trip")],
+        [KeyboardButton("/end_trip")],
+        [KeyboardButton("/menu")],
     ]
     return ReplyKeyboardMarkup(kb, resize_keyboard=True, one_time_keyboard=False)
 
 
-# -------------------- Command handlers --------------------
+# Command handlers (these will delete the invoking message if possible)
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "Choose an action or select a plate below:\n\n• Start trip — record departure\n• End trip — record return"
+    """Show inline menu; try to delete invoking message."""
+    text = "Driver Bot Menu — tap a button to perform an action:"
     keyboard = [
-        [InlineKeyboardButton("Start trip", callback_data="show_start")],
-        [InlineKeyboardButton("End trip", callback_data="show_end")],
+        [InlineKeyboardButton("Start trip (select plate)", callback_data="show_start"),
+         InlineKeyboardButton("End trip (select plate)", callback_data="show_end")],
+        [InlineKeyboardButton("Open menu", callback_data="menu_full"),
+         InlineKeyboardButton("Help", callback_data="help")],
     ]
+    # delete user's command message if possible
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        logger.debug("Cannot delete command message (menu).")
+
+    # show menu
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
         pass
     await update.effective_chat.send_message(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
-    # try to send quick reply keyboard to user's private chat
+
+    # best-effort: set my commands for the bot (non-blocking)
     try:
-        await context.bot.send_message(chat_id=update.effective_user.id, text="Quick commands:", reply_markup=build_reply_keyboard_buttons())
+        if hasattr(context.application, "create_task"):
+            # schedule set_my_commands to run in running loop if available
+            async def _set_cmds():
+                await context.bot.set_my_commands([
+                    BotCommand("start_trip", "Start a trip (select plate)"),
+                    BotCommand("end_trip", "End a trip (select plate)"),
+                    BotCommand("menu", "Open trip menu"),
+                ])
+            context.application.create_task(_set_cmds())
     except Exception:
-        try:
-            await update.effective_chat.send_message(text="Quick commands for group:", reply_markup=build_reply_keyboard_buttons())
-        except Exception:
-            pass
+        logger.debug("Could not schedule set_my_commands.")
 
 
 async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        logger.debug("Cannot delete command message (start_trip).")
+
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
         pass
     await update.effective_chat.send_message("Please choose the vehicle plate to START trip:", reply_markup=build_plate_keyboard("start"))
-    try:
-        await context.bot.send_message(chat_id=update.effective_user.id, text="Quick commands:", reply_markup=build_reply_keyboard_buttons())
-    except Exception:
-        pass
 
 
 async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        logger.debug("Cannot delete command message (end_trip).")
+
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
         pass
     await update.effective_chat.send_message("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
-    try:
-        await context.bot.send_message(chat_id=update.effective_user.id, text="Quick commands:", reply_markup=build_reply_keyboard_buttons())
-    except Exception:
-        pass
 
 
-# setup_menu: post & pin menu; set chat-scoped commands and chat menu button
-async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    user = update.effective_user
-    if chat.type not in ("group", "supergroup"):
-        await update.effective_chat.send_message("This command only works in groups.")
+# Callback for inline keyboard
+async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "show_start":
+        await query.edit_message_text("Please choose the vehicle plate to START trip:", reply_markup=build_plate_keyboard("start"))
         return
-    # only admin can run
+    if data == "show_end":
+        await query.edit_message_text("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
+        return
+    if data == "menu_full":
+        await query.edit_message_text("Driver Bot Menu — tap a button to perform an action:", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Start trip (select plate)", callback_data="show_start"),
+             InlineKeyboardButton("End trip (select plate)", callback_data="show_end")],
+            [InlineKeyboardButton("Help", callback_data="help")]
+        ]))
+        return
+    if data == "help":
+        await query.edit_message_text("Help: Tap Start trip or End trip and then choose a plate.")
+        return
+
     try:
-        member = await context.bot.get_chat_member(chat.id, user.id)
-        if member.status not in ("administrator", "creator"):
-            await update.effective_chat.send_message("Only group admins can run /setup_menu.")
-            return
+        action, plate = data.split("|", 1)
     except Exception:
-        pass
+        await query.edit_message_text("Invalid selection.")
+        return
 
-    # post inline command menu and try to pin
-    msg = await update.effective_chat.send_message(
-        "Driver Bot Menu — tap a button to perform an action:",
-        reply_markup=build_command_menu()
-    )
-    try:
-        await context.bot.pin_chat_message(chat_id=chat.id, message_id=msg.message_id, disable_notification=True)
-    except Exception:
-        await update.effective_chat.send_message("Menu posted. (Bot couldn't pin — give bot pin/manage message rights to auto-pin.)")
-
-    # set chat-scoped bot commands so clients know commands for this chat
-    try:
-        commands = [
-            BotCommand("start_trip", "Start a trip (select plate)"),
-            BotCommand("end_trip", "End a trip (select plate)"),
-            BotCommand("menu", "Open trip menu"),
-            BotCommand("setup_menu", "Post & pin the command menu (admin only)"),
-        ]
-        await context.bot.set_my_commands(commands, scope=BotCommandScopeChat(chat.id))
-    except Exception:
-        logger.exception("Failed to set chat-scoped commands (non-fatal)")
-
-    # set chat menu button to commands (this causes many clients to show the / menu icon)
-    try:
-        # signature may vary across PTB versions; try with chat_id first
-        try:
-            await context.bot.set_chat_menu_button(chat_id=chat.id, menu_button=MenuButtonCommands())
-        except TypeError:
-            await context.bot.set_chat_menu_button(MenuButtonCommands())
-    except Exception:
-        logger.exception("Failed to set chat menu button (non-fatal)")
-
-    # try to push a reply keyboard to the command issuer (private chat preferred)
-    try:
-        await context.bot.send_message(chat_id=user.id, text="Quick commands:", reply_markup=build_reply_keyboard_buttons())
-    except Exception:
-        try:
-            await update.effective_chat.send_message(text="Quick commands for group:", reply_markup=build_reply_keyboard_buttons())
-        except Exception:
-            pass
-
-    await update.effective_chat.send_message("Setup complete — commands are set for this group. If members still don't see the menu, ask them to update Telegram or open a private chat with the bot and send /start.")
-
-
-# -------------------- Callback handler for Inline buttons --------------------
-async def handle_plate_action(action: str, plate: str, query, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
+
     if action == "start":
         res = record_start_trip(username, plate)
         if res["ok"]:
@@ -368,164 +328,115 @@ async def handle_plate_action(action: str, plate: str, query, context: ContextTy
         else:
             await query.edit_message_text("❌ " + res["message"])
     else:
-        await query.edit_message_text("Unknown plate action.")
+        await query.edit_message_text("Unknown action.")
 
 
-async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data or ""
-
-    if data.startswith("cmd|"):
-        cmd = data.split("|", 1)[1]
-        if cmd == "start_trip":
-            await query.edit_message_text("Please choose the vehicle plate to START trip:", reply_markup=build_plate_keyboard("start"))
-            return
-        if cmd == "end_trip":
-            await query.edit_message_text("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
-            return
-        if cmd == "menu":
-            await query.edit_message_text("Choose an action or select a plate below:", reply_markup=build_command_menu())
-            return
-        if cmd == "help":
-            await query.edit_message_text("Help: use the buttons to Start/End trips. Admins: /setup_menu to pin this panel.")
-            return
-
-    if data in ("show_start", "show_end"):
-        if data == "show_start":
-            await query.edit_message_text("Please choose the vehicle plate to START trip:", reply_markup=build_plate_keyboard("start"))
-        else:
-            await query.edit_message_text("Please choose the vehicle plate to END trip:", reply_markup=build_plate_keyboard("end"))
-        return
-
-    if "|" in data:
-        prefix, rest = data.split("|", 1)
-        if prefix in ("start", "end"):
-            await handle_plate_action(prefix, rest, query, context)
-            # try to remove reply keyboard for user (cleanup)
-            try:
-                await context.bot.send_message(chat_id=query.from_user.id, text="Done — removing quick keyboard", reply_markup=ReplyKeyboardRemove())
-            except Exception:
-                pass
-            return
-
-    await query.edit_message_text("Unknown action.")
+# Auto keyword listener (group) - shows quick inline buttons when text pattern detected (non-command)
+AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
 
-# -------------------- Auto menu listener (group) --------------------
 async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_chat or update.effective_chat.type not in ("group", "supergroup"):
-        return
-    text = (update.effective_message.text or "").strip()
-    if not text:
-        return
-    if update.effective_user and update.effective_user.is_bot:
-        return
-
-    # cooldown per chat to avoid spam
-    now_ts = int(time.time())
-    last = LAST_POST_BY_CHAT.get(update.effective_chat.id, 0)
-    if now_ts - last < AUTO_POST_COOLDOWN:
-        return
-    LAST_POST_BY_CHAT[update.effective_chat.id] = now_ts
-
-    keyboard = [
-        [InlineKeyboardButton("Start trip", callback_data="show_start"), InlineKeyboardButton("End trip", callback_data="show_end")],
-        [InlineKeyboardButton("Open full menu", callback_data="menu")],
-    ]
-    try:
+    if update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
+        text = (update.effective_message.text or "").strip()
+        if not text:
+            return
+        if text.startswith("/"):
+            return
+        keyboard = [
+            [InlineKeyboardButton("Start trip", callback_data="show_start"),
+             InlineKeyboardButton("End trip", callback_data="show_end")],
+            [InlineKeyboardButton("Open full menu", callback_data="menu_full")],
+        ]
         await update.effective_chat.send_message("Need to record a trip? Tap a button below:", reply_markup=InlineKeyboardMarkup(keyboard))
-        try:
-            await context.bot.send_message(chat_id=update.effective_user.id, text="Quick commands:", reply_markup=build_reply_keyboard_buttons())
-        except Exception:
-            try:
-                await update.effective_chat.send_message("Quick commands for group:", reply_markup=build_reply_keyboard_buttons())
-            except Exception:
-                pass
-    except Exception:
-        logger.exception("Failed to send auto menu")
 
 
-# -------------------- Chat member update handler (auto-post when bot added/privileges changed) --------------------
-async def my_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        chat = update.effective_chat
-        new_status = update.my_chat_member.new_chat_member.status
-    except Exception:
-        return
-    if not chat or chat.type not in ("group", "supergroup"):
-        return
-    if new_status in ("administrator", "member", "creator"):
-        try:
-            msg = await context.bot.send_message(chat_id=chat.id, text="Driver Bot Menu — tap a button to perform an action:", reply_markup=build_command_menu())
-            try:
-                await context.bot.pin_chat_message(chat_id=chat.id, message_id=msg.message_id, disable_notification=True)
-            except Exception:
-                logger.info("Bot cannot pin in chat %s — maybe missing permission", chat.id)
-        except Exception:
-            logger.exception("Failed to auto-post menu on chat member update")
-
-
-# -------------------- Register handlers --------------------
+# Register handlers
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
-    application.add_handler(CommandHandler("start_trip", start_trip_command))
-    application.add_handler(CommandHandler("end_trip", end_trip_command))
-    application.add_handler(CommandHandler("setup_menu", setup_menu_command))
-    application.add_handler(CommandHandler("start", start_trip_command))
-    application.add_handler(CommandHandler("end", end_trip_command))
+    application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
+    application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
 
-    application.add_handler(CallbackQueryHandler(callback_router))
-    application.add_handler(ChatMemberHandler(my_chat_member_update, ChatMemberHandler.MY_CHAT_MEMBER))
+    application.add_handler(CallbackQueryHandler(plate_callback))
 
-    # auto listener for messages matching keywords in groups
+    application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
+
+    # Try to set bot commands (best-effort, non-blocking)
     try:
-        application.add_handler(
-            MessageHandler(
-                (filters.TEXT & ~filters.COMMAND & filters.Regex(AUTO_KEYWORD_PATTERN))
-                & filters.ChatType.GROUPS,
-                auto_menu_listener
-            )
-        )
+        if hasattr(application, "create_task"):
+            async def _set_cmds():
+                try:
+                    await application.bot.set_my_commands([
+                        BotCommand("start_trip", "Start a trip (select plate)"),
+                        BotCommand("end_trip", "End a trip (select plate)"),
+                        BotCommand("menu", "Open trip menu"),
+                    ])
+                    logger.info("Set bot commands (set_my_commands).")
+                except Exception:
+                    logger.exception("Failed to set bot commands.")
+            application.create_task(_set_cmds())
     except Exception:
-        application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
+        logger.debug("Could not schedule set_my_commands at register time.")
 
-    # best-effort: set global commands (non-blocking)
+
+# Optional admin helper to post and pin the menu in a group (call /setup_menu in the group as admin)
+async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Only allow in groups and by admins (best-effort check)
+    if not (update.effective_chat and update.effective_chat.type in ("group", "supergroup")):
+        await update.effective_chat.send_message("This command must be used in a group.")
+        return
     try:
-        # For some PTB versions set_my_commands is coroutine; it's okay to call it here without awaiting,
-        # Application will perform actual bot initialization when started.
-        _ = application.bot.set_my_commands([
-            BotCommand("start_trip", "Start a trip (select plate)"),
-            BotCommand("end_trip", "End a trip (select plate)"),
-            BotCommand("menu", "Open trip menu"),
-            BotCommand("setup_menu", "Post & pin the command menu (admin only)"),
-        ])
+        # delete the invoking message
+        try:
+            if update.effective_message:
+                await update.effective_message.delete()
+        except Exception:
+            pass
+
+        text = "Driver Bot Menu — tap a button to perform an action:"
+        keyboard = [
+            [InlineKeyboardButton("Start trip (select plate)", callback_data="show_start"),
+             InlineKeyboardButton("End trip (select plate)", callback_data="show_end")],
+            [InlineKeyboardButton("Open menu", callback_data="menu_full"),
+             InlineKeyboardButton("Help", callback_data="help")],
+        ]
+        sent = await update.effective_chat.send_message(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+        # try to pin the message
+        try:
+            await context.bot.pin_chat_message(chat_id=update.effective_chat.id, message_id=sent.message_id, disable_notification=True)
+        except Exception:
+            logger.debug("Pin failed (bot may lack permission).")
+        # set commands globally for bot (best-effort)
+        try:
+            await context.bot.set_my_commands([
+                BotCommand("start_trip", "Start a trip (select plate)"),
+                BotCommand("end_trip", "End a trip (select plate)"),
+                BotCommand("menu", "Open trip menu"),
+            ], scope=None)
+        except Exception:
+            logger.debug("set_my_commands failed in setup_menu_command.")
+        await update.effective_chat.send_message("Setup complete — commands are set for this group. If members still don't see the menu, ask them to update Telegram or open a private chat with the bot and send /start.")
     except Exception:
-        logger.exception("Failed to set global bot commands (non-fatal)")
+        logger.exception("Failed to run setup_menu_command")
+        await update.effective_chat.send_message("Failed to setup menu.")
 
 
-# -------------------- Env check and main --------------------
+# Main
 def ensure_env():
     if not BOT_TOKEN:
         raise RuntimeError("Please set BOT_TOKEN environment variable")
-    if not GOOGLE_CREDS_BASE64:
-        raise RuntimeError("Please set GOOGLE_CREDS_BASE64 environment variable")
 
 
 def main():
     ensure_env()
     application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # register handlers
     register_ui_handlers(application)
+    # admin setup command
+    application.add_handler(CommandHandler("setup_menu", setup_menu_command))
 
-    # try to delete webhook (avoid getUpdates conflict) - non-fatal
-    try:
-        import requests
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
-    except Exception:
-        logger.debug("deleteWebhook not available or failed (non-fatal)")
-
+    # run polling (Application manages loop)
     logger.info("Starting bot polling...")
-    # Application.run_polling manages the event loop internally
     application.run_polling()
 
 
