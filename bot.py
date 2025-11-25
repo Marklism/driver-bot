@@ -292,6 +292,7 @@ def ensure_env():
     if not GOOGLE_CREDS_BASE64:
         raise RuntimeError("Please set GOOGLE_CREDS_BASE64 environment variable")
 
+import asyncio
 
 def main():
     ensure_env()
