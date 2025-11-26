@@ -184,7 +184,7 @@ TR = {
         "mission_end_prompt_plate": "ជ្រើស plate ដើម្បីបញ្ចប់ mission:",
         "mission_end_prompt_arrival": "ជ្រើសទីក្រុងមកដល់:",
         "mission_end_ok": "✅ បញ្ចប់ mission {plate} នៅ {end_date} មកដល់ {arr}.",
-        "roundtrip_merged_notify": "✅ រួមបញ្ចូល往返 {driver} លើ {plate}. {count_msg}",
+        "roundtrip_merged_notify": "✅ រួមបញ្ចុល往返 {driver} លើ {plate}. {count_msg}",
         "roundtrip_monthly_count": "អ្នកបើក {driver} បាន往返 {count} ដងខែនេះ.",
         "lang_set": "បានផ្លាស់ប្ដូរភាសាទៅ {lang}.",
         "invalid_amount": "ទឹកប្រាក់ទម្រង់មិនត្រឹមត្រូវ — សូមផ្ញើត្រឹមតែលេខដូចជា `23.5` (គ្មានអក្សរ).",
@@ -749,48 +749,72 @@ def normalize_fin_type(typ: str) -> Optional[str]:
             return v
     return None
 
+# --------- REPLACED notify_admins_private: robust implementation ----------
 async def notify_admins_private(bot, text: str):
+    """
+    Reliable DM to admins:
+    - Prefer BOT_ADMIN_IDS (comma-separated numeric chat ids)
+    - Fallback to BOT_ADMINS (comma-separated usernames, without @)
+    - Catch and log failures; do not raise
+    - If nothing delivered, optionally post a warning to SUMMARY_CHAT_ID
+    """
+    sent_any = False
+
+    # 1) Try numeric chat ids first
+    raw_ids = os.getenv("BOT_ADMIN_IDS", "").strip()
+    if raw_ids:
+        for item in [x.strip() for x in raw_ids.split(",") if x.strip()]:
+            try:
+                chat_id = int(item)
+            except Exception:
+                logger.debug("BOT_ADMIN_IDS contains non-integer: %s", item)
+                continue
+            try:
+                await bot.send_message(chat_id=chat_id, text=text)
+                sent_any = True
+            except Exception as e:
+                logger.warning("Failed to DM admin by id %s: %s", chat_id, getattr(e, "message", str(e)))
+        if sent_any:
+            return
+
+    # 2) Fallback to usernames
     raw = os.getenv("BOT_ADMINS", "").strip()
     if not raw:
         raw = BOT_ADMINS_DEFAULT
     admins = [u.strip() for u in raw.split(",") if u.strip()]
     for a in admins:
+        if not a:
+            continue
+        name = a.lstrip("@")
+        # try @username first
         try:
-            if a.startswith("@"):
-                recv = a
-            else:
-                recv = f"@{a}"
-            await bot.send_message(chat_id=recv, text=text)
+            await bot.send_message(chat_id=f"@{name}", text=text)
+            sent_any = True
+            continue
+        except Exception as e:
+            logger.debug("send_message to @%s failed (may not have started bot). Error: %s", name, getattr(e, "message", str(e)))
+        # fallback: try get_chat then send by id (if available)
+        try:
+            info = await bot.get_chat(chat_id=f"@{name}")
+            if info and getattr(info, "id", None):
+                try:
+                    await bot.send_message(chat_id=info.id, text=text)
+                    sent_any = True
+                    continue
+                except Exception as e2:
+                    logger.debug("send_message to chat id for %s failed: %s", name, getattr(e2, "message", str(e2)))
         except Exception:
-            logger.debug("Failed to DM admin %s", a)
+            logger.debug("get_chat for @%s failed; likely user hasn't started bot or username invalid.", name)
 
-def record_finance_entry(typ: str, plate: str, amount_raw: str, notes: str, username: str) -> dict:
-    typ_norm = normalize_fin_type(typ or "")
-    driver = username.lstrip("@") if username else ""
-    try:
-        if typ_norm == "odo":
-            m = amount_raw.strip().upper().replace("KM", "").strip()
-            date = today_date_str()
-            return add_vehicle_maintenance(plate, m, "Odo", "", date, f"Reported by @{driver}" if driver else "", notes or f"Reported by @{driver}")
-        else:
-            fuel_cost = ""
-            parking_fee = ""
-            other_fee = ""
-            if typ_norm == "fuel":
-                fuel_cost = amount_raw
-            elif typ_norm == "parking":
-                parking_fee = amount_raw
-            elif typ_norm == "wash":
-                other_fee = amount_raw
-            elif typ_norm == "repair":
-                other_fee = amount_raw
-            else:
-                other_fee = amount_raw
-            mileage = ""
-            return add_trip_expense_record(plate, driver, mileage, fuel_cost, parking_fee, other_fee)
-    except Exception as e:
-        logger.exception("Failed to route finance entry")
-        return {"ok": False, "message": str(e)}
+    # 3) If still not sent, log and optionally notify SUMMARY_CHAT_ID
+    if not sent_any:
+        logger.warning("notify_admins_private: Could not deliver message to any admin. Ensure BOT_ADMIN_IDS or BOT_ADMINS are correct, and admins have started the bot.")
+        try:
+            sc = os.getenv("SUMMARY_CHAT_ID") or SUMMARY_CHAT_ID
+            if sc:
+                await bot.send_message(chat_id=sc, text=f"[Bot Warning] Failed to DM admins. Message was: {text}")
+        except Exception:
+            logger.debug("Also failed to post warning to SUMMARY_CHAT_ID (or it's not set).")
 
 # Unfinished missions detection
 def detect_unfinished_missions() -> Dict[str, List[dict]]:
