@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-driver-bot full script
-- Supports selecting plates in group with inline keyboard
-- After user issues command (e.g. /start_trip) the bot will try to delete that command message
-- Writes start/end (paired) records to Google Sheet
-- Reads Google service account from GOOGLE_CREDS_BASE64 (or GOOGLE_CREDS_PATH)
-- Configure via env vars: BOT_TOKEN, GOOGLE_CREDS_BASE64 (or GOOGLE_CREDS_PATH), GOOGLE_SHEET_NAME, GOOGLE_SHEET_TAB, PLATE_LIST
+driver-bot full script (with local timezone option)
+
+Notes:
+- This is your original script with one small, safe enhancement:
+  you can now configure a local timezone (matching your computer) so
+  timestamps written/displayed by the bot use that zone.
+- To enable: set environment variable LOCAL_TZ to an IANA timezone string,
+  e.g. "Asia/Phnom_Penh" or "Asia/Shanghai" or "Europe/London".
+  If LOCAL_TZ is not set or ZoneInfo is unavailable, the script falls back
+  to the server's system time (unchanged behavior).
+- No other logic or handlers are changed.
 """
 
 import os
@@ -17,6 +22,12 @@ from typing import Optional
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+
+# Python zoneinfo (standard in 3.9+). We use it if available to format times in user's local tz.
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 # Telegram imports (compatible with PTB 20.x where Update is in telegram)
 from telegram import (
@@ -51,6 +62,12 @@ PLATE_LIST = os.getenv(
 )
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Driver_Log")
 GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")  # optional tab name
+
+# NEW: Local timezone option
+# Set LOCAL_TZ env var to an IANA timezone (e.g. "Asia/Phnom_Penh", "Asia/Shanghai")
+LOCAL_TZ = os.getenv("LOCAL_TZ", "").strip() or None
+if LOCAL_TZ and ZoneInfo is None:
+    logger.warning("LOCAL_TZ set but zoneinfo not available in this Python runtime. Falling back to system time.")
 
 PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
 
@@ -129,12 +146,32 @@ def open_worksheet():
     return ws
 
 
+# ---------- TIME FUNCTIONS (use LOCAL_TZ if available) ----------
+def _now_dt():
+    """
+    Return a timezone-aware or naive datetime depending on availability:
+    - If LOCAL_TZ is set and ZoneInfo is available, return now() in that zone.
+    - Otherwise return naive datetime.now() (original behavior).
+    """
+    if LOCAL_TZ and ZoneInfo:
+        try:
+            tz = ZoneInfo(LOCAL_TZ)
+            return datetime.now(tz)
+        except Exception:
+            logger.exception("Failed to use LOCAL_TZ '%s'; falling back to system time.", LOCAL_TZ)
+            return datetime.now()
+    else:
+        return datetime.now()
+
+
 def now_str():
-    return datetime.now().strftime(TS_FMT)
+    """Return timestamp string in TS_FMT using LOCAL_TZ if configured."""
+    return _now_dt().strftime(TS_FMT)
 
 
 def today_date_str():
-    return datetime.now().strftime(DATE_FMT)
+    """Return date string in DATE_FMT using LOCAL_TZ if configured."""
+    return _now_dt().strftime(DATE_FMT)
 
 
 def compute_duration(start_ts: str, end_ts: str) -> str:
