@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-Driver Bot — Robust Missions handling (fix: expected_headers not uniques).
-- Uses fixed column indexes for MISSIONS sheet (A..L) to avoid header-uniqueness issues.
-- Conservative header insertion: only if sheet completely empty.
-- Deletes the inline "Select departure city" prompt when user replies /skip (or staff name).
-- Adds GUID, monthly auto-report, roundtrip counting, and other features as requested.
+Driver Bot — Fix: missions header misaligned + robust missions handling.
 
-Environment variables:
-- BOT_TOKEN (required)
-- GOOGLE_CREDS_BASE64 or GOOGLE_CREDS_PATH (required)
-- GOOGLE_SHEET_NAME (required)
-Optional:
-- SUMMARY_CHAT_ID, SUMMARY_HOUR, SUMMARY_TZ, LOCAL_TZ, DRIVER_PLATE_MAP
+- If MISSIONS sheet has header mismatch (GUID values in first data column but header doesn't
+  contain "GUID"), the script will correct the header row only (no data movement).
+- Uses fixed column indexes for MISSIONS to avoid 'expected_headers are not uniques' errors.
+- Conservative header insertion: only when sheet empty.
+- Keeps previously implemented behavior: GUID, roundtrip merge, monthly report, deletion of inline prompts on /skip, /lang, no-GPS mode.
+
+Environment variables required:
+- BOT_TOKEN
+- GOOGLE_CREDS_BASE64 or GOOGLE_CREDS_PATH
+- GOOGLE_SHEET_NAME
+
+Optional: SUMMARY_CHAT_ID SUMMARY_HOUR LOCAL_TZ DRIVER_PLATE_MAP, etc.
 """
 
 import os
@@ -20,6 +22,7 @@ import base64
 import logging
 import csv
 import uuid
+import re
 from datetime import datetime, timedelta, time as dtime
 from typing import Optional, Dict, List, Any, Tuple
 
@@ -82,7 +85,7 @@ PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
 DRIVER_PLATE_MAP_JSON = os.getenv("DRIVER_PLATE_MAP", "").strip() or None
 
 # Scheduling / summary
-SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")  # where to send monthly report automatically on day 1
+SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
 SUMMARY_HOUR = int(os.getenv("SUMMARY_HOUR", "20"))
 SUMMARY_TZ = os.getenv("SUMMARY_TZ", LOCAL_TZ or "Asia/Phnom_Penh")
 
@@ -97,9 +100,7 @@ SUMMARY_TAB = os.getenv("SUMMARY_TAB", "Summary")
 MISSIONS_TAB = os.getenv("MISSIONS_TAB", "Missions")
 MISSIONS_REPORT_TAB = os.getenv("MISSIONS_REPORT_TAB", "Missions_Report")
 
-# Mission columns (1-based for readability), but we'll map to 0-based when using get_all_values()
-# A..L -> idx 0..11
-# 1 GUID, 2 No., 3 Name, 4 Plate, 5 Start Date, 6 End Date, 7 Departure, 8 Arrival, 9 Staff Name, 10 Roundtrip, 11 Return Start, 12 Return End
+# Mission columns mapping (0-based indexes for get_all_values row lists)
 M_IDX_GUID = 0
 M_IDX_NO = 1
 M_IDX_NAME = 2
@@ -112,9 +113,9 @@ M_IDX_STAFF = 8
 M_IDX_ROUNDTRIP = 9
 M_IDX_RETURN_START = 10
 M_IDX_RETURN_END = 11
-M_MANDATORY_COLS = 12  # ensure rows have at least this many columns
+M_MANDATORY_COLS = 12
 
-# Column mapping for trip records (1-indexed used with update_cell; but when parsing values use 0-based)
+# Column mapping for trip records (1-indexed used with update_cell)
 COL_DATE = 1
 COL_DRIVER = 2
 COL_PLATE = 3
@@ -132,7 +133,7 @@ ROUNDTRIP_WINDOW_HOURS = int(os.getenv("ROUNDTRIP_WINDOW_HOURS", "24"))
 # Google scopes
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# HEADERS template per tab — conservative: will only be written if sheet is empty
+# HEADERS template per tab — conservative: will only be written if sheet empty
 HEADERS_BY_TAB: Dict[str, List[str]] = {
     RECORDS_TAB: ["Date", "Driver", "Plate", "Start DateTime", "End DateTime", "Duration"],
     MISSIONS_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
@@ -141,7 +142,7 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     DRIVERS_TAB: ["Username", "Plates"],
 }
 
-# Minimal translations (en + km) - short set
+# Minimal translations
 TR = {
     "en": {
         "menu": "Driver Bot Menu — tap a button to perform an action:",
@@ -169,7 +170,7 @@ TR = {
         "menu": "មិនីវរ​បូត — សូមចុចប៊ូតុងដើម្បីអនុវត្ត៖",
         "choose_start": "សូមជ្រើស plate សម្រាប់ចាប់ផ្តើមដំណើរ:",
         "choose_end": "សូមជ្រើស plate សម្រាប់បញ្ចប់ដំណើរ:",
-        "start_ok": "✅ ចាប់ផ្តើមដំណើរសម្រាប់ {plate} (អ្នកបើក: {driver}). {msg}",
+        "start_ok": "✅ ចាប់ផ្ដើមដំណើរសម្រាប់ {plate} (អ្នកបើក: {driver}). {msg}",
         "end_ok": "✅ បញ្ចប់ដំណើរសម្រាប់ {plate} (អ្នកបើក: {driver}). {msg}",
         "not_allowed": "❌ អ្នកមិនមានសិទ្ធិប្រើរថយន្តនេះ: {plate}.",
         "invalid_sel": "ជម្រើសមិនត្រឹមត្រូវ។",
@@ -178,7 +179,7 @@ TR = {
         "mission_start_prompt_plate": "សូមជ្រើស plate សម្រាប់ចាប់ផ្តើមដំណើរ:",
         "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញ (Departure):",
         "mission_start_prompt_staff": "Optional: ផ្ញើឈ្មោះបុគ្គលិក (ឬ /skip).",
-        "mission_start_ok": "✅ កត់ត្រាចាប់ផ្តើមធ្វើដំណើរ {plate} នៅ {start_date} ចេញពី {dep}.",
+        "mission_start_ok": "✅ កត់ត្រាចាប់ផ្តើមដំណើរ {plate} នៅ {start_date} ចេញពី {dep}.",
         "mission_end_prompt_plate": "សូមជ្រើស plate ដើម្បីបញ្ចប់ដំណើរ:",
         "mission_end_prompt_arrival": "ជ្រើសទីក្រុងមកដល់ (Arrival):",
         "mission_end_ok": "✅ កត់ត្រាបញ្ចប់ដំណើរ {plate} នៅ {end_date} មកដល់ {arr}.",
@@ -245,9 +246,62 @@ def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
         logger.exception("Failed to ensure headers (conservative) on worksheet %s", ws.title)
 
 
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+
+
+def _missions_header_fix_if_needed(ws):
+    """
+    Detect common misalignment: when the sheet's first data column contains GUID strings
+    but the header row's first cell is not 'GUID'. In that case overwrite only the header row
+    with the canonical HEADERS_BY_TAB[MISSIONS_TAB]. This aligns existing rows with columns
+    without moving data.
+    """
+    try:
+        values = ws.get_all_values()
+        if not values:
+            return  # nothing to fix
+        first_row = values[0]
+        # detect header-like: if first_row contains 'No' or 'No.' or 'Name' etc, treat as header
+        header_like_keywords = {"no", "no.", "name", "plate", "start", "end", "departure", "arrival", "staff", "roundtrip"}
+        is_header_like = any(str(c).strip().lower() in header_like_keywords for c in first_row if c)
+        if not is_header_like:
+            return  # first row not header -> nothing to fix here
+        # if there's at least one data row
+        if len(values) < 2:
+            return
+        second_row = values[1]
+        first_cell = str(second_row[0]).strip() if len(second_row) > 0 else ""
+        # If first data cell looks like a GUID but header first cell isn't 'GUID', fix header row
+        if first_cell and _UUID_RE.match(first_cell):
+            header_first = str(first_row[0]).strip().lower() if len(first_row) > 0 else ""
+            if header_first != "guid":
+                # Overwrite the header row with canonical headers for MISSIONS_TAB (A..L)
+                headers = HEADERS_BY_TAB.get(MISSIONS_TAB, [])
+                if not headers:
+                    return
+                # build A1:L1 range update
+                try:
+                    # Ensure list length equals M_MANDATORY_COLS
+                    h = list(headers)
+                    while len(h) < M_MANDATORY_COLS:
+                        h.append("")
+                    # update only header row cells (A1..L1)
+                    # compute range string of columns A..(L)
+                    # We'll use worksheet.update with range "A1:L1"
+                    col_letter_end = chr(ord('A') + M_MANDATORY_COLS - 1)
+                    rng = f"A1:{col_letter_end}1"
+                    ws.update(rng, [h], value_input_option="USER_ENTERED")
+                    logger.info("Fixed MISSIONS header row to canonical headers due to GUID detected in first data column.")
+                except Exception:
+                    logger.exception("Failed to update header row in MISSIONS sheet.")
+    except Exception:
+        logger.exception("Error checking/fixing missions header.")
+
+
 def open_worksheet(tab: str = ""):
     """
     Open specific worksheet tab by name. If missing, create and insert headers (only when created).
+    For MISSIONS tab, also run header-fix check if needed.
     """
     gc = get_gspread_client()
     sh = gc.open(GOOGLE_SHEET_NAME)
@@ -268,10 +322,12 @@ def open_worksheet(tab: str = ""):
     if tab:
         try:
             ws = sh.worksheet(tab)
-            # conservative header ensure if we have a template
             template = HEADERS_BY_TAB.get(tab)
             if template:
                 ensure_sheet_has_headers_conservative(ws, template)
+            # special-fix for MISSIONS tab (detect GUID-in-first-col situation)
+            if tab == MISSIONS_TAB:
+                _missions_header_fix_if_needed(ws)
             return ws
         except Exception:
             headers = HEADERS_BY_TAB.get(tab)
@@ -288,7 +344,7 @@ def open_worksheet(tab: str = ""):
         return sh.sheet1
 
 
-# ===== Driver map loading =====
+# driver map loaders (same as before)
 def load_driver_map_from_env() -> Dict[str, List[str]]:
     if not DRIVER_PLATE_MAP_JSON:
         return {}
@@ -396,23 +452,20 @@ def record_end_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
     try:
         rows = ws.get_all_values()
-        # assume header may exist: if first row contains "Date" treat as header
         start_idx = 1 if rows and any("date" in c.lower() for c in rows[0] if c) else 0
         for idx in range(len(rows) - 1, start_idx - 1, -1):
             rec = rows[idx]
-            # defensive access
             rec_plate = rec[2] if len(rec) > 2 else ""
             rec_end = rec[4] if len(rec) > 4 else ""
             rec_start = rec[3] if len(rec) > 3 else ""
             if str(rec_plate).strip() == plate and (not rec_end):
-                row_number = idx + 1  # 1-based
+                row_number = idx + 1
                 end_ts = now_str()
                 duration_text = compute_duration(rec_start, end_ts) if rec_start else ""
                 try:
                     ws.update_cell(row_number, COL_END, end_ts)
                     ws.update_cell(row_number, COL_DURATION, duration_text)
                 except Exception:
-                    # fallback: rewrite whole row
                     existing = ws.row_values(row_number)
                     while len(existing) < COL_DURATION:
                         existing.append("")
@@ -422,7 +475,6 @@ def record_end_trip(driver: str, plate: str) -> dict:
                     ws.insert_row(existing, row_number)
                 logger.info("Recorded end trip for %s row %d", plate, row_number)
                 return {"ok": True, "message": f"End time recorded for {plate} at {end_ts} (duration {duration_text})"}
-        # no matching start found -> append end-only row
         end_ts = now_str()
         row = [today_date_str(), driver, plate, "", end_ts, ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
@@ -433,79 +485,19 @@ def record_end_trip(driver: str, plate: str) -> dict:
         return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
 
 
-# ===== Aggregation & summaries =====
-def aggregate_for_period(start_date: datetime, end_date: datetime) -> Dict[str, int]:
-    ws = open_worksheet(RECORDS_TAB)
-    totals: Dict[str, int] = {}
-    try:
-        rows = ws.get_all_values()
-        start_idx = 1 if rows and any("date" in c.lower() for c in rows[0] if c) else 0
-        for rec in rows[start_idx:]:
-            plate = rec[2] if len(rec) > 2 else ""
-            start = rec[3] if len(rec) > 3 else ""
-            end = rec[4] if len(rec) > 4 else ""
-            if not plate:
-                continue
-            s_dt = parse_ts(start) if start else None
-            e_dt = parse_ts(end) if end else None
-            if s_dt and e_dt:
-                actual_start = max(s_dt, start_date)
-                actual_end = min(e_dt, end_date)
-                if actual_end > actual_start:
-                    minutes = int((actual_end - actual_start).total_seconds() // 60)
-                    totals[plate] = totals.get(plate, 0) + minutes
-        return totals
-    except Exception:
-        logger.exception("Failed to aggregate records")
-        return {}
-
-
-def minutes_to_h_m(total_minutes: int) -> Tuple[int, int]:
-    h = total_minutes // 60
-    m = total_minutes % 60
-    return h, m
-
-
-def write_daily_summary(date_dt: datetime) -> str:
-    start = datetime.combine(date_dt.date(), dtime.min)
-    end = start + timedelta(days=1)
-    totals = aggregate_for_period(start, end)
-    if not totals:
-        return "No records"
-    lines = []
-    for plate, minutes in sorted(totals.items()):
-        h, m = minutes_to_h_m(minutes)
-        lines.append(f"{plate}: {h}h{m}m")
-    try:
-        ws = open_worksheet(SUMMARY_TAB)
-        row = [start.strftime(DATE_FMT), "daily", json.dumps(totals), "\n".join(lines)]
-        ws.append_row(row, value_input_option="USER_ENTERED")
-    except Exception:
-        logger.exception("Failed to write daily summary to sheet.")
-    return "\n".join(lines)
-
-
-# ===== Missions helpers: use get_all_values() and fixed indexes =====
+# ===== Missions helpers =====
 def _missions_get_values_and_data_rows(ws):
-    """
-    Return (values, start_idx), where values is list of rows (lists),
-    and start_idx is index of first data row (0 if no header, 1 if first row looks like header).
-    """
     values = ws.get_all_values()
     if not values:
         return [], 0
     first_row = values[0]
     header_like_keywords = {"guid", "no", "name", "plate", "start", "end", "departure", "arrival", "staff", "roundtrip"}
-    # If any cell in first_row matches header keywords -> treat as header
     if any(str(c).strip().lower() in header_like_keywords for c in first_row if c):
         return values, 1
     return values, 0
 
 
 def _missions_next_no(ws) -> int:
-    """
-    Compute next 'No.' by counting data rows (conservative).
-    """
     vals, start_idx = _missions_get_values_and_data_rows(ws)
     return max(1, len(vals) - start_idx + 1)
 
@@ -545,32 +537,22 @@ def start_mission_record(driver: str, plate: str, departure: str, staff_name: st
 
 
 def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
-    """
-    Find last open mission (same driver & plate) where End Date empty.
-    Update End Date and Arrival, then try to find complementary leg within window to merge into roundtrip.
-    Uses fixed column indexes and get_all_values to avoid header issues.
-    """
     ws = open_worksheet(MISSIONS_TAB)
     try:
         vals, start_idx = _missions_get_values_and_data_rows(ws)
-        # iterate backward through data rows
         for i in range(len(vals) - 1, start_idx - 1, -1):
-            row = vals[i]
-            # ensure length
-            row = _ensure_row_length(row, M_MANDATORY_COLS)
+            row = _ensure_row_length(vals[i], M_MANDATORY_COLS)
             rec_plate = str(row[M_IDX_PLATE]).strip()
             rec_name = str(row[M_IDX_NAME]).strip()
             rec_end = str(row[M_IDX_END]).strip()
             rec_start = str(row[M_IDX_START]).strip()
             if rec_plate == plate and rec_name == driver and not rec_end:
-                row_number = i + 1  # worksheet is 1-based
+                row_number = i + 1
                 end_ts = now_str()
-                # update End Date and Arrival by column index (1-based)
                 try:
                     ws.update_cell(row_number, M_IDX_END + 1, end_ts)
                     ws.update_cell(row_number, M_IDX_ARRIVAL + 1, arrival)
                 except Exception:
-                    # fallback: rewrite row
                     existing = ws.row_values(row_number)
                     existing = _ensure_row_length(existing, M_MANDATORY_COLS)
                     existing[M_IDX_END] = end_ts
@@ -579,14 +561,12 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     ws.insert_row(existing, row_number)
                 logger.info("Updated mission end for row %d plate=%s driver=%s", row_number, plate, driver)
 
-                # Try to find complementary leg to merge (within window from start time)
                 s_dt = parse_ts(rec_start) if rec_start else None
                 if not s_dt:
                     return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False}
                 window_start = s_dt - timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
                 window_end = s_dt + timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
 
-                # re-fetch values to ensure freshness
                 vals2, start_idx2 = _missions_get_values_and_data_rows(ws)
                 candidates = []
                 for j in range(start_idx2, len(vals2)):
@@ -610,7 +590,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                         continue
                     candidates.append({"idx": j, "start": r_s_dt, "end": parse_ts(rend), "dep": dep, "arr": arr, "rstart": rstart, "rend": rend})
 
-                # find complementary where dep/arr swap
                 found_pair = None
                 cur_dep = str(row[M_IDX_DEPART]).strip()
                 cur_arr = arrival
@@ -631,7 +610,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 primary_row_number = primary_idx + 1
                 secondary_row_number = secondary_idx + 1
 
-                # compute return start/end
                 if primary_idx == i:
                     return_start = found_pair["start"].strftime(TS_FMT)
                     return_end = found_pair["end"].strftime(TS_FMT) if found_pair["end"] else ""
@@ -639,7 +617,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     return_start = s_dt.strftime(TS_FMT)
                     return_end = end_ts
 
-                # update primary row columns: Roundtrip, Return Start, Return End
                 try:
                     ws.update_cell(primary_row_number, M_IDX_ROUNDTRIP + 1, "Yes")
                     ws.update_cell(primary_row_number, M_IDX_RETURN_START + 1, return_start)
@@ -653,7 +630,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     ws.delete_row(primary_row_number)
                     ws.insert_row(existing, primary_row_number)
 
-                # delete secondary row (best-effort)
                 try:
                     ws.delete_row(secondary_row_number)
                     logger.info("Deleted secondary mission row %d after merging into %d", secondary_row_number, primary_row_number)
@@ -684,18 +660,7 @@ def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[Li
             if not s_dt:
                 continue
             if start_date <= s_dt < end_date:
-                guid = r[M_IDX_GUID]
-                no = r[M_IDX_NO]
-                name = r[M_IDX_NAME]
-                plate = r[M_IDX_PLATE]
-                endv = r[M_IDX_END]
-                dep = r[M_IDX_DEPART]
-                arr = r[M_IDX_ARRIVAL]
-                staff = r[M_IDX_STAFF]
-                roundtrip = r[M_IDX_ROUNDTRIP]
-                return_start = r[M_IDX_RETURN_START]
-                return_end = r[M_IDX_RETURN_END]
-                out.append([guid, no, name, plate, start, endv, dep, arr, staff, roundtrip, return_start, return_end])
+                out.append([r[M_IDX_GUID], r[M_IDX_NO], r[M_IDX_NAME], r[M_IDX_PLATE], r[M_IDX_START], r[M_IDX_END], r[M_IDX_DEPART], r[M_IDX_ARRIVAL], r[M_IDX_STAFF], r[M_IDX_ROUNDTRIP], r[M_IDX_RETURN_START], r[M_IDX_RETURN_END]])
         return out
     except Exception:
         logger.exception("Failed to fetch mission rows")
@@ -710,7 +675,6 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
         for r in rows:
             r = _ensure_row_length(r, M_MANDATORY_COLS)
             ws.append_row(r, value_input_option="USER_ENTERED")
-        # Roundtrip summary
         rt_counts: Dict[str, int] = {}
         for r in rows:
             name = r[2] if len(r) > 2 else ""
@@ -759,7 +723,6 @@ def write_roundtrip_summary_tab(month_label: str, counts: Dict[str, int]) -> Opt
     try:
         gc = get_gspread_client()
         sh = gc.open(GOOGLE_SHEET_NAME)
-        # delete existing tab (best-effort)
         try:
             existing = sh.worksheet(tab_name)
             try:
@@ -793,7 +756,7 @@ def write_roundtrip_summary_csv(month_label: str, counts: Dict[str, int]) -> Opt
         return None
 
 
-# ===== Telegram UI helpers & handlers =====
+# ===== Telegram UI helpers & handlers (same as previous) =====
 def build_plate_keyboard(prefix: str, allowed_plates: Optional[List[str]] = None):
     buttons = []
     row = []
@@ -908,7 +871,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
-    # menu navigation
+    # menu navigation and handlers (same as earlier code)
     if data == "show_start":
         await query.edit_message_text(t(user_lang, "choose_start"), reply_markup=build_plate_keyboard("start"))
         return
@@ -926,7 +889,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "help"))
         return
 
-    # mission start selection
+    # mission start choice
     if data.startswith("mission_start_plate|"):
         _, plate = data.split("|", 1)
         context.user_data["pending_mission"] = {"action": "start", "plate": plate}
@@ -934,7 +897,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    # mission end selection
+    # mission end choice
     if data.startswith("mission_end_plate|"):
         _, plate = data.split("|", 1)
         context.user_data["pending_mission"] = {"action": "end", "plate": plate}
@@ -942,7 +905,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "mission_end_prompt_arrival"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    # after selecting departure (PP/SHV) for a mission start
+    # after selecting departure for start
     if data.startswith("mission_depart|"):
         _, dep = data.split("|", 1)
         pending = context.user_data.get("pending_mission")
@@ -950,15 +913,12 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(t(user_lang, "invalid_sel"))
             return
         pending["departure"] = dep
-        # save inline prompt id for later deletion
         try:
             if query.message:
                 context.user_data["last_inline_prompt"] = {"chat_id": query.message.chat.id, "message_id": query.message.message_id}
         except Exception:
             context.user_data.pop("last_inline_prompt", None)
         context.user_data["pending_mission"] = pending
-
-        # Send staff prompt message and save its id
         try:
             chat_id = update.effective_chat.id
             staff_prompt_msg = await context.bot.send_message(chat_id=chat_id, text=t(user_lang, "mission_start_prompt_staff"))
@@ -968,7 +928,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("last_bot_prompt", None)
         return
 
-    # after selecting arrival for mission end
+    # after selecting arrival for end
     if data.startswith("mission_arrival|"):
         _, arr = data.split("|", 1)
         pending = context.user_data.get("pending_mission")
@@ -1011,20 +971,18 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("pending_mission", None)
         return
 
-    # start|end quick handlers
+    # start/end quick handlers
     if data.startswith("start|") or data.startswith("end|"):
         try:
             action, plate = data.split("|", 1)
         except Exception:
             await query.edit_message_text("Invalid selection.")
             return
-
         driver_map = get_driver_map()
         allowed = driver_map.get(username, []) if username else []
         if allowed and plate not in allowed:
             await query.edit_message_text(t(user_lang, "not_allowed", plate=plate))
             return
-
         if action == "start":
             res = record_start_trip(username, plate)
             if res.get("ok"):
@@ -1043,8 +1001,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(t(user_lang, "invalid_sel"))
 
 
-# Message handler for staff-name replies (/skip or text).
-# Delete user's message, delete bot staff prompt, delete inline departure prompt, then record mission start.
 async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -1055,7 +1011,6 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
-    # delete stored bot prompt
     last_prompt = context.user_data.get("last_bot_prompt")
     if last_prompt:
         try:
@@ -1067,7 +1022,6 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         context.user_data.pop("last_bot_prompt", None)
 
-    # delete inline "Select departure city" prompt if exists
     last_inline = context.user_data.get("last_inline_prompt")
     if last_inline:
         try:
@@ -1079,7 +1033,6 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         context.user_data.pop("last_inline_prompt", None)
 
-    # handle pending mission start
     pending_mission = context.user_data.get("pending_mission")
     if pending_mission and pending_mission.get("action") == "start":
         text = update.message.text.strip() if update.message and update.message.text else ""
@@ -1181,7 +1134,6 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
 
 
-# Auto keyword listener
 AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
 
@@ -1201,7 +1153,7 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-# Scheduling: daily summary job; if day==1, also generate/send last month's mission report
+# scheduling daily summary and monthly auto-report (same logic as before)
 async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data if hasattr(context.job, "data") else {}
     chat_id = job_data.get("chat_id") or SUMMARY_CHAT_ID
@@ -1218,11 +1170,19 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
         now = _now_dt()
     yesterday = now.date() - timedelta(days=1)
     date_dt = datetime.combine(yesterday, dtime.min)
-    text = write_daily_summary(date_dt)
     try:
-        await context.bot.send_message(chat_id=chat_id, text=text)
+        totals = aggregate_for_period(date_dt, date_dt + timedelta(days=1))
+        if not totals:
+            await context.bot.send_message(chat_id=chat_id, text=f"No records for {date_dt.strftime(DATE_FMT)}")
+        else:
+            lines = []
+            for plate, minutes in sorted(totals.items()):
+                h = minutes // 60
+                m = minutes % 60
+                lines.append(f"{plate}: {h}h{m}m")
+            await context.bot.send_message(chat_id=chat_id, text="\n".join(lines))
     except Exception:
-        logger.exception("Failed to send daily summary message.")
+        logger.exception("Failed to send daily summary.")
 
     # If first day of month, auto-generate previous month's mission report
     if now.day == 1:
@@ -1236,29 +1196,20 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
             tab_name = write_roundtrip_summary_tab(prev_month_start.strftime("%Y-%m"), counts)
             csv_path = write_roundtrip_summary_csv(prev_month_start.strftime("%Y-%m"), counts)
             if ok:
-                try:
-                    await context.bot.send_message(chat_id=chat_id, text=f"Auto-generated mission report for {prev_month_start.strftime('%Y-%m')}.")
-                except Exception:
-                    pass
+                await context.bot.send_message(chat_id=chat_id, text=f"Auto-generated mission report for {prev_month_start.strftime('%Y-%m')}.")
             if tab_name:
-                try:
-                    await context.bot.send_message(chat_id=chat_id, text=f"Roundtrip summary tab created: {tab_name}")
-                except Exception:
-                    pass
+                await context.bot.send_message(chat_id=chat_id, text=f"Roundtrip summary tab created: {tab_name}")
             if csv_path:
                 try:
                     with open(csv_path, "rb") as f:
                         await context.bot.send_document(chat_id=chat_id, document=f, filename=os.path.basename(csv_path))
                 except Exception:
-                    try:
-                        await context.bot.send_message(chat_id=chat_id, text=f"Roundtrip CSV written: {csv_path}")
-                    except Exception:
-                        pass
+                    await context.bot.send_message(chat_id=chat_id, text=f"Roundtrip CSV written: {csv_path}")
         except Exception:
             logger.exception("Failed to auto-generate monthly mission report on day 1.")
 
 
-# Register handlers
+# register handlers
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
