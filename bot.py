@@ -1602,20 +1602,39 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("report_parking", lambda u, c: u.message.reply_text("Use admin finance buttons or /report_parking PLATE AMOUNT")))
 
     try:
-        async def _set_cmds():
-            try:
-                await application.bot.set_my_commands([
-                    BotCommand("start_trip", "Start a trip (select plate)"),
-                    BotCommand("end_trip", "End a trip (select plate)"),
-                    BotCommand("menu", "Open trip menu"),
-                    BotCommand("lang", "Set language /lang en|km"),
-                    BotCommand("mission_start", "Start a driver mission (PP<->SHV)"),
-                    BotCommand("mission_end", "End a driver mission"),
-                    BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
-                    BotCommand("admin_finance", "Show admin finance buttons"),
-                ])
-            except Exception:
-                logger.exception("Failed to set bot commands.")
+async def _set_cmds():
+    try:
+        await application.bot.set_my_commands([
+            BotCommand("start_trip", "Start a trip (select plate)"),
+            BotCommand("end_trip", "End a trip (select plate)"),
+            BotCommand("menu", "Open trip menu"),
+            BotCommand("lang", "Set language /lang en|km"),
+
+            # Missions
+            BotCommand("mission_start", "Start a driver mission"),
+            BotCommand("mission_end", "End a driver mission"),
+            BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
+
+            # Admin finance
+            BotCommand("admin_finance", "Admin: inline finance form"),
+            BotCommand("report_odo", "Manually report odometer (admin)"),
+            BotCommand("report_fuel", "Manually report fuel (admin)"),
+            BotCommand("report_parking", "Manually report parking (admin)"),
+
+            # Leave
+            BotCommand("leave_add", "Add driver leave record"),
+            BotCommand("leave_list", "View driver leave records"),
+
+            # Maintenance
+            BotCommand("maint_add", "Add vehicle maintenance record"),
+            BotCommand("maint_list", "View vehicle maintenance"),
+
+            # Help
+            BotCommand("help", "Show help page")
+        ])
+    except Exception:
+        logger.exception("Failed to set bot commands.")
+
         if hasattr(application, "create_task"):
             application.create_task(_set_cmds())
     except Exception:
