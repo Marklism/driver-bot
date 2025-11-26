@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
-driver-bot enhanced version with missions and Roundtrip marking
-
-Key additions:
-- Missions sheet includes new column "Roundtrip" (9th column).
-- When mission end is recorded, if Start Date and End Date are the same calendar day (same tz),
-  the script writes "Yes" into Roundtrip, otherwise "No".
-- Mission report (month/year) writes Roundtrip column and appends a summary block that counts
-  Roundtrip occurrences per plate in that period.
+driver-bot enhanced version with missions and Roundtrip marking,
+and /lang command usable in groups (deletes the invoking message).
 
 Save as driver_bot.py and run (ensure env vars like BOT_TOKEN and Google creds are set).
 """
@@ -161,7 +155,6 @@ TR = {
         "mission_report_roundtrip_summary": "Roundtrip counts (period):",
     },
     "km": {
-        # Khmer strings shortened for example
         "menu": "មិនីវរ​បូត — សូមចុចប៊ូតុងដើម្បីអនុវត្ត៖",
         "choose_start": "សូមជ្រើសលេខផ្ទះបណ្ដោះដើម្បីចាប់ផ្តើមដំណើរ:",
         "choose_end": "សូមជ្រើសលេខផ្ទះបណ្ដោះដើម្បីបញ្ចប់ដំណើរ:",
@@ -886,17 +879,45 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("pending_action", None)
 
 
+# ===== UPDATED lang_command: works in groups and deletes invoking message =====
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Try delete the user's /lang message to avoid clutter in groups
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+
     args = context.args
+    # If no args, send usage (to chat)
     if not args:
-        await update.message.reply_text("Usage: /lang en|km")
+        try:
+            await update.effective_chat.send_message("Usage: /lang en|km")
+        except Exception:
+            # fallback to reply
+            await update.effective_message.reply_text("Usage: /lang en|km")
         return
+
     lang = args[0].lower()
     if lang not in SUPPORTED_LANGS:
-        await update.message.reply_text("Supported langs: en, km")
+        try:
+            await update.effective_chat.send_message("Supported langs: en, km")
+        except Exception:
+            await update.effective_message.reply_text("Supported langs: en, km")
         return
+
+    # Save per-user preference
     context.user_data["lang"] = lang
-    await update.message.reply_text(t(lang, "lang_set", lang=lang))
+
+    # Reply confirmation in chosen language
+    try:
+        await update.effective_chat.send_message(t(lang, "lang_set", lang=lang))
+    except Exception:
+        # fallback
+        try:
+            await update.effective_message.reply_text(t(lang, "lang_set", lang=lang))
+        except Exception:
+            pass
 
 
 # Mission report command
