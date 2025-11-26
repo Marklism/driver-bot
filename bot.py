@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """
-Driver Bot — GPS removed version.
+Driver Bot — GPS removed + structured roundtrip + 24h window + monthly driver roundtrip summary tab & CSV export.
 
-Changes:
-- GPS/location feature removed.
-- Start/End trip: when user clicks a plate the bot immediately records start/end to the RECORDS_TAB.
-- No longer requests or handles location messages.
-- Mission staff prompt behavior remains: bot sends a separate "Optional: send staff name (or /skip)"
-  and deletes that specific prompt after user replies; other messages are kept.
-- All other features retained: per-user lang, driver->plates permissions, Missions, Roundtrip marking,
-  mission reports, robust open_worksheet that auto-creates tabs, migration helper, and deletion of invoking
-  command messages to keep groups tidy.
+New features:
+- After merging a roundtrip, monthly roundtrip counts per driver can be generated and exported.
+- /mission_report month YYYY-MM will still create the mission report and additionally:
+    - generate a Google Sheet tab named "Roundtrip_Summary_YYYY-MM" with per-driver counts
+    - write a local CSV "roundtrip_summary_YYYY-MM.csv" and attempt to send it back to the chat
 """
 
 import os
 import json
 import base64
 import logging
+import csv
 from datetime import datetime, timedelta, time as dtime
 from typing import Optional, Dict, List, Any, Tuple
 
@@ -62,7 +59,7 @@ PLATE_LIST = os.getenv(
     "2BB-3071,2BB-0809,2CI-8066,2CK-8066,2CJ-8066,3H-8066,2AV-6527,2AZ-6828,2AX-4635,2BV-8320",
 )
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Driver_Log")
-GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")  # optional legacy base tab
+GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")
 
 _env_tz = os.getenv("LOCAL_TZ")
 if _env_tz is None:
@@ -101,13 +98,17 @@ COL_PLATE = 3
 COL_START = 4
 COL_END = 5
 COL_DURATION = 6
-# GPS columns removed
 
-# Missions columns (1-indexed): No., Name, Plate, Start Date, End Date, Departure, Arrival, Staff Name, Roundtrip
+# Missions columns (1-indexed):
+# No.(1), Name(2), Plate(3), Start Date(4), End Date(5), Departure(6), Arrival(7), Staff Name(8),
+# Roundtrip(9), Return Start(10), Return End(11)
 
 # Time formats
 TS_FMT = "%Y-%m-%d %H:%M:%S"
 DATE_FMT = "%Y-%m-%d"
+
+# Roundtrip match window (hours)
+ROUNDTRIP_WINDOW_HOURS = 24
 
 # Google scopes
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -129,8 +130,6 @@ TR = {
         "summary_row": "{plate}: {hours}h{minutes}m total",
         "no_records": "No records found for {date}.",
         "lang_set": "Language set to {lang}.",
-        "skip_loc": "Location skipped.",
-        "prompt_send_loc": "Please send your location now or /skip.",
         "mission_start_prompt_plate": "Please choose the plate for the mission start:",
         "mission_start_prompt_depart": "Select departure city:",
         "mission_start_prompt_staff": "Optional: send staff name accompanying you (or /skip).",
@@ -142,13 +141,16 @@ TR = {
         "mission_report_month_ok": "Monthly mission report for {month} generated and written to sheet.",
         "mission_report_year_ok": "Yearly mission report for {year} generated and written to sheet.",
         "mission_invalid_cmd": "Usage: /mission_report month YYYY-MM  OR  /mission_report year YYYY",
-        "mission_report_roundtrip_summary": "Roundtrip counts (period):",
+        "roundtrip_merged_notify": "✅ Roundtrip merged for {driver} on plate {plate}. {count_msg}",
+        "roundtrip_monthly_count": "Driver {driver} completed {count} roundtrips this month.",
+        "roundtrip_summary_tab_ok": "Roundtrip summary tab created: {tab_name}",
+        "roundtrip_csv_ok": "Roundtrip CSV written: {csv_path}",
     },
     "km": {
         "menu": "មិនីវរ​បូត — សូមចុចប៊ូតុងដើម្បីអនុវត្ត៖",
         "choose_start": "សូមជ្រើសលេខផ្ទះបណ្ដោះដើម្បីចាប់ផ្តើមដំណើរ:",
         "choose_end": "សូមជ្រើសលេខផ្ទះបណ្ដោះដើម្បីបញ្ចប់ដំណើរ:",
-        "start_ok": "✅ ចាប់ផ្តើមដំណើរសម្រាប់ {plate} (អ្នកបើក: {driver}). {msg}",
+        "start_ok": "✅​ចាប់ផ្តើមដំណើរសម្រាប់ {plate} (អ្នកបើក: {driver}). {msg}",
         "end_ok": "✅ បញ្ចប់ដំណើរសម្រាប់ {plate} (អ្នកបើក: {driver}). {msg}",
         "not_allowed": "❌ អ្នកមិនមានសិទ្ធិប្រើលើរថយន្តនេះ: {plate}.",
         "invalid_sel": "ជម្រើសមិនត្រឹមត្រូវ។",
@@ -159,8 +161,6 @@ TR = {
         "summary_row": "{plate}: {hours}ស {minutes}នាទីសរុប",
         "no_records": "មិនមានកំណត់ត្រាសម្រាប់ {date}.",
         "lang_set": "បានកំណត់ភាសា​ជា {lang}.",
-        "skip_loc": "បានរំលងទីតាំង។",
-        "prompt_send_loc": "សូមផ្ញើទីតាំងឥឡូវ ឬ /skip.",
         "mission_start_prompt_plate": "សូមជ្រើស plate សម្រាប់ចាប់ផ្តើមដើមកិច្ចធ្វើការទស្សនកិច្ច:",
         "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញដើម (Departure):",
         "mission_start_prompt_staff": "Optional: ផ្ញើឈ្មោះបុគ្គលិកដែលដើមជាមួយ (ឬ /skip).",
@@ -172,7 +172,10 @@ TR = {
         "mission_report_month_ok": "របាយការណ៍ខែ {month} បានបង្កើត និងបានសរសេរទៅ sheet។",
         "mission_report_year_ok": "របាយការណ៍ឆ្នាំ {year} បានបង្កើត និងបានសរសេរទៅ sheet។",
         "mission_invalid_cmd": "ប្រើ: /mission_report month YYYY-MM  ឬ  /mission_report year YYYY",
-        "mission_report_roundtrip_summary": "ចំនួន往返 (រយៈពេល):",
+        "roundtrip_merged_notify": "✅ រួមបញ្ចូល往返សម្រាប់ {driver} លើ plate {plate}. {count_msg}",
+        "roundtrip_monthly_count": "អ្នកបើក {driver} បានធ្វើ往返 {count} ដងក្នុងខែនេះ។",
+        "roundtrip_summary_tab_ok": "បានបង្កើតតាប្រសិទ្ធិរួម往返: {tab_name}",
+        "roundtrip_csv_ok": "បានសរសេរ CSV: {csv_path}",
     },
 }
 
@@ -184,7 +187,7 @@ def t(user_lang: Optional[str], key: str, **kwargs) -> str:
     return TR.get(lang, TR["en"]).get(key, TR["en"].get(key, "")).format(**kwargs)
 
 
-# ===== Google Sheets helpers (robust open_worksheet with auto-create) =====
+# ===== Google Sheets helpers =====
 def _load_creds_from_base64(encoded: str) -> dict:
     try:
         if encoded.strip().startswith("{"):
@@ -224,14 +227,13 @@ def open_worksheet(tab: str = ""):
     """
     Open specific worksheet tab by name. If tab is provided but does not exist,
     it will be created with sensible headers depending on tab name.
-    If tab is empty, fallback to GOOGLE_SHEET_TAB or sheet1 (legacy behavior).
     """
     gc = get_gspread_client()
     sh = gc.open(GOOGLE_SHEET_NAME)
 
     def _create_tab(name: str, headers: Optional[List[str]] = None):
         try:
-            ws_new = sh.add_worksheet(title=name, rows="2000", cols="20")
+            ws_new = sh.add_worksheet(title=name, rows="2000", cols="30")
             if headers:
                 ws_new.insert_row(headers, index=1)
             return ws_new
@@ -249,14 +251,13 @@ def open_worksheet(tab: str = ""):
             if lower in (RECORDS_TAB.lower(), "driver_log"):
                 headers = ["Date", "Driver", "Plate", "Start", "End", "Duration"]
             elif lower in (MISSIONS_TAB.lower(), "missions"):
-                headers = ["No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip"]
+                headers = ["No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"]
             elif lower in (SUMMARY_TAB.lower(), "summary"):
                 headers = ["Date", "PeriodType", "TotalsJSON", "HumanSummary"]
             else:
                 headers = None
             return _create_tab(tab, headers=headers)
     else:
-        # legacy fallback
         if GOOGLE_SHEET_TAB:
             try:
                 return sh.worksheet(GOOGLE_SHEET_TAB)
@@ -449,7 +450,7 @@ def write_daily_summary(date_dt: datetime) -> str:
     return header + "\n" + "\n".join(lines)
 
 
-# ===== Missions (Roundtrip) =====
+# ===== Missions: start / end / merge logic (structured roundtrip) =====
 def _missions_next_no(ws) -> int:
     try:
         all_vals = ws.get_all_values()
@@ -470,7 +471,8 @@ def start_mission_record(driver: str, plate: str, departure: str, staff_name: st
     start_ts = now_str()
     try:
         next_no = _missions_next_no(ws)
-        row = [next_no, driver, plate, start_ts, "", departure, "", staff_name, ""]
+        # Insert with empty End Date, Arrival, Roundtrip, Return Start, Return End
+        row = [next_no, driver, plate, start_ts, "", departure, "", staff_name, "", "", ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("Mission start recorded: %s %s %s %s", next_no, driver, plate, departure)
         return {"ok": True, "no": next_no, "message": f"Mission start recorded for {plate} at {start_ts}"}
@@ -480,41 +482,122 @@ def start_mission_record(driver: str, plate: str, departure: str, staff_name: st
 
 
 def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
+    """
+    Find last open mission row (same driver & plate) without End Date -> update End Date & Arrival,
+    then try to detect complementary leg within 24 hours window to form a full roundtrip.
+    If found, merge the pair into primary row (earlier start) and delete the other row.
+    """
     ws = open_worksheet(MISSIONS_TAB)
     try:
         records = ws.get_all_records()
+        # find last open mission row for this driver+plate
         for idx in range(len(records) - 1, -1, -1):
             rec = records[idx]
-            rec_plate = str(rec.get("Plate", rec.get("plate", rec.get("Plate No", "")))).strip()
-            rec_name = str(rec.get("Name", rec.get("Driver", rec.get("name", "")))).strip()
+            rec_plate = str(rec.get("Plate", rec.get("plate", ""))).strip()
+            rec_name = str(rec.get("Name", rec.get("Driver", ""))).strip()
             end_val = str(rec.get("End Date", rec.get("End", ""))).strip()
             start_val = str(rec.get("Start Date", rec.get("Start", ""))).strip()
             if rec_plate == plate and (end_val == "" or end_val is None) and (rec_name == driver):
                 row_number = idx + 2
                 end_ts = now_str()
-                ws.update_cell(row_number, 5, end_ts)
-                ws.update_cell(row_number, 7, arrival)
-                rt_value = "No"
+                ws.update_cell(row_number, 5, end_ts)  # End Date col 5
+                ws.update_cell(row_number, 7, arrival)  # Arrival col 7
+                logger.info("Mission end updated for %s row %d (arrival=%s)", plate, row_number, arrival)
+
+                # Attempt to find complementary completed leg within 24 hours window
                 s_dt = parse_ts(start_val) if start_val else None
-                e_dt = parse_ts(end_ts)
-                if s_dt and e_dt and s_dt.date() == e_dt.date():
-                    rt_value = "Yes"
+                if not s_dt:
+                    return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False}
+                window_start = s_dt - timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
+                window_end = s_dt + timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
+
+                # Re-fetch records (fresh)
+                records2 = ws.get_all_records()
+                completed = []
+                for j, r2 in enumerate(records2):
+                    if j == idx:
+                        continue
+                    rn = str(r2.get("Name", r2.get("Driver", ""))).strip()
+                    rp = str(r2.get("Plate", r2.get("plate", ""))).strip()
+                    rstart = str(r2.get("Start Date", r2.get("Start", ""))).strip()
+                    rend = str(r2.get("End Date", r2.get("End Date", r2.get("End", "")))).strip() or str(r2.get("End", r2.get("End Date", ""))).strip()
+                    dep = str(r2.get("Departure", r2.get("departure", ""))).strip()
+                    arr = str(r2.get("Arrival", r2.get("arrival", ""))).strip()
+                    if rn != driver or rp != plate:
+                        continue
+                    if not rstart or not rend:
+                        continue
+                    r_s_dt = parse_ts(rstart)
+                    r_e_dt = parse_ts(rend)
+                    if not r_s_dt or not r_e_dt:
+                        continue
+                    if not (window_start <= r_s_dt <= window_end):
+                        continue
+                    completed.append({"idx": j, "start": r_s_dt, "end": r_e_dt, "dep": dep, "arr": arr, "rstart": rstart, "rend": rend})
+
+                # Look for complementary (dep/arr swapped)
+                found_pair = None
+                cur_dep = str(rec.get("Departure", rec.get("departure", ""))).strip()
+                cur_arr = arrival
+                for comp in completed:
+                    if (cur_dep == "PP" and cur_arr == "SHV" and comp["dep"] == "SHV" and comp["arr"] == "PP") or \
+                       (cur_dep == "SHV" and cur_arr == "PP" and comp["dep"] == "PP" and comp["arr"] == "SHV"):
+                        found_pair = comp
+                        break
+
+                if not found_pair:
+                    # no complementary leg found within time window
+                    return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False}
+
+                # Determine primary (earlier start) and secondary
+                other_idx = found_pair["idx"]
+                other_start = found_pair["start"]
+                primary_idx = idx if s_dt <= other_start else other_idx
+                secondary_idx = other_idx if primary_idx == idx else idx
+
+                primary_row_number = primary_idx + 2
+                secondary_row_number = secondary_idx + 2
+
+                # Determine return start/end values (from the other leg)
+                if primary_idx == idx:
+                    return_start = found_pair["start"].strftime(TS_FMT)
+                    return_end = found_pair["end"].strftime(TS_FMT)
+                else:
+                    return_start = s_dt.strftime(TS_FMT)
+                    return_end = end_ts
+
+                # Update primary row: Roundtrip(9)="Yes", Return Start(10)=return_start, Return End(11)=return_end
                 try:
-                    ws.update_cell(row_number, 9, rt_value)
+                    ws.update_cell(primary_row_number, 9, "Yes")
+                    ws.update_cell(primary_row_number, 10, return_start)
+                    ws.update_cell(primary_row_number, 11, return_end)
                 except Exception:
                     try:
-                        existing = ws.row_values(row_number)
-                        while len(existing) < 9:
+                        existing = ws.row_values(primary_row_number)
+                        while len(existing) < 11:
                             existing.append("")
-                        existing[4] = end_ts
-                        existing[6] = arrival
-                        existing[8] = rt_value
-                        ws.delete_row(row_number)
-                        ws.insert_row(existing, row_number)
+                        existing[8] = "Yes"
+                        existing[9] = return_start
+                        existing[10] = return_end
+                        ws.delete_row(primary_row_number)
+                        ws.insert_row(existing, primary_row_number)
                     except Exception:
-                        logger.exception("Fallback write for mission end failed.")
-                logger.info("Mission end updated for %s row %d (Roundtrip=%s)", plate, row_number, rt_value)
-                return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "roundtrip": rt_value}
+                        logger.exception("Failed to update primary merged row; aborting merge.")
+                        return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False}
+
+                # Delete secondary row (best-effort)
+                try:
+                    ws.delete_row(secondary_row_number)
+                    logger.info("Deleted secondary mission row %d after merging into %d", secondary_row_number, primary_row_number)
+                except Exception:
+                    try:
+                        ws.update_cell(secondary_row_number, 9, "Merged")
+                    except Exception:
+                        logger.exception("Failed to delete or mark secondary merged row.")
+
+                # Successfully merged — return merged flag
+                return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": True, "driver": driver, "plate": plate}
+        # no open mission found
         return {"ok": False, "message": "No open mission found"}
     except Exception as e:
         logger.exception("Failed to update mission end")
@@ -542,7 +625,9 @@ def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[Li
                 arr = rec.get("Arrival", rec.get("arrival", ""))
                 staff = rec.get("Staff Name", rec.get("staff name", ""))
                 roundtrip = rec.get("Roundtrip", rec.get("roundtrip", ""))
-                out.append([no, name, plate, start, end, dep, arr, staff, roundtrip])
+                return_start = rec.get("Return Start", "")
+                return_end = rec.get("Return End", "")
+                out.append([no, name, plate, start, end, dep, arr, staff, roundtrip, return_start, return_end])
         return out
     except Exception:
         logger.exception("Failed to fetch mission rows")
@@ -553,9 +638,10 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
     try:
         ws = open_worksheet(MISSIONS_REPORT_TAB)
         ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
-        ws.append_row(["No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip"], value_input_option="USER_ENTERED")
+        # report header includes return start/end
+        ws.append_row(["No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"], value_input_option="USER_ENTERED")
         for r in rows:
-            while len(r) < 9:
+            while len(r) < 11:
                 r.append("")
             ws.append_row(r, value_input_option="USER_ENTERED")
         rt_counts: Dict[str, int] = {}
@@ -577,7 +663,97 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
         return False
 
 
-# ===== Telegram UI helpers & handlers =====
+# ===== New: monthly per-driver roundtrip summary & export (tab + CSV) =====
+def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) -> Dict[str, int]:
+    """
+    Count rows in MISSIONS_TAB where Roundtrip == "Yes" and Start Date in [start_date, end_date).
+    Returns dict: {driver_name: count}
+    """
+    counts: Dict[str, int] = {}
+    try:
+        ws = open_worksheet(MISSIONS_TAB)
+        rows = ws.get_all_records()
+        for r in rows:
+            start = str(r.get("Start Date", r.get("Start", ""))).strip()
+            if not start:
+                continue
+            s_dt = parse_ts(start)
+            if not s_dt:
+                continue
+            if not (start_date <= s_dt < end_date):
+                continue
+            rt = str(r.get("Roundtrip", r.get("roundtrip", ""))).strip().lower()
+            if rt != "yes":
+                continue
+            name = str(r.get("Name", r.get("name", r.get("Driver", "")))).strip() or "Unknown"
+            counts[name] = counts.get(name, 0) + 1
+    except Exception:
+        logger.exception("Failed to count roundtrips per driver")
+    return counts
+
+
+def write_roundtrip_summary_tab(month_label: str, counts: Dict[str, int]) -> Optional[str]:
+    """
+    Create (or clear if exists) a tab named Roundtrip_Summary_{month_label} and write header + rows.
+    Return created tab name on success.
+    """
+    tab_name = f"Roundtrip_Summary_{month_label}"
+    try:
+        gc = get_gspread_client()
+        sh = gc.open(GOOGLE_SHEET_NAME)
+        # If exists, delete and recreate (to ensure fresh content). Best-effort.
+        try:
+            existing = sh.worksheet(tab_name)
+            try:
+                sh.del_worksheet(existing)
+            except Exception:
+                # if deletion fails, we'll try to clear instead
+                existing.clear()
+        except Exception:
+            pass
+        ws = open_worksheet(tab_name)
+        ws.append_row(["Driver", "Roundtrip Count (month)"], value_input_option="USER_ENTERED")
+        for driver, cnt in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+            ws.append_row([driver, cnt], value_input_option="USER_ENTERED")
+        logger.info("Wrote roundtrip summary tab %s", tab_name)
+        return tab_name
+    except Exception:
+        logger.exception("Failed to write roundtrip summary tab")
+        return None
+
+
+def write_roundtrip_summary_csv(month_label: str, counts: Dict[str, int]) -> Optional[str]:
+    """
+    Write a CSV file roundtrip_summary_{month_label}.csv to local working directory and /mnt/data if possible.
+    Return path to the local CSV file on success.
+    """
+    fname = f"roundtrip_summary_{month_label}.csv"
+    try:
+        # prefer /mnt/data if available (environment like sandbox may expose it)
+        local_path = os.path.join(os.getcwd(), fname)
+        with open(local_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Driver", "Roundtrip Count (month)"])
+            for driver, cnt in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+                writer.writerow([driver, cnt])
+        # also attempt to write to /mnt/data for environments that expose it
+        try:
+            mnt_path = os.path.join("/mnt/data", fname)
+            with open(mnt_path, "w", newline="", encoding="utf-8") as f2:
+                writer2 = csv.writer(f2)
+                writer2.writerow(["Driver", "Roundtrip Count (month)"])
+                for driver, cnt in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+                    writer2.writerow([driver, cnt])
+            logger.info("Wrote CSV to %s and %s", local_path, mnt_path)
+        except Exception:
+            logger.info("Wrote CSV to %s (couldn't write to /mnt/data)", local_path)
+        return local_path
+    except Exception:
+        logger.exception("Failed to write roundtrip summary CSV")
+        return None
+
+
+# ===== Telegram UI helpers & handlers (no GPS) =====
 def build_plate_keyboard(prefix: str, allowed_plates: Optional[List[str]] = None):
     buttons = []
     row = []
@@ -603,7 +779,6 @@ def build_reply_keyboard_buttons():
 
 # All CommandHandlers attempt to delete the invoking message to avoid clutter in groups
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # delete invoking message if possible
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -628,7 +803,6 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # delete invoking message
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -645,7 +819,6 @@ async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # delete invoking message
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -662,7 +835,6 @@ async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # delete invoking message
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -679,7 +851,6 @@ async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # delete invoking message
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -774,11 +945,40 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(t(user_lang, "not_allowed", plate=plate))
             context.user_data.pop("pending_mission", None)
             return
+
+        # perform mission end record and possibly merge
         res = end_mission_record(username, plate, arrival)
         if res.get("ok"):
+            # notify success
             await query.edit_message_text(t(user_lang, "mission_end_ok", plate=plate, end_date=now_str(), arr=arrival))
+            # if merged, compute this driver's monthly roundtrip count and send a short summary to the chat
+            if res.get("merged"):
+                try:
+                    nowdt = _now_dt()
+                    month_start = datetime(nowdt.year, nowdt.month, 1)
+                    if nowdt.month == 12:
+                        month_end = datetime(nowdt.year + 1, 1, 1)
+                    else:
+                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+                    rows = mission_rows_for_period(month_start, month_end)
+                    cnt = 0
+                    for r in rows:
+                        name = str(r[1])
+                        if name == username:
+                            rt = str(r[8]).strip().lower()
+                            if rt == "yes":
+                                cnt += 1
+                    summary_msg = t(user_lang, "roundtrip_monthly_count", driver=username, count=cnt)
+                    # send to the same chat where the action happened
+                    try:
+                        await update.effective_chat.send_message(t(user_lang, "roundtrip_merged_notify", driver=username, plate=plate, count_msg=summary_msg))
+                    except Exception:
+                        # fallback: just send summary_msg
+                        await update.effective_chat.send_message(summary_msg)
+                except Exception:
+                    logger.exception("Failed to build/send roundtrip monthly summary.")
         else:
-            await query.edit_message_text(t(user_lang, "mission_no_open", plate=plate))
+            await query.edit_message_text("❌ " + res.get("message", ""))
         context.user_data.pop("pending_mission", None)
         return
 
@@ -863,7 +1063,7 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("pending_mission", None)
         return
 
-    # Otherwise ignore (we no longer handle GPS/location)
+    # Otherwise ignore
     return
 
 
@@ -905,7 +1105,7 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
 
-# mission_report: delete invoking message then run
+# mission_report: delete invoking message then run; extended to generate roundtrip summary tab + CSV for month
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -930,10 +1130,32 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
                 end = datetime(dt.year, dt.month + 1, 1)
             rows = mission_rows_for_period(start, end)
             ok = write_mission_report_rows(rows, period_label=start.strftime("%Y-%m"))
+            # After mission report, also produce per-driver roundtrip summary tab & CSV
+            counts = count_roundtrips_per_driver_month(start, end)
+            tab_name = write_roundtrip_summary_tab(start.strftime("%Y-%m"), counts)
+            csv_path = write_roundtrip_summary_csv(start.strftime("%Y-%m"), counts)
             if ok:
                 await update.effective_chat.send_message(t(user_lang, "mission_report_month_ok", month=start.strftime("%Y-%m")))
             else:
                 await update.effective_chat.send_message("❌ Failed to write mission report.")
+            # Notify about summary tab & CSV and attempt to send CSV file back
+            if tab_name:
+                try:
+                    await update.effective_chat.send_message(t(user_lang, "roundtrip_summary_tab_ok", tab_name=tab_name))
+                except Exception:
+                    pass
+            if csv_path:
+                try:
+                    # send CSV as document
+                    with open(csv_path, "rb") as f:
+                        await context.bot.send_document(chat_id=update.effective_chat.id, document=f, filename=os.path.basename(csv_path))
+                    await update.effective_chat.send_message(t(user_lang, "roundtrip_csv_ok", csv_path=csv_path))
+                except Exception:
+                    # can't send file; at least inform user where it is
+                    try:
+                        await update.effective_chat.send_message(t(user_lang, "roundtrip_csv_ok", csv_path=csv_path))
+                    except Exception:
+                        pass
         except Exception:
             await update.effective_chat.send_message(t(user_lang, "mission_invalid_cmd"))
     elif mode == "year":
@@ -1007,8 +1229,8 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_end", mission_end_command))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CallbackQueryHandler(plate_callback))
-    # location_or_skip now handles only /skip and free text (staff name)
-    application.add_handler(MessageHandler(filters.Regex(r'(?i)^/skip$') | filters.TEXT & (~filters.COMMAND), location_or_skip))
+    # location_or_skip now handles only staff-name replies (/skip and free text)
+    application.add_handler(MessageHandler(filters.Regex(r'(?i)^/skip$') | (filters.TEXT & (~filters.COMMAND)), location_or_skip))
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
@@ -1126,10 +1348,12 @@ def migrate_mixed_sheet(original_tab_name: str):
             start = r.get("Start Date") or r.get("Start") or ""
             end = r.get("End Date") or r.get("End") or ""
             dep = r.get("Departure") or ""
-            arr = r.get("Arrival") or ""
+            arr = r.get("Arrival") or r.get("Arr") or ""
             staff = r.get("Staff Name") or r.get("Staff") or ""
             rt = r.get("Roundtrip") or ""
-            mission_row = [next_no, name, plate, start, end, dep, arr, staff, rt]
+            return_start = r.get("Return Start") or ""
+            return_end = r.get("Return End") or ""
+            mission_row = [next_no, name, plate, start, end, dep, arr, staff, rt, return_start, return_end]
             missions_ws.append_row(mission_row, value_input_option="USER_ENTERED")
             next_no += 1
             mission_count += 1
