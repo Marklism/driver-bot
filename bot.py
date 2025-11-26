@@ -1,35 +1,34 @@
 #!/usr/bin/env python3
 """
-driver-bot full script (with local timezone option)
+driver-bot full script (with enforced local timezone)
 
-Notes:
-- This is your original script with one small, safe enhancement:
-  you can now configure a local timezone (matching your computer) so
-  timestamps written/displayed by the bot use that zone.
-- To enable: set environment variable LOCAL_TZ to an IANA timezone string,
-  e.g. "Asia/Phnom_Penh" or "Asia/Shanghai" or "Europe/London".
-  If LOCAL_TZ is not set or ZoneInfo is unavailable, the script falls back
-  to the server's system time (unchanged behavior).
-- No other logic or handlers are changed.
+Usage:
+- Save as driver_bot.py
+- Optionally set env var LOCAL_TZ to an IANA timezone (e.g. "Asia/Phnom_Penh").
+  If not set, this script defaults to "Asia/Phnom_Penh".
+- Also set BOT_TOKEN and Google credential env vars as needed.
 """
 
 import os
 import json
 import base64
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Python zoneinfo (standard in 3.9+). We use it if available to format times in user's local tz.
+# Prefer Python's zoneinfo (3.9+). If unavailable, try backports.zoneinfo.
 try:
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo  # type: ignore
 except Exception:
-    ZoneInfo = None
+    try:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    except Exception:
+        ZoneInfo = None  # type: ignore
 
-# Telegram imports (compatible with PTB 20.x where Update is in telegram)
+# Telegram imports (PTB 20.x compatible)
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -52,7 +51,7 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("driver-bot")
 
-# Environment / defaults
+# ========== Environment / defaults ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GOOGLE_CREDS_BASE64 = os.getenv("GOOGLE_CREDS_BASE64")
 GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH")  # optional path to credentials.json
@@ -63,11 +62,17 @@ PLATE_LIST = os.getenv(
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Driver_Log")
 GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")  # optional tab name
 
-# NEW: Local timezone option
-# Set LOCAL_TZ env var to an IANA timezone (e.g. "Asia/Phnom_Penh", "Asia/Shanghai")
-LOCAL_TZ = os.getenv("LOCAL_TZ", "").strip() or None
+# NEW: force a default local timezone so timestamps match local expectations.
+# If you prefer not to force, set LOCAL_TZ="" in env. Default is Asia/Phnom_Penh.
+_env_local_tz = os.getenv("LOCAL_TZ")
+if _env_local_tz is None:
+    LOCAL_TZ = "Asia/Phnom_Penh"
+else:
+    # allow empty string to explicitly mean "use system time"
+    LOCAL_TZ = _env_local_tz.strip() or None
+
 if LOCAL_TZ and ZoneInfo is None:
-    logger.warning("LOCAL_TZ set but zoneinfo not available in this Python runtime. Falling back to system time.")
+    logger.warning("LOCAL_TZ set but zoneinfo/backports.zoneinfo not available; falling back to system time.")
 
 PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
 
@@ -79,7 +84,7 @@ COL_START = 4
 COL_END = 5
 COL_DURATION = 6
 
-# Time formats
+# Time formats (no TZ suffix to keep sheet columns compact)
 TS_FMT = "%Y-%m-%d %H:%M:%S"
 DATE_FMT = "%Y-%m-%d"
 
@@ -90,14 +95,9 @@ SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/a
 def _load_creds_from_base64(encoded: str) -> dict:
     """Try decode base64 and parse JSON. Raise on failure."""
     try:
-        # If value looks like raw JSON (not base64), try direct load
         if encoded.strip().startswith("{"):
             return json.loads(encoded)
-        # fix padding if needed
-        padded = encoded.strip()
-        # base64 strings sometimes get whitespace/newlines removed incorrectly; remove whitespace
-        padded = "".join(padded.split())
-        # add padding
+        padded = "".join(encoded.split())
         missing = len(padded) % 4
         if missing:
             padded += "=" * (4 - missing)
@@ -110,7 +110,6 @@ def _load_creds_from_base64(encoded: str) -> dict:
 
 def get_gspread_client():
     """Return authorized gspread client. Supports GOOGLE_CREDS_BASE64 or GOOGLE_CREDS_PATH."""
-    # First prefer explicit base64 env
     creds_json = None
     if GOOGLE_CREDS_BASE64:
         creds_json = _load_creds_from_base64(GOOGLE_CREDS_BASE64)
@@ -118,7 +117,6 @@ def get_gspread_client():
         with open(GOOGLE_CREDS_PATH, "r", encoding="utf-8") as f:
             creds_json = json.load(f)
     else:
-        # Try commonly uploaded credential file in working dir
         fallback = "credentials.json"
         if os.path.exists(fallback):
             with open(fallback, "r", encoding="utf-8") as f:
@@ -147,11 +145,11 @@ def open_worksheet():
 
 
 # ---------- TIME FUNCTIONS (use LOCAL_TZ if available) ----------
-def _now_dt():
+def _now_dt() -> datetime:
     """
-    Return a timezone-aware or naive datetime depending on availability:
-    - If LOCAL_TZ is set and ZoneInfo is available, return now() in that zone.
-    - Otherwise return naive datetime.now() (original behavior).
+    Return a datetime object:
+    - If LOCAL_TZ is set and ZoneInfo is available, return timezone-aware datetime in that zone.
+    - If LOCAL_TZ is not set, return naive datetime.now() (system local time).
     """
     if LOCAL_TZ and ZoneInfo:
         try:
@@ -164,22 +162,32 @@ def _now_dt():
         return datetime.now()
 
 
-def now_str():
+def now_str() -> str:
     """Return timestamp string in TS_FMT using LOCAL_TZ if configured."""
-    return _now_dt().strftime(TS_FMT)
+    dt = _now_dt()
+    # To keep sheet clean, store local wall-clock time (no offset) in TS_FMT.
+    return dt.strftime(TS_FMT)
 
 
-def today_date_str():
+def today_date_str() -> str:
     """Return date string in DATE_FMT using LOCAL_TZ if configured."""
     return _now_dt().strftime(DATE_FMT)
 
 
 def compute_duration(start_ts: str, end_ts: str) -> str:
+    """
+    Compute duration given two timestamp strings in TS_FMT.
+    Both strings are expected to be formatted with the same TS_FMT and same timezone semantics.
+    Returns string like "1h23m" or "" on failure.
+    """
     try:
         s = datetime.strptime(start_ts, TS_FMT)
         e = datetime.strptime(end_ts, TS_FMT)
         delta = e - s
         total_minutes = int(delta.total_seconds() // 60)
+        if total_minutes < 0:
+            # If negative (shouldn't happen), return empty
+            return ""
         hours = total_minutes // 60
         minutes = total_minutes % 60
         return f"{hours}h{minutes}m"
@@ -188,13 +196,13 @@ def compute_duration(start_ts: str, end_ts: str) -> str:
 
 
 def record_start_trip(driver: str, plate: str) -> dict:
-    """Append start row."""
+    """Append start row to sheet."""
     ws = open_worksheet()
     start_ts = now_str()
     row = [today_date_str(), driver, plate, start_ts, "", ""]
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info("Recorded start trip: %s %s", driver, plate)
+        logger.info("Recorded start trip: %s %s (%s)", driver, plate, start_ts)
         return {"ok": True, "message": f"Start time recorded for {plate} at {start_ts}"}
     except Exception as e:
         logger.exception("Failed to append start trip row")
@@ -202,12 +210,17 @@ def record_start_trip(driver: str, plate: str) -> dict:
 
 
 def record_end_trip(driver: str, plate: str) -> dict:
-    """Find last row for plate with empty End and update."""
+    """
+    Find last row for plate with empty End and update it.
+    If no open start found, append end-only row.
+    """
     ws = open_worksheet()
     try:
+        # get_all_records returns list of dicts using header row keys
         records = ws.get_all_records()
         for idx in range(len(records) - 1, -1, -1):
             rec = records[idx]
+            # try several common header names for robustness
             rec_plate = str(rec.get("Plate No.", rec.get("Plate", rec.get("Plate No", "")))).strip()
             end_val = str(rec.get("End date&time", rec.get("End", ""))).strip()
             start_val = str(rec.get("Start date&time", rec.get("Start", ""))).strip()
@@ -217,13 +230,13 @@ def record_end_trip(driver: str, plate: str) -> dict:
                 duration_text = compute_duration(start_val, end_ts) if start_val else ""
                 ws.update_cell(row_number, COL_END, end_ts)
                 ws.update_cell(row_number, COL_DURATION, duration_text)
-                logger.info("Recorded end trip for %s row %d", plate, row_number)
+                logger.info("Recorded end trip for %s row %d (%s, duration %s)", plate, row_number, end_ts, duration_text)
                 return {"ok": True, "message": f"End time recorded for {plate} at {end_ts} (duration {duration_text})"}
-        # no matching start found -> append end-only row
+        # no open start found -> append end-only row
         end_ts = now_str()
         row = [today_date_str(), driver, plate, "", end_ts, ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info("No open start found; appended end-only row for %s", plate)
+        logger.info("No open start found; appended end-only row for %s (%s)", plate, end_ts)
         return {"ok": True, "message": f"End time recorded (no matching start found) for {plate} at {end_ts}"}
     except Exception as e:
         logger.exception("Failed to update end trip")
@@ -264,14 +277,12 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Open menu", callback_data="menu_full"),
          InlineKeyboardButton("Help", callback_data="help")],
     ]
-    # delete user's command message if possible
     try:
         if update.effective_message:
             await update.effective_message.delete()
     except Exception:
         logger.debug("Cannot delete command message (menu).")
 
-    # show menu
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
@@ -281,7 +292,6 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # best-effort: set my commands for the bot (non-blocking)
     try:
         if hasattr(context.application, "create_task"):
-            # schedule set_my_commands to run in running loop if available
             async def _set_cmds():
                 await context.bot.set_my_commands([
                     BotCommand("start_trip", "Start a trip (select plate)"),
@@ -417,12 +427,10 @@ def register_ui_handlers(application):
 
 # Optional admin helper to post and pin the menu in a group (call /setup_menu in the group as admin)
 async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Only allow in groups and by admins (best-effort check)
     if not (update.effective_chat and update.effective_chat.type in ("group", "supergroup")):
         await update.effective_chat.send_message("This command must be used in a group.")
         return
     try:
-        # delete the invoking message
         try:
             if update.effective_message:
                 await update.effective_message.delete()
@@ -437,12 +445,10 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
              InlineKeyboardButton("Help", callback_data="help")],
         ]
         sent = await update.effective_chat.send_message(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
-        # try to pin the message
         try:
             await context.bot.pin_chat_message(chat_id=update.effective_chat.id, message_id=sent.message_id, disable_notification=True)
         except Exception:
             logger.debug("Pin failed (bot may lack permission).")
-        # set commands globally for bot (best-effort)
         try:
             await context.bot.set_my_commands([
                 BotCommand("start_trip", "Start a trip (select plate)"),
@@ -465,6 +471,19 @@ def ensure_env():
 
 def main():
     ensure_env()
+    # Log selected timezone info to help debugging
+    if LOCAL_TZ:
+        if ZoneInfo:
+            try:
+                tz = ZoneInfo(LOCAL_TZ)
+                logger.info("Starting driver-bot using LOCAL_TZ=%s", LOCAL_TZ)
+            except Exception:
+                logger.info("LOCAL_TZ is set to %s but failed to initialize ZoneInfo; using system time.", LOCAL_TZ)
+        else:
+            logger.info("LOCAL_TZ=%s requested but ZoneInfo not available; using system time.", LOCAL_TZ)
+    else:
+        logger.info("LOCAL_TZ not set; using system local time.")
+
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # register handlers
