@@ -1278,10 +1278,17 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # Message handler for staff-name replies (/skip or text).
-# Delete user's message, delete bot staff prompt, delete inline departure prompt, then record mission start.
+# IMPORTANT FIX: if user is currently in cost input flow (pending_cost),
+# do nothing here so that the cost input handler can receive the message.
 async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # If user is in the admin cost-entry flow, ignore here so handle_cost_value_input can run.
+    if context.user_data.get("pending_cost"):
+        # do not delete the message here; let the cost handler process it
+        return
+
     try:
         if update.effective_message:
+            # keep deleting user messages for mission flow to keep chat clean
             await update.effective_message.delete()
     except Exception:
         pass
@@ -1289,7 +1296,7 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
-    # delete stored bot prompt
+    # delete stored bot prompt (the "Optional: send staff name..." message)
     last_prompt = context.user_data.get("last_bot_prompt")
     if last_prompt:
         try:
@@ -1313,7 +1320,7 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         context.user_data.pop("last_inline_prompt", None)
 
-    # handle pending mission start
+    # handle pending mission start (staff name or /skip)
     pending_mission = context.user_data.get("pending_mission")
     if pending_mission and pending_mission.get("action") == "start":
         text = update.message.text.strip() if update.message and update.message.text else ""
