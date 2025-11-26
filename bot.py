@@ -80,7 +80,7 @@ PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
 DRIVER_PLATE_MAP_JSON = os.getenv("DRIVER_PLATE_MAP", "").strip() or None
 
 # Admins (comma separated usernames)
-ADMIN_USERS = [u.strip() for u in os.getenv("markpeng1", "kmnyy").split(",") if u.strip()]
+ADMIN_USERS = [u.strip() for u in os.getenv("ADMIN_USERS", "markpeng1,kmnyy").split(",") if u.strip()]
 
 # Scheduling / summary
 SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
