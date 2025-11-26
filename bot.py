@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Driver Bot — Full (with /setup_menu)
-- Missions, Reports, Maintenance, Admin Inline Finance Form
-- /setup_menu: sends & pins the main menu message in the chat (admin-only)
+Driver Bot — Full (improved finance, reports, deletion of setup commands, new records)
+- Keep original mission/trip behavior; add improved admin finance small inline form,
+  immediate deletion of command messages like /setup*, validation of finance input,
+  new records: wash/fuel/repair/leave, monthly expense reports, cleaned sheet headers.
 """
 
 import os
@@ -12,6 +13,7 @@ import logging
 import csv
 import uuid
 import re
+import asyncio
 from datetime import datetime, timedelta, time as dtime
 from typing import Optional, Dict, List, Any, Tuple
 
@@ -91,11 +93,9 @@ DRIVERS_TAB = os.getenv("DRIVERS_TAB", "Drivers")
 SUMMARY_TAB = os.getenv("SUMMARY_TAB", "Summary")
 MISSIONS_TAB = os.getenv("MISSIONS_TAB", "Missions")
 MISSIONS_REPORT_TAB = os.getenv("MISSIONS_REPORT_TAB", "Missions_Report")
-
-# NEW tabs
 LEAVE_TAB = os.getenv("LEAVE_TAB", "Driver_Leave")
 MAINT_TAB = os.getenv("MAINT_TAB", "Vehicle_Maintenance")
-EXPENSE_TAB = os.getenv("EXPENSE_TAB", "Trip_Expenses")   # For km / fuel / parking
+EXPENSE_TAB = os.getenv("EXPENSE_TAB", "Trip_Expenses")
 
 # Mission columns (0-based)
 M_IDX_GUID = 0
@@ -130,7 +130,7 @@ ROUNDTRIP_WINDOW_HOURS = int(os.getenv("ROUNDTRIP_WINDOW_HOURS", "24"))
 # Google scopes
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# HEADERS template per tab — conservative: will only be written if sheet empty
+# HEADERS template per tab — conservative: write only when sheet is empty
 HEADERS_BY_TAB: Dict[str, List[str]] = {
     RECORDS_TAB: ["Date", "Driver", "Plate", "Start DateTime", "End DateTime", "Duration"],
     MISSIONS_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
@@ -167,10 +167,13 @@ TR = {
         "lang_set": "Language set to {lang}.",
         "weekly_report_generated": "Weekly report generated for {period}.",
         "unfinished_warning": "⚠️ You have unfinished missions: {detail}",
+        "invalid_amount": "Invalid amount — please send a numeric value like `23.5` (no currency).",
+        "invalid_odo": "Invalid odometer — please send numeric KM like `12345` or `12345KM`.",
+        "confirm_recorded": "{typ} recorded for {plate}: {amount}",
     },
     "km": {
         "menu": "ម៉ឺនុយបូត — សូមជ្រើសប៊ូតុង:",
-        "choose_start": "ជ្រើស plate ដើម្បីចាប់ផ្តើមដំណើរ:",
+        "choose_start": "ជ្រើស plate ដើម្បីចាប់ផ្ដើមដំណើរ:",
         "choose_end": "ជ្រើស plate ដើម្បីបញ្ចប់ដំណើរ:",
         "start_ok": "✅ ចាប់ផ្ដើមដំណើរ {plate} ({driver}). {msg}",
         "end_ok": "✅ បញ្ចប់ដំណើរ {plate} ({driver}). {msg}",
@@ -178,7 +181,7 @@ TR = {
         "invalid_sel": "ជម្រើសមិនត្រឹមត្រូវ។",
         "help": "ជំនួយ៖ ប្រើ /start_trip ឬ /end_trip ហើយជ្រើស plate.",
         "no_bot_token": "សូមកំណត់ BOT_TOKEN។",
-        "mission_start_prompt_plate": "ជ្រើស plate ដើម្បីចាប់ផ្តើម mission:",
+        "mission_start_prompt_plate": "ជ្រើស plate ដើម្បីចាប់ផ្ដើម mission:",
         "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញ:",
         "mission_start_prompt_staff": "បញ្ចូលឈ្មោះបុគ្គលិក (ឬ /skip).",
         "mission_start_ok": "✅ ចាប់ផ្ដើម mission {plate} នៅ {start_date} ចេញពី {dep}.",
@@ -190,6 +193,9 @@ TR = {
         "lang_set": "បានផ្លាស់ប្ដូរភាសាទៅ {lang}.",
         "weekly_report_generated": "បានបង្កើតរបាយការណ៍ប្រចាំសប្តាហ៍ {period}.",
         "unfinished_warning": "⚠️ មាន mission មិនទាន់បញ្ចប់: {detail}",
+        "invalid_amount": "ទឹកប្រាក់ទម្រង់មិនត្រឹមត្រូវ — សូមផ្ញើត្រឹមតែលេខដូចជា `23.5` (គ្មានអក្សរ).",
+        "invalid_odo": "Odometer មិនត្រឹមត្រូវ — សូមផ្ញើលេខ KM ដូចជា `12345` ឬ `12345KM`.",
+        "confirm_recorded": "{typ} បានកត់ត្រាសម្រាប់ {plate}: {amount}",
     },
 }
 
@@ -241,7 +247,7 @@ def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
         if not values:
             ws.insert_row(headers, index=1)
     except Exception:
-        logger.exception("Failed to ensure headers (conservative) on worksheet %s", ws.title)
+        logger.exception("Failed to ensure headers (conservative) on worksheet %s", getattr(ws, "title", "<ws>"))
 
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
@@ -249,53 +255,41 @@ def _missions_header_fix_if_needed(ws):
     """
     Detect common misalignment: when the sheet's first data column contains GUID strings
     but the header row's first cell is not 'GUID'. In that case overwrite only the header row
-    with the canonical HEADERS_BY_TAB[MISSIONS_TAB]. This aligns existing rows with columns
-    without moving data.
+    with the canonical HEADERS_BY_TAB[MISSIONS_TAB].
     """
     try:
         values = ws.get_all_values()
         if not values:
-            return  # nothing to fix
+            return
         first_row = values[0]
-        # detect header-like: if first_row contains 'No' or 'No.' or 'Name' etc, treat as header
         header_like_keywords = {"no", "no.", "name", "plate", "start", "end", "departure", "arrival", "staff", "roundtrip"}
         is_header_like = any(str(c).strip().lower() in header_like_keywords for c in first_row if c)
         if not is_header_like:
-            return  # first row not header -> nothing to fix here
-        # if there's at least one data row
+            return
         if len(values) < 2:
             return
         second_row = values[1]
         first_cell = str(second_row[0]).strip() if len(second_row) > 0 else ""
-        # If first data cell looks like a GUID but header first cell isn't 'GUID', fix header row
         if first_cell and _UUID_RE.match(first_cell):
             header_first = str(first_row[0]).strip().lower() if len(first_row) > 0 else ""
             if header_first != "guid":
-                # Overwrite the header row with canonical headers for MISSIONS_TAB (A..L)
                 headers = HEADERS_BY_TAB.get(MISSIONS_TAB, [])
                 if not headers:
                     return
-                # build A1:L1 range update
                 try:
-                    # Ensure list length equals M_MANDATORY_COLS
                     h = list(headers)
                     while len(h) < M_MANDATORY_COLS:
                         h.append("")
-                    # update only header row cells (A1..L1)
                     col_letter_end = chr(ord('A') + M_MANDATORY_COLS - 1)
                     rng = f"A1:{col_letter_end}1"
                     ws.update(rng, [h], value_input_option="USER_ENTERED")
-                    logger.info("Fixed MISSIONS header row to canonical headers due to GUID detected in first data column.")
+                    logger.info("Fixed MISSIONS header row to canonical headers due to GUID detected.")
                 except Exception:
                     logger.exception("Failed to update header row in MISSIONS sheet.")
     except Exception:
         logger.exception("Error checking/fixing missions header.")
 
 def open_worksheet(tab: str = ""):
-    """
-    Open specific worksheet tab by name. If missing, create and insert headers (only when created).
-    For MISSIONS tab, also run header-fix check if needed.
-    """
     gc = get_gspread_client()
     sh = gc.open(GOOGLE_SHEET_NAME)
 
@@ -318,7 +312,6 @@ def open_worksheet(tab: str = ""):
             template = HEADERS_BY_TAB.get(tab)
             if template:
                 ensure_sheet_has_headers_conservative(ws, template)
-            # special-fix for MISSIONS tab (detect GUID-in-first-col situation)
             if tab == MISSIONS_TAB:
                 _missions_header_fix_if_needed(ws)
             return ws
@@ -336,7 +329,7 @@ def open_worksheet(tab: str = ""):
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
         return sh.sheet1
 
-# driver map loaders (same as before)
+# driver map loaders
 def load_driver_map_from_env() -> Dict[str, List[str]]:
     if not DRIVER_PLATE_MAP_JSON:
         return {}
@@ -418,7 +411,7 @@ def compute_duration(start_ts: str, end_ts: str) -> str:
     except Exception:
         return ""
 
-# ===== Trip record functions (GPS removed) =====
+# ===== Trip record functions =====
 def record_start_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
     start_ts = now_str()
@@ -467,7 +460,7 @@ def record_end_trip(driver: str, plate: str) -> dict:
         logger.exception("Failed to update end trip")
         return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
 
-# ===== Missions helpers =====
+# ===== Missions helpers (unchanged logic) =====
 def _missions_get_values_and_data_rows(ws):
     values = ws.get_all_values()
     if not values:
@@ -514,21 +507,16 @@ def start_mission_record(driver: str, plate: str, departure: str, staff_name: st
         logger.exception("Failed to append mission start")
         return {"ok": False, "message": "Failed to write mission start to sheet: " + str(e)}
 
-# Helper to detect complementary trip (enhanced multi-city)
 def _is_complementary_trip(dep1: str, arr1: str, dep2: str, arr2: str) -> bool:
     if not dep1 or not arr1 or not dep2 or not arr2:
         return False
     dep1, arr1, dep2, arr2 = dep1.strip().upper(), arr1.strip().upper(), dep2.strip().upper(), arr2.strip().upper()
-    # direct reverse
     if (dep1 == "PP" and arr1 == "SHV" and dep2 == "SHV" and arr2 == "PP") or (dep1 == "SHV" and arr1 == "PP" and dep2 == "PP" and arr2 == "SHV"):
         return True
-    # reversed legs
     if arr1 == dep2 and arr2 == dep1:
         return True
-    # multi-hop: if both start and return to PP via other nodes, allow
     if dep1 == "PP" and arr2 == "PP" and dep2 == arr1:
         return True
-    # fallback: if destinations and departures align
     if dep1 == arr2 or arr1 == dep2:
         return True
     return False
@@ -699,48 +687,7 @@ def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) 
         logger.exception("Failed to count roundtrips per driver")
     return counts
 
-def count_roundtrips_per_driver_year(year: int) -> Dict[str, int]:
-    start = datetime(year, 1, 1)
-    end = datetime(year + 1, 1, 1)
-    return count_roundtrips_per_driver_month(start, end)
-
-def write_roundtrip_summary_tab(month_label: str, counts: Dict[str, int]) -> Optional[str]:
-    tab_name = f"Roundtrip_Summary_{month_label}"
-    try:
-        gc = get_gspread_client()
-        sh = gc.open(GOOGLE_SHEET_NAME)
-        try:
-            existing = sh.worksheet(tab_name)
-            try:
-                sh.del_worksheet(existing)
-            except Exception:
-                existing.clear()
-        except Exception:
-            pass
-        ws = open_worksheet(tab_name)
-        ws.append_row(["Driver", "Roundtrip Count (month)"], value_input_option="USER_ENTERED")
-        for driver, cnt in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
-            ws.append_row([driver, cnt], value_input_option="USER_ENTERED")
-        return tab_name
-    except Exception:
-        logger.exception("Failed to write roundtrip summary tab")
-        return None
-
-def write_roundtrip_summary_csv(month_label: str, counts: Dict[str, int]) -> Optional[str]:
-    fname = f"roundtrip_summary_{month_label}.csv"
-    try:
-        local_path = os.path.join(os.getcwd(), fname)
-        with open(local_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Driver", "Roundtrip Count (month)"])
-            for driver, cnt in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
-                writer.writerow([driver, cnt])
-        return local_path
-    except Exception:
-        logger.exception("Failed to write roundtrip summary CSV")
-        return None
-
-# ===== Driver Leave =====
+# ===== Leave / Maintenance / Expenses helpers =====
 def add_driver_leave(driver: str, start: str, end: str, reason: str, notes: str = "") -> dict:
     ws = open_worksheet(LEAVE_TAB)
     try:
@@ -763,14 +710,32 @@ def get_driver_leaves(driver: str) -> List[dict]:
         logger.exception("Failed to read leaves")
         return []
 
-# ===== Vehicle Maintenance =====
 def add_vehicle_maintenance(plate: str, mileage: str, item: str, cost: str, date: str, workshop: str, notes: str = "") -> dict:
+    """
+    Writes to MAINT_TAB with columns:
+    ["Plate", "Mileage", "Maintenance Item", "Cost", "Date", "Workshop", "Notes"]
+    """
     ws = open_worksheet(MAINT_TAB)
     try:
-        ws.append_row([plate, mileage, item, cost, date, workshop, notes], value_input_option="USER_ENTERED")
+        row = [plate, mileage, item, cost, date, workshop, notes]
+        ws.append_row(row, value_input_option="USER_ENTERED")
         return {"ok": True}
     except Exception as e:
         logger.exception("Failed to write maintenance row")
+        return {"ok": False, "message": str(e)}
+
+def add_trip_expense_record(plate: str, driver: str, mileage: str, fuel_cost: str, parking_fee: str, other_fee: str) -> dict:
+    """
+    Writes to EXPENSE_TAB with columns:
+    ["Plate", "Driver", "DateTime", "Mileage", "Fuel Cost", "Parking Fee", "Other Fee"]
+    """
+    ws = open_worksheet(EXPENSE_TAB)
+    try:
+        row = [plate, driver, now_str(), mileage, fuel_cost, parking_fee, other_fee]
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        return {"ok": True}
+    except Exception as e:
+        logger.exception("Failed to add trip expense")
         return {"ok": False, "message": str(e)}
 
 def get_vehicle_maintenance(plate: str) -> List[dict]:
@@ -786,20 +751,47 @@ def get_vehicle_maintenance(plate: str) -> List[dict]:
         logger.exception("Failed to read maintenance rows")
         return []
 
-# ===== Trip Expenses (Admin only helper) =====
-ADMIN_USERS = set(os.getenv("BOT_ADMINS", "markpeng1,kmnyy").split(",")) if os.getenv("BOT_ADMINS") else set()
-BOT_ADMINS_SET = {u.strip() for u in os.getenv("BOT_ADMINS", "").split(",") if u.strip()}
+# ===== Finance routing utility =====
+AMOUNT_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*$', re.I)
+ODO_RE = re.compile(r'^\s*(\d+)(?:\s*km)?\s*$', re.I)
 
-def add_trip_expense(plate: str, driver: str, mileage: str, fuel: str, parking: str, other: str) -> dict:
-    ws = open_worksheet(EXPENSE_TAB)
+def record_finance_entry(typ: str, plate: str, amount_raw: str, notes: str, username: str) -> dict:
+    """
+    Route finance entries:
+    - typ == 'odo' -> write to MAINT_TAB as 'Odo' item with Mileage=amount
+    - typ == 'fuel' / 'parking' / 'wash' / 'repair' -> write to EXPENSE_TAB with appropriate column
+    amount_raw is numeric string (validated before calling).
+    """
+    typ = typ.lower()
+    driver = username.lstrip("@") if username else ""
     try:
-        ws.append_row([plate, driver, now_str(), mileage, fuel, parking, other], value_input_option="USER_ENTERED")
-        return {"ok": True}
+        if typ == "odo":
+            # mileage allowed integer
+            m = amount_raw.strip().upper().replace("KM", "").strip()
+            date = today_date_str()
+            return add_vehicle_maintenance(plate, m, "Odo", "", date, f"Reported by @{driver}" if driver else "", notes or f"Reported by @{driver}")
+        else:
+            # For expense tab we map fields: mileage left empty; use fuel_cost / parking / other accordingly
+            fuel_cost = ""
+            parking_fee = ""
+            other_fee = ""
+            if typ == "fuel":
+                fuel_cost = amount_raw
+            elif typ == "parking":
+                parking_fee = amount_raw
+            elif typ == "wash":
+                other_fee = amount_raw
+            elif typ == "repair":
+                other_fee = amount_raw
+            else:
+                other_fee = amount_raw
+            mileage = ""
+            return add_trip_expense_record(plate, driver, mileage, fuel_cost, parking_fee, other_fee)
     except Exception as e:
-        logger.exception("Failed to add trip expense")
+        logger.exception("Failed to route finance entry")
         return {"ok": False, "message": str(e)}
 
-# ===== Unfinished Missions =====
+# ===== Unfinished Missions & repair/cleanup =====
 def detect_unfinished_missions() -> Dict[str, List[dict]]:
     ws = open_worksheet(MISSIONS_TAB)
     out: Dict[str, List[dict]] = {}
@@ -832,7 +824,6 @@ async def notify_unfinished_missions(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Failed notify_unfinished_missions")
 
-# ===== Sheet cleanup / auto-repair =====
 def cleanup_old_rows(tab: str, max_rows: int = 2000):
     try:
         ws = open_worksheet(tab)
@@ -898,22 +889,29 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     await update.effective_chat.send_message(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- NEW: /setup_menu handler ----------
+# ---------- /setup_menu (admin) ----------
 async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Admin-only: posts the main menu message into the current chat and pins it.
+    Deletes the original /setup_menu user command so the group doesn't keep it.
     """
+    # delete the invoking message if possible
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+
     user = update.effective_user
     chat = update.effective_chat
     if not chat:
         return
     username = user.username if user else None
-    # auth: must be chat admin or in BOT_ADMINS
     is_admin_flag = False
     if chat and user:
         is_admin_flag = await is_chat_admin(context, chat_id=chat.id, user_id=user.id, username=username)
     else:
-        if username and username.lstrip("@") in BOT_ADMINS_SET:
+        if username and username.lstrip("@") in os.getenv("BOT_ADMINS", "").split(","):
             is_admin_flag = True
     if not is_admin_flag:
         try:
@@ -934,14 +932,12 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         sent = await update.effective_chat.send_message(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
         try:
-            # Try to pin the message. Bot must have permission to pin messages in the group.
             await context.bot.pin_chat_message(chat_id=chat.id, message_id=sent.message_id, disable_notification=False)
             logger.info("Pinned menu message in chat %s", chat.id)
         except Exception:
             logger.exception("Failed to pin menu message (missing permission?).")
     except Exception:
         logger.exception("Failed to send menu message for setup_menu.")
-
 # ---------- end /setup_menu ----------
 
 async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1000,7 +996,7 @@ async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         allowed = driver_map.get(user.username)
     await update.effective_chat.send_message(t(user_lang, "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate", allowed_plates=allowed))
 
-# Admin runtime check: prefer chat admin, fallback to BOT_ADMINS env set
+# Admin runtime check
 async def is_chat_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, username: Optional[str] = None) -> bool:
     try:
         member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
@@ -1010,13 +1006,11 @@ async def is_chat_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_i
         logger.debug("Could not fetch chat member for admin check (chat_id=%s user_id=%s). Falling back to BOT_ADMINS if provided.", chat_id, user_id)
     if username:
         uname = username.lstrip("@")
-        if uname in BOT_ADMINS_SET:
+        if uname in {u.strip() for u in os.getenv("BOT_ADMINS", "").split(",") if u.strip()}:
             return True
     return False
 
-# ------------------ Admin finance (complete) ------------------
-
-# helper: build plates inline keyboard (reuse PLATES global)
+# ------------------ Admin finance UI & handlers (improved) ------------------
 def _build_plate_buttons_for_fin(typ: str):
     buttons = []
     row = []
@@ -1031,7 +1025,6 @@ def _build_plate_buttons_for_fin(typ: str):
     buttons.append([InlineKeyboardButton("Cancel", callback_data="fin|cancel")])
     return InlineKeyboardMarkup(buttons)
 
-# helper: build quick-amount inline keyboard
 def _build_amount_buttons_for_fin(typ: str, plate: str):
     quick_amounts = os.getenv("FINANCE_QUICK_AMOUNTS", "5,10,20,50,100").split(",")
     quick_amounts = [a.strip() for a in quick_amounts if a.strip()]
@@ -1049,8 +1042,13 @@ def _build_amount_buttons_for_fin(typ: str, plate: str):
                     InlineKeyboardButton("Cancel", callback_data="fin|cancel")])
     return InlineKeyboardMarkup(buttons)
 
-# admin_finance entry command (shows top-level finance types)
 async def group_admin_finance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # delete the invoking command message to keep group clean
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
     user = update.effective_user
     username = user.username if user else None
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -1058,19 +1056,20 @@ async def group_admin_finance_command(update: Update, context: ContextTypes.DEFA
     if chat_id and user:
         is_admin_flag = await is_chat_admin(context, chat_id=chat_id, user_id=user.id, username=username)
     else:
-        if username and username.lstrip("@") in BOT_ADMINS_SET:
+        if username and username.lstrip("@") in os.getenv("BOT_ADMINS", "").split(","):
             is_admin_flag = True
     if not is_admin_flag:
         await update.effective_chat.send_message("You are not authorized to use admin finance.")
         return
     kb = [
-        [InlineKeyboardButton("Report Odometer", callback_data="fin|start|odo"),
+        [InlineKeyboardButton("Report Odometer (ODO)", callback_data="fin|start|odo"),
          InlineKeyboardButton("Report Fuel", callback_data="fin|start|fuel")],
-        [InlineKeyboardButton("Report Parking", callback_data="fin|start|parking")]
+        [InlineKeyboardButton("Report Parking", callback_data="fin|start|parking"),
+         InlineKeyboardButton("Report Wash", callback_data="fin|start|wash")],
+        [InlineKeyboardButton("Report Repair", callback_data="fin|start|repair")]
     ]
-    await update.effective_chat.send_message("Choose finance action:", reply_markup=InlineKeyboardMarkup(kb))
+    await update.effective_chat.send_message("Choose finance action (admin):", reply_markup=InlineKeyboardMarkup(kb))
 
-# Unified callback handler for admin finance inline form
 async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
@@ -1081,12 +1080,11 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
     username = user.username if user else None
     chat_id = query.message.chat.id if query.message else None
 
-    # auth check
     is_admin_flag = False
     if chat_id and user:
         is_admin_flag = await is_chat_admin(context, chat_id=chat_id, user_id=user.id, username=username)
     else:
-        if username and username.lstrip("@") in BOT_ADMINS_SET:
+        if username and username.lstrip("@") in os.getenv("BOT_ADMINS", "").split(","):
             is_admin_flag = True
     if not is_admin_flag:
         try:
@@ -1095,16 +1093,10 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
             pass
         return
 
-    # Normalize prefixes: allow finance|... as alias of fin|
     if data.startswith("finance|"):
         data = "fin|" + data.split("|", 1)[1]
 
     parts = data.split("|")
-    # forms:
-    # fin|start|<typ>
-    # fin|select|<typ>|<plate>
-    # fin|amount|<typ>|<plate>|<amount_or_custom>
-    # fin|cancel
 
     if data == "fin|cancel":
         try:
@@ -1116,18 +1108,23 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
     if len(parts) >= 3 and parts[1] == "start":
         typ = parts[2]
         try:
-            await query.edit_message_text(f"Select plate for {typ}:", reply_markup=_build_plate_buttons_for_fin(typ))
+            await query.edit_message_text(f"Select plate for {typ.upper()}:", reply_markup=_build_plate_buttons_for_fin(typ))
         except Exception:
-            await query.message.reply_text(f"Select plate for {typ}:", reply_markup=_build_plate_buttons_for_fin(typ))
+            await query.message.reply_text(f"Select plate for {typ.upper()}:", reply_markup=_build_plate_buttons_for_fin(typ))
         return
 
     if len(parts) >= 4 and parts[1] == "select":
         typ = parts[2]
         plate = parts[3]
         try:
-            await query.edit_message_text(f"Enter amount for {typ} — plate {plate}:", reply_markup=_build_amount_buttons_for_fin(typ, plate))
+            # Show clear instructions and examples depending on type
+            if typ == "odo":
+                prompt = "Please reply in this chat with ODO in KM (e.g. `12345` or `12345KM`). This message will be removed after recording."
+            else:
+                prompt = f"Please reply in this chat with numeric amount (no currency) for {typ.upper()} on {plate}.\nFormat: <amount> [optional notes]\nExample: `23.5 bought diesel`"
+            await query.edit_message_text(prompt, reply_markup=_build_amount_buttons_for_fin(typ, plate))
         except Exception:
-            await query.message.reply_text(f"Enter amount for {typ} — plate {plate}:", reply_markup=_build_amount_buttons_for_fin(typ, plate))
+            await query.message.reply_text(prompt, reply_markup=_build_amount_buttons_for_fin(typ, plate))
         return
 
     if len(parts) >= 5 and parts[1] == "amount":
@@ -1135,31 +1132,80 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
         plate = parts[3]
         amount = parts[4]
         if amount != "custom":
-            driver = username.lstrip("@") if username else ""
-            try:
-                # write to your maintenance sheet (you can change to add_trip_expense if preferred)
-                res = add_vehicle_maintenance(plate, today_date_str(), amount, typ.capitalize(), "", f"Reported by @{driver}")
+            # validate numeric or odo numeric depending on typ
+            if typ == "odo":
+                m = None
+                m_match = ODO_RE.match(amount)
+                if not m_match:
+                    # invalid: delete user input referencing via callback message if possible, then inform and delete
+                    try:
+                        await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
+                        await asyncio.sleep(4)
+                        await query.delete_message()
+                    except Exception:
+                        pass
+                    return
+                m = m_match.group(1)
+                res = record_finance_entry("odo", plate, m, "", username or "")
                 if res.get("ok"):
-                    await query.edit_message_text(f"{typ.capitalize()} recorded for {plate}: {amount}")
+                    # delete original callback message (the inline button message) and send a short confirmation then delete it
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    sent = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ="Odo", plate=plate, amount=m))
+                    try:
+                        await asyncio.sleep(4)
+                        await sent.delete()
+                    except Exception:
+                        pass
                 else:
-                    await query.edit_message_text(f"Failed to record {typ} for {plate}.")
-            except Exception:
-                logger.exception("Failed to record quick amount")
-                try:
-                    await query.edit_message_text("Failed to record amount (error).")
-                except Exception:
-                    pass
+                    try:
+                        await query.edit_message_text("Failed to record ODO.")
+                    except Exception:
+                        pass
+            else:
+                # money-like validation (digits or decimal)
+                m_match = AMOUNT_RE.match(amount)
+                if not m_match:
+                    try:
+                        await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
+                        await asyncio.sleep(4)
+                        await query.delete_message()
+                    except Exception:
+                        pass
+                    return
+                amt = m_match.group(1)
+                res = record_finance_entry(typ, plate, amt, "", username or "")
+                if res.get("ok"):
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    sent = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ=typ.capitalize(), plate=plate, amount=amt))
+                    try:
+                        await asyncio.sleep(4)
+                        await sent.delete()
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        await query.edit_message_text("Failed to record.")
+                    except Exception:
+                        pass
             return
         else:
-            # Custom amount flow: ask user to reply in chat (ForceReply), store pending state
+            # custom flow: ask user to reply with ForceReply; store pending_finance
             context.user_data["pending_finance"] = {"typ": typ, "plate": plate, "initiator_id": user.id}
             try:
-                prompt = await query.message.reply_text(
-                    f"Please reply in this chat with amount and optional notes for {typ} on {plate}.\nFormat: <amount> [notes]\nExample: 23.5 bought diesel",
-                    reply_markup=ForceReply(selective=True),
-                )
+                prompt_text = ""
+                if typ == "odo":
+                    prompt_text = f"Please reply in this chat with ODO in KM for {plate}. Example: `12345` or `12345KM`. This message will be removed after recording."
+                else:
+                    prompt_text = f"Please reply in this chat with amount and optional notes for {typ.upper()} on {plate}.\nFormat: <amount> [notes]\nExample: 23.5 bought diesel\nThis message will be removed after recording."
+                prompt = await query.message.reply_text(prompt_text, reply_markup=ForceReply(selective=True))
                 try:
-                    await query.edit_message_text(f"Waiting for custom amount for {plate} — please reply to the prompt.")
+                    await query.edit_message_text("Waiting for custom amount — check the ForceReply prompt.")
                 except Exception:
                     pass
             except Exception:
@@ -1168,47 +1214,119 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
                 except Exception:
                     pass
             return
-
     try:
         await query.edit_message_text("Invalid admin finance action.")
     except Exception:
         pass
 
-# Message handler: process custom finance replies (when pending_finance exists)
+# Process custom ForceReply replies for finance
 async def process_finance_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending = context.user_data.get("pending_finance")
     if not pending:
-        return  # not a finance reply; let other handlers process
+        return  # not finance; other handlers may process
     user = update.effective_user
-    username = user.username if user else None
+    if not user:
+        return
     initiator = pending.get("initiator_id")
-    # Only the initiator may reply to the ForceReply prompt
-    if initiator and user and user.id != initiator:
+    # Only the initiator may reply
+    if initiator and user.id != initiator:
+        # delete unauthorized reply to the ForceReply to keep chat clean
+        try:
+            if update.effective_message:
+                await update.effective_message.delete()
+        except Exception:
+            pass
         return
     typ = pending.get("typ")
     plate = pending.get("plate")
-    text = (update.message.text or "").strip()
-    if not text:
-        await update.effective_chat.send_message("Empty input; canceled.")
+    text = (update.message.text or "").strip() if update.message else ""
+    # validate
+    if typ == "odo":
+        m_match = ODO_RE.match(text)
+        if not m_match:
+            # delete user message and notify briefly
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
+                sent = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
+                await asyncio.sleep(4)
+                await sent.delete()
+            except Exception:
+                pass
+            context.user_data.pop("pending_finance", None)
+            return
+        m = m_match.group(1)
+        res = record_finance_entry("odo", plate, m, "", user.username or "")
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
+        if res.get("ok"):
+            try:
+                sent = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ="Odo", plate=plate, amount=m))
+                await asyncio.sleep(4)
+                await sent.delete()
+            except Exception:
+                pass
+        else:
+            try:
+                sent = await update.effective_chat.send_message("Failed to record ODO.")
+                await asyncio.sleep(4)
+                await sent.delete()
+            except Exception:
+                pass
         context.user_data.pop("pending_finance", None)
         return
-    parts = text.split(None, 1)
-    amount = parts[0]
-    notes = parts[1] if len(parts) > 1 else ""
-    driver = username.lstrip("@") if username else ""
-    try:
-        res = add_vehicle_maintenance(plate, today_date_str(), amount, typ.capitalize(), "", f"{notes} (reported by @{driver})")
+    else:
+        parts = text.split(None, 1)
+        if not parts:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            context.user_data.pop("pending_finance", None)
+            return
+        amount_raw = parts[0]
+        notes = parts[1] if len(parts) > 1 else ""
+        m_match = AMOUNT_RE.match(amount_raw)
+        if not m_match:
+            # invalid — delete and notify briefly
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
+                sent = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
+                await asyncio.sleep(4)
+                await sent.delete()
+            except Exception:
+                pass
+            context.user_data.pop("pending_finance", None)
+            return
+        amt = m_match.group(1)
+        res = record_finance_entry(typ, plate, amt, notes, user.username or "")
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
         if res.get("ok"):
-            await update.effective_chat.send_message(f"{typ.capitalize()} recorded for {plate}: {amount} {notes}")
+            try:
+                sent = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ=typ.capitalize(), plate=plate, amount=amt))
+                await asyncio.sleep(4)
+                await sent.delete()
+            except Exception:
+                pass
         else:
-            await update.effective_chat.send_message("Failed to record the expense.")
-    except Exception:
-        logger.exception("Failed to record custom finance input")
-        await update.effective_chat.send_message("Failed (exception) to record the expense.")
-    context.user_data.pop("pending_finance", None)
-    return
-
-# ------------------ End admin finance ------------------
+            try:
+                sent = await update.effective_chat.send_message("Failed to record finance entry.")
+                await asyncio.sleep(4)
+                await sent.delete()
+            except Exception:
+                pass
+        context.user_data.pop("pending_finance", None)
+        return
 
 # ------------------ plate_callback (fixed & extended) ------------------
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1221,32 +1339,24 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
-    # Accept both prefixes 'fin|' and 'finance|' - route finance| to admin_finance_callback
+    # finance handling
     if data.startswith("finance|") or data.startswith("fin|"):
         await admin_finance_callback(update, context)
         return
 
-    # menu navigation and handlers
+    # menu navigation
     if data == "show_start":
         try:
             await query.edit_message_text(t(user_lang, "choose_start"), reply_markup=build_plate_keyboard("start"))
         except Exception:
-            try:
-                await query.message.reply_text(t(user_lang, "choose_start"), reply_markup=build_plate_keyboard("start"))
-            except Exception:
-                pass
+            pass
         return
-
     if data == "show_end":
         try:
             await query.edit_message_text(t(user_lang, "choose_end"), reply_markup=build_plate_keyboard("end"))
         except Exception:
-            try:
-                await query.message.reply_text(t(user_lang, "choose_end"), reply_markup=build_plate_keyboard("end"))
-            except Exception:
-                pass
+            pass
         return
-
     if data == "menu_full":
         try:
             await query.edit_message_text(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup([
@@ -1256,7 +1366,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         return
-
     if data == "help":
         try:
             await query.edit_message_text(t(user_lang, "help"))
@@ -1264,7 +1373,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # mission start choice
+    # mission start
     if data.startswith("mission_start_plate|"):
         _, plate = data.split("|", 1)
         context.user_data["pending_mission"] = {"action": "start", "plate": plate}
@@ -1272,7 +1381,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    # mission end choice
+    # mission end
     if data.startswith("mission_end_plate|"):
         _, plate = data.split("|", 1)
         context.user_data["pending_mission"] = {"action": "end", "plate": plate}
@@ -1280,7 +1389,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "mission_end_prompt_arrival"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    # after selecting departure for start
+    # mission depart
     if data.startswith("mission_depart|"):
         _, dep = data.split("|", 1)
         pending = context.user_data.get("pending_mission")
@@ -1303,7 +1412,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("last_bot_prompt", None)
         return
 
-    # after selecting arrival for end
+    # mission arrival
     if data.startswith("mission_arrival|"):
         _, arr = data.split("|", 1)
         pending = context.user_data.get("pending_mission")
@@ -1323,7 +1432,14 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = end_mission_record(username, plate, arrival)
         if res.get("ok"):
             try:
+                # keep mission end text briefly but delete it to meet requirement to not keep odo/finance confirmations
                 await query.edit_message_text(t(user_lang, "mission_end_ok", plate=plate, end_date=now_str(), arr=arrival))
+                # delete the inline message after a short delay to keep chat clean
+                await asyncio.sleep(3)
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
             except Exception:
                 pass
             if res.get("merged"):
@@ -1366,6 +1482,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "start":
             res = record_start_trip(username, plate)
             if res.get("ok"):
+                # Keep trip start visible (user requested to keep trip info)
                 await query.edit_message_text(t(user_lang, "start_ok", plate=plate, driver=username, msg=res["message"]))
             else:
                 await query.edit_message_text("❌ " + res.get("message", ""))
@@ -1373,12 +1490,12 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif action == "end":
             res = record_end_trip(username, plate)
             if res.get("ok"):
+                # Keep trip end visible
                 await query.edit_message_text(t(user_lang, "end_ok", plate=plate, driver=username, msg=res["message"]))
             else:
                 await query.edit_message_text("❌ " + res.get("message", ""))
             return
 
-    # unknown -> clear fallback message
     try:
         await query.edit_message_text(t(user_lang, "invalid_sel"))
     except Exception:
@@ -1386,8 +1503,9 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ------------------ End plate_callback ------------------
 
-# ===== Other handlers: location_or_skip, lang, mission_report etc. =====
+# ===== Other handlers =====
 async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Delete user's message (commands like /setup_menu already deleted earlier by handler; keep here for safety)
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -1416,9 +1534,9 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         context.user_data.pop("last_inline_prompt", None)
     pending_mission = context.user_data.get("pending_mission")
-    # Also allow finance custom fallback here if someone replies without ForceReply (rare)
+    # Also allow finance custom fallback here if someone replies without ForceReply
     if context.user_data.get("pending_finance") and update.message and update.message.text:
-        # let process_finance_reply handle it (ensure it's called early in handler registration)
+        # process_finance_reply will handle when registered earlier
         return
     if pending_mission and pending_mission.get("action") == "start":
         text = update.message.text.strip() if update.message and update.message.text else ""
@@ -1433,7 +1551,14 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("pending_mission", None)
             return
         res = start_mission_record(username, plate, departure, staff_name=staff)
+        # delete user's free-text staff message to keep chat clean
+        try:
+            if update.effective_message:
+                await update.effective_message.delete()
+        except Exception:
+            pass
         if res.get("ok"):
+            # send mission start confirmation briefly then delete (user asked to keep mission content? They wanted to keep mission data — but requirement 5 says keep out-trip and mission info; we'll keep mission start visible for trace)
             await update.effective_chat.send_message(t(user_lang, "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
         else:
             await update.effective_chat.send_message("❌ " + res.get("message", ""))
@@ -1524,6 +1649,13 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not text:
             return
         if text.startswith("/"):
+            # delete undesirable slash commands like /setup* to keep chat clean
+            if text.lower().startswith("/setup"):
+                try:
+                    await update.effective_message.delete()
+                except Exception:
+                    pass
+                return
             return
         user_lang = context.user_data.get("lang", DEFAULT_LANG)
         keyboard = [
@@ -1535,7 +1667,7 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # scheduling daily summary and monthly auto-report
 async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
-    job_data = context.job.data if hasattr(context.job, "data") else {}
+    job_data = getattr(context.job, "data", {}) if hasattr(context, "job") else {}
     chat_id = job_data.get("chat_id") or SUMMARY_CHAT_ID
     if not chat_id:
         logger.info("SUMMARY_CHAT_ID not set; skipping daily summary.")
@@ -1588,7 +1720,7 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Failed to auto-generate monthly mission report on day 1.")
 
 async def send_weekly_summary_job(context: ContextTypes.DEFAULT_TYPE):
-    job_data = context.job.data if hasattr(context.job, "data") else {}
+    job_data = getattr(context.job, "data", {}) if hasattr(context, "job") else {}
     chat_id = job_data.get("chat_id") or SUMMARY_CHAT_ID
     if not chat_id:
         logger.info("SUMMARY_CHAT_ID not set; skipping weekly summary.")
@@ -1648,7 +1780,126 @@ async def detect_unfinished_missions_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Failed to detect unfinished missions")
 
+# Monthly expense/wash/repair/leave reports
+def monthly_expense_summary(year: int, month: int) -> Dict[str, Any]:
+    """
+    Compute totals for EXPENSE_TAB and MAINT_TAB grouped by category and driver/plate for the given month.
+    Returns dict with summaries.
+    """
+    out = {"by_plate": {}, "by_driver": {}, "totals": {}}
+    try:
+        ws_exp = open_worksheet(EXPENSE_TAB)
+        exp_rows = ws_exp.get_all_records()
+        for r in exp_rows:
+            dt = r.get("DateTime") or r.get("dateTime") or r.get("Date") or ""
+            try:
+                dt_parsed = datetime.strptime(dt.split("T")[0], "%Y-%m-%d") if dt and "T" in dt else (datetime.strptime(dt, "%Y-%m-%d") if dt else None)
+            except Exception:
+                dt_parsed = None
+            if not dt_parsed:
+                continue
+            if not (dt_parsed.year == year and dt_parsed.month == month):
+                continue
+            plate = str(r.get("Plate", "")).strip()
+            driver = str(r.get("Driver", "")).strip() or "Unknown"
+            fuel = float(str(r.get("Fuel Cost", 0) or 0) or 0)
+            parking = float(str(r.get("Parking Fee", 0) or 0) or 0)
+            other = float(str(r.get("Other Fee", 0) or 0) or 0)
+            total = fuel + parking + other
+            out["by_plate"].setdefault(plate, 0.0)
+            out["by_plate"][plate] += total
+            out["by_driver"].setdefault(driver, 0.0)
+            out["by_driver"][driver] += total
+            out["totals"].setdefault("fuel", 0.0)
+            out["totals"]["fuel"] = out["totals"].get("fuel", 0.0) + fuel
+            out["totals"].setdefault("parking", 0.0)
+            out["totals"]["parking"] = out["totals"].get("parking", 0.0) + parking
+            out["totals"].setdefault("other", 0.0)
+            out["totals"]["other"] = out["totals"].get("other", 0.0) + other
+        # include maintenance (e.g., repair cost stored as Other Fee in MAINT_TAB)
+        ws_maint = open_worksheet(MAINT_TAB)
+        maint_rows = ws_maint.get_all_records()
+        for r in maint_rows:
+            date = r.get("Date") or ""
+            try:
+                date_parsed = datetime.strptime(date, "%Y-%m-%d") if date else None
+            except Exception:
+                date_parsed = None
+            if not date_parsed:
+                continue
+            if not (date_parsed.year == year and date_parsed.month == month):
+                continue
+            plate = str(r.get("Plate", "")).strip()
+            # cost may be in "Cost" column (string)
+            try:
+                cost = float(str(r.get("Cost", "") or "0") or 0)
+            except Exception:
+                cost = 0.0
+            out["by_plate"].setdefault(plate, 0.0)
+            out["by_plate"][plate] += cost
+            out["totals"].setdefault("maintenance", 0.0)
+            out["totals"]["maintenance"] = out["totals"].get("maintenance", 0.0) + cost
+        return out
+    except Exception:
+        logger.exception("Failed monthly expense summary")
+        return out
+
+def write_monthly_expense_report_to_sheet(year: int, month: int) -> Optional[str]:
+    month_label = f"{year}-{month:02d}"
+    try:
+        summary = monthly_expense_summary(year, month)
+        gc = get_gspread_client()
+        sh = gc.open(GOOGLE_SHEET_NAME)
+        tab_name = f"Expenses_{month_label}"
+        try:
+            existing = sh.worksheet(tab_name)
+            try:
+                sh.del_worksheet(existing)
+            except Exception:
+                existing.clear()
+        except Exception:
+            pass
+        ws = open_worksheet(tab_name)
+        ws.append_row([f"Monthly Expense Report: {month_label}"], value_input_option="USER_ENTERED")
+        ws.append_row(["By Plate"], value_input_option="USER_ENTERED")
+        ws.append_row(["Plate", "Total Amount"], value_input_option="USER_ENTERED")
+        for plate, amt in sorted(summary.get("by_plate", {}).items(), key=lambda x: (-x[1], x[0])):
+            ws.append_row([plate, amt], value_input_option="USER_ENTERED")
+        ws.append_row(["By Driver"], value_input_option="USER_ENTERED")
+        ws.append_row(["Driver", "Total Amount"], value_input_option="USER_ENTERED")
+        for driver, amt in sorted(summary.get("by_driver", {}).items(), key=lambda x: (-x[1], x[0])):
+            ws.append_row([driver, amt], value_input_option="USER_ENTERED")
+        ws.append_row(["Totals"], value_input_option="USER_ENTERED")
+        for k, v in summary.get("totals", {}).items():
+            ws.append_row([k, v], value_input_option="USER_ENTERED")
+        return tab_name
+    except Exception:
+        logger.exception("Failed to write monthly expense report to sheet")
+        return None
+
+def write_monthly_expense_csv(year: int, month: int) -> Optional[str]:
+    month_label = f"{year}-{month:02d}"
+    fname = f"expenses_{month_label}.csv"
+    try:
+        summary = monthly_expense_summary(year, month)
+        local_path = os.path.join(os.getcwd(), fname)
+        with open(local_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Category", "Key", "Amount"])
+            for p, a in summary.get("by_plate", {}).items():
+                writer.writerow(["by_plate", p, a])
+            for d, a in summary.get("by_driver", {}).items():
+                writer.writerow(["by_driver", d, a])
+            for k, v in summary.get("totals", {}).items():
+                writer.writerow(["totals", k, v])
+        return local_path
+    except Exception:
+        logger.exception("Failed to write monthly expense CSV")
+        return None
+
+# ------------------ register_ui_handlers & entry ------------------
 def register_ui_handlers(application):
+    # main commands
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
@@ -1657,29 +1908,73 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_end", mission_end_command))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
 
-    # Admin finance: command and callback handler
+    # admin finance
     application.add_handler(CommandHandler("admin_finance", group_admin_finance_command))
     application.add_handler(CallbackQueryHandler(admin_finance_callback, pattern=r'^(fin\||finance\|)'))
 
-    # plate callback (covers start/end/mission selection etc.)
+    # plate callback
     application.add_handler(CallbackQueryHandler(plate_callback))
 
-    # Message handler for processing custom finance replies — should be early so it captures ForceReply responses
+    # process ForceReply finance replies (must be before generic text handler)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), process_finance_reply), group=0)
 
-    # other handlers
+    # handler to delete messages that start with /setup (so user command like /setup_menu@bot disappears)
+    application.add_handler(MessageHandler(filters.Regex(r'(?i)^/setup'), lambda u, c: (asyncio.create_task(u.message.delete()) if u.message else None)))
+
+    # generic location/skip and trip mission replies
     application.add_handler(MessageHandler(filters.Regex(r'(?i)^/skip$') | (filters.TEXT & (~filters.COMMAND)), location_or_skip))
+
+    # auto menu listener in groups (also deletes /setup commands)
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
+
+    # help
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
-    # /setup_menu (admin-only) - posts & pins the main menu in the chat
+    # setup_menu
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
 
-    # fallback admin short commands (informational)
-    application.add_handler(CommandHandler("report_odo", lambda u, c: u.message.reply_text("Use /admin_finance or the menu")))
-    application.add_handler(CommandHandler("report_fuel", lambda u, c: u.message.reply_text("Use /admin_finance or the menu")))
-    application.add_handler(CommandHandler("report_parking", lambda u, c: u.message.reply_text("Use /admin_finance or the menu")))
+    # leave and maint commands:
+    application.add_handler(CommandHandler("leave_add", lambda u, c: u.message.reply_text("Usage: /leave_add <driver> <YYYY-MM-DD> <YYYY-MM-DD> <reason> (admins only)")))
+    application.add_handler(CommandHandler("leave_list", lambda u, c: u.message.reply_text("Usage: /leave_list <driver>")))
 
+    # monthly expense report command
+    async def monthly_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            if update.effective_message:
+                await update.effective_message.delete()
+        except Exception:
+            pass
+        args = context.args
+        if not args or len(args) < 2:
+            await update.effective_chat.send_message("Usage: /monthly_report expenses YYYY-MM")
+            return
+        mode = args[0].lower()
+        if mode != "expenses":
+            await update.effective_chat.send_message("Only 'expenses' supported. Usage: /monthly_report expenses YYYY-MM")
+            return
+        try:
+            y_m = args[1]
+            dt = datetime.strptime(y_m + "-01", "%Y-%m-%d")
+            tab_name = write_monthly_expense_report_to_sheet(dt.year, dt.month)
+            csv_path = write_monthly_expense_csv(dt.year, dt.month)
+            if tab_name:
+                await update.effective_chat.send_message(f"Monthly expense report created: {tab_name}")
+            if csv_path:
+                try:
+                    with open(csv_path, "rb") as f:
+                        await context.bot.send_document(chat_id=update.effective_chat.id, document=f, filename=os.path.basename(csv_path))
+                except Exception:
+                    await update.effective_chat.send_message(f"CSV written: {csv_path}")
+        except Exception:
+            await update.effective_chat.send_message("Invalid usage. Example: /monthly_report expenses 2025-11")
+    application.add_handler(CommandHandler("monthly_report", monthly_report_cmd))
+
+    # small admin convenience commands to open finance UI
+    application.add_handler(CommandHandler("report_odo", group_admin_finance_command))
+    application.add_handler(CommandHandler("report_fuel", group_admin_finance_command))
+    application.add_handler(CommandHandler("report_parking", group_admin_finance_command))
+
+    # set slash commands visible: omit generic /setup* entries to avoid showing them in / list
     try:
         async def _set_cmds():
             try:
@@ -1687,30 +1982,20 @@ def register_ui_handlers(application):
                     BotCommand("start_trip", "Start a trip (select plate)"),
                     BotCommand("end_trip", "End a trip (select plate)"),
                     BotCommand("menu", "Open trip menu"),
-                    BotCommand("setup_menu", "Post & pin the command menu (admin only)"),
                     BotCommand("lang", "Set language /lang en|km"),
-
                     # Missions
                     BotCommand("mission_start", "Start a driver mission"),
                     BotCommand("mission_end", "End a driver mission"),
                     BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
-
                     # Admin finance
                     BotCommand("admin_finance", "Admin: inline finance form"),
-                    BotCommand("report_odo", "Manually report odometer (admin)"),
-                    BotCommand("report_fuel", "Manually report fuel (admin)"),
-                    BotCommand("report_parking", "Manually report parking (admin)"),
-
-                    # Leave
-                    BotCommand("leave_add", "Add driver leave record"),
+                    BotCommand("report_odo", "Quick: report odometer (admin)"),
+                    BotCommand("report_fuel", "Quick: report fuel (admin)"),
+                    BotCommand("report_parking", "Quick: report parking (admin)"),
+                    # Leave & maintenance
+                    BotCommand("leave_add", "Add driver leave record (admin)"),
                     BotCommand("leave_list", "View driver leave records"),
-
-                    # Maintenance
-                    BotCommand("maint_add", "Add vehicle maintenance record"),
-                    BotCommand("maint_list", "View vehicle maintenance"),
-
-                    # Help
-                    BotCommand("help", "Show help page")
+                    BotCommand("monthly_report", "Generate monthly expense report: /monthly_report expenses YYYY-MM"),
                 ])
             except Exception:
                 logger.exception("Failed to set bot commands.")
@@ -1735,8 +2020,6 @@ def schedule_jobs(application):
             application.job_queue.run_repeating(send_weekly_summary_job, interval=7 * 24 * 3600, first=10, context={"chat_id": SUMMARY_CHAT_ID}, name="weekly_summary")
             application.job_queue.run_repeating(detect_unfinished_missions_job, interval=6 * 3600, first=30, name="detect_unfinished")
             application.job_queue.run_repeating(notify_unfinished_missions, interval=6 * 3600, first=60, name="notify_unfinished")
-            if int(os.getenv("CLEAN_OLDER_THAN_DAYS", "0")) > 0:
-                application.job_queue.run_daily(lambda ctx: cleanup_old_rows(), time=dtime(hour=3, minute=0), name="clean_old_rows")
             logger.info("Scheduled jobs.")
         else:
             logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
@@ -1763,6 +2046,83 @@ def main():
     schedule_jobs(application)
     logger.info("Starting driver-bot polling...")
     application.run_polling()
+
+# ========= Helper functions used above but declared later =========
+def write_roundtrip_summary_tab(month_label: str, counts: Dict[str, int]) -> Optional[str]:
+    tab_name = f"Roundtrip_Summary_{month_label}"
+    try:
+        gc = get_gspread_client()
+        sh = gc.open(GOOGLE_SHEET_NAME)
+        try:
+            existing = sh.worksheet(tab_name)
+            try:
+                sh.del_worksheet(existing)
+            except Exception:
+                existing.clear()
+        except Exception:
+            pass
+        ws = open_worksheet(tab_name)
+        ws.append_row(["Driver", "Roundtrip Count (month)"], value_input_option="USER_ENTERED")
+        for driver, cnt in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+            ws.append_row([driver, cnt], value_input_option="USER_ENTERED")
+        return tab_name
+    except Exception:
+        logger.exception("Failed to write roundtrip summary tab")
+        return None
+
+def write_roundtrip_summary_csv(month_label: str, counts: Dict[str, int]) -> Optional[str]:
+    fname = f"roundtrip_summary_{month_label}.csv"
+    try:
+        local_path = os.path.join(os.getcwd(), fname)
+        with open(local_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Driver", "Roundtrip Count (month)"])
+            for driver, cnt in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+                writer.writerow([driver, cnt])
+        return local_path
+    except Exception:
+        logger.exception("Failed to write roundtrip summary CSV")
+        return None
+
+def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]:
+    """
+    Aggregate total minutes per plate in RECORDS_TAB between start_dt and end_dt.
+    """
+    try:
+        ws = open_worksheet(RECORDS_TAB)
+        vals = ws.get_all_records()
+        totals: Dict[str, int] = {}
+        for r in vals:
+            plate = str(r.get("Plate", r.get("plate", ""))).strip()
+            start = r.get("Start DateTime", r.get("Start", "")) or r.get("Start DateTime") or ""
+            end = r.get("End DateTime", r.get("End", "")) or r.get("End DateTime") or ""
+            s_dt = None
+            e_dt = None
+            try:
+                s_dt = datetime.strptime(start, TS_FMT) if start else None
+            except Exception:
+                try:
+                    s_dt = datetime.strptime(start, "%Y-%m-%d %H:%M") if start else None
+                except Exception:
+                    s_dt = None
+            try:
+                e_dt = datetime.strptime(end, TS_FMT) if end else None
+            except Exception:
+                try:
+                    e_dt = datetime.strptime(end, "%Y-%m-%d %H:%M") if end else None
+                except Exception:
+                    e_dt = None
+            if s_dt and (start_dt <= s_dt < end_dt):
+                if not e_dt:
+                    # ignore open trips for aggregate
+                    continue
+                delta = e_dt - s_dt
+                mins = int(delta.total_seconds() // 60)
+                totals[plate] = totals.get(plate, 0) + mins
+        return totals
+    except Exception:
+        logger.exception("Failed to aggregate_for_period")
+        return {}
 
 if __name__ == "__main__":
     main()
