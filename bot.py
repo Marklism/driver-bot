@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-Driver Bot — full script with 'delete invoking command message' enabled for all commands.
+Driver Bot — GPS removed version.
 
-Features:
-- Start/End trip (with optional GPS)
-- Driver permissions (username -> allowed plates)
-- Missions (start/end), Roundtrip auto-mark when Start and End on same day
-- Mission monthly/yearly report
-- /lang en|km (works in groups and private) — per-user preference
-- Robust open_worksheet(tab) that auto-creates required tabs with sensible headers
-- All command handlers attempt to delete the user's invoking message to avoid clutter
-- One-time migration helper migrate_mixed_sheet(original_tab_name)
-
-Save as driver_bot.py and run.
+Changes:
+- GPS/location feature removed.
+- Start/End trip: when user clicks a plate the bot immediately records start/end to the RECORDS_TAB.
+- No longer requests or handles location messages.
+- Mission staff prompt behavior remains: bot sends a separate "Optional: send staff name (or /skip)"
+  and deletes that specific prompt after user replies; other messages are kept.
+- All other features retained: per-user lang, driver->plates permissions, Missions, Roundtrip marking,
+  mission reports, robust open_worksheet that auto-creates tabs, migration helper, and deletion of invoking
+  command messages to keep groups tidy.
 """
 
 import os
@@ -31,7 +29,7 @@ try:
 except Exception:
     ZoneInfo = None  # type: ignore
 
-# Telegram imports
+# Telegram
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -39,7 +37,6 @@ from telegram import (
     Update,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    Location,
 )
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -78,7 +75,7 @@ if LOCAL_TZ and ZoneInfo is None:
 
 PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
 
-# Driver map JSON env (username -> [plates])
+# Driver map env (username -> [plates])
 DRIVER_PLATE_MAP_JSON = os.getenv("DRIVER_PLATE_MAP", "").strip() or None
 
 # Scheduling / summary
@@ -104,10 +101,7 @@ COL_PLATE = 3
 COL_START = 4
 COL_END = 5
 COL_DURATION = 6
-COL_START_LAT = 7
-COL_START_LON = 8
-COL_END_LAT = 9
-COL_END_LON = 10
+# GPS columns removed
 
 # Missions columns (1-indexed): No., Name, Plate, Start Date, End Date, Departure, Arrival, Staff Name, Roundtrip
 
@@ -124,7 +118,6 @@ TR = {
         "menu": "Driver Bot Menu — tap a button to perform an action:",
         "choose_start": "Please choose the vehicle plate to START trip:",
         "choose_end": "Please choose the vehicle plate to END trip:",
-        "prompt_location": "If you want to record GPS location, please send location now (or type /skip).",
         "start_ok": "✅ Started trip for {plate} (driver: {driver}). {msg}",
         "end_ok": "✅ Ended trip for {plate} (driver: {driver}). {msg}",
         "not_allowed": "❌ You are not allowed to operate this plate: {plate}.",
@@ -155,7 +148,6 @@ TR = {
         "menu": "មិនីវរ​បូត — សូមចុចប៊ូតុងដើម្បីអនុវត្ត៖",
         "choose_start": "សូមជ្រើសលេខផ្ទះបណ្ដោះដើម្បីចាប់ផ្តើមដំណើរ:",
         "choose_end": "សូមជ្រើសលេខផ្ទះបណ្ដោះដើម្បីបញ្ចប់ដំណើរ:",
-        "prompt_location": "បើចង់កត់ត្រាទីតាំង GPS សូមផ្ញើទីតាំងឥឡូវ (ឬ /skip).",
         "start_ok": "✅ ចាប់ផ្តើមដំណើរសម្រាប់ {plate} (អ្នកបើក: {driver}). {msg}",
         "end_ok": "✅ បញ្ចប់ដំណើរសម្រាប់ {plate} (អ្នកបើក: {driver}). {msg}",
         "not_allowed": "❌ អ្នកមិនមានសិទ្ធិប្រើលើរថយន្តនេះ: {plate}.",
@@ -192,7 +184,7 @@ def t(user_lang: Optional[str], key: str, **kwargs) -> str:
     return TR.get(lang, TR["en"]).get(key, TR["en"].get(key, "")).format(**kwargs)
 
 
-# ===== Google Sheets helpers =====
+# ===== Google Sheets helpers (robust open_worksheet with auto-create) =====
 def _load_creds_from_base64(encoded: str) -> dict:
     try:
         if encoded.strip().startswith("{"):
@@ -255,7 +247,7 @@ def open_worksheet(tab: str = ""):
         except Exception:
             lower = tab.lower()
             if lower in (RECORDS_TAB.lower(), "driver_log"):
-                headers = ["Date", "Driver", "Plate", "Start", "End", "Duration", "StartLat", "StartLon", "EndLat", "EndLon"]
+                headers = ["Date", "Driver", "Plate", "Start", "End", "Duration"]
             elif lower in (MISSIONS_TAB.lower(), "missions"):
                 headers = ["No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip"]
             elif lower in (SUMMARY_TAB.lower(), "summary"):
@@ -363,14 +355,11 @@ def compute_duration(start_ts: str, end_ts: str) -> str:
         return ""
 
 
-# ===== Trip record functions (with GPS) =====
-def record_start_trip(driver: str, plate: str, lat: Optional[float] = None, lon: Optional[float] = None) -> dict:
+# ===== Trip record functions (GPS removed) =====
+def record_start_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
     start_ts = now_str()
-    row = [today_date_str(), driver, plate, start_ts, "", "", "", "", "", ""]
-    if lat is not None and lon is not None:
-        row[COL_START_LAT - 1] = str(lat)
-        row[COL_START_LON - 1] = str(lon)
+    row = [today_date_str(), driver, plate, start_ts, "", ""]
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("Recorded start trip: %s %s %s", driver, plate, start_ts)
@@ -380,7 +369,7 @@ def record_start_trip(driver: str, plate: str, lat: Optional[float] = None, lon:
         return {"ok": False, "message": "Failed to write start trip to sheet: " + str(e)}
 
 
-def record_end_trip(driver: str, plate: str, lat: Optional[float] = None, lon: Optional[float] = None) -> dict:
+def record_end_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
     try:
         records = ws.get_all_records()
@@ -390,22 +379,16 @@ def record_end_trip(driver: str, plate: str, lat: Optional[float] = None, lon: O
             end_val = str(rec.get("End date&time", rec.get("End", ""))).strip()
             start_val = str(rec.get("Start date&time", rec.get("Start", ""))).strip()
             if rec_plate == plate and (end_val == "" or end_val is None):
-                row_number = idx + 2
+                row_number = idx + 2  # header row + 1-indexing
                 end_ts = now_str()
                 duration_text = compute_duration(start_val, end_ts) if start_val else ""
                 ws.update_cell(row_number, COL_END, end_ts)
                 ws.update_cell(row_number, COL_DURATION, duration_text)
-                if lat is not None and lon is not None:
-                    ws.update_cell(row_number, COL_END_LAT, str(lat))
-                    ws.update_cell(row_number, COL_END_LON, str(lon))
                 logger.info("Recorded end trip for %s row %d", plate, row_number)
                 return {"ok": True, "message": f"End time recorded for {plate} at {end_ts} (duration {duration_text})"}
         # no matching start found -> append end-only row
         end_ts = now_str()
-        row = [today_date_str(), driver, plate, "", end_ts, "", "", "", "", ""]
-        if lat is not None and lon is not None:
-            row[COL_END_LAT - 1] = str(lat)
-            row[COL_END_LON - 1] = str(lon)
+        row = [today_date_str(), driver, plate, "", end_ts, ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("No open start found; appended end-only row for %s", plate)
         return {"ok": True, "message": f"End time recorded (no matching start found) for {plate} at {end_ts}"}
@@ -738,7 +721,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "help"))
         return
 
-    # mission flow callbacks
+    # mission start selection
     if data.startswith("mission_start_plate|"):
         _, plate = data.split("|", 1)
         context.user_data["pending_mission"] = {"action": "start", "plate": plate}
@@ -746,6 +729,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
+    # mission end selection
     if data.startswith("mission_end_plate|"):
         _, plate = data.split("|", 1)
         context.user_data["pending_mission"] = {"action": "end", "plate": plate}
@@ -753,6 +737,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "mission_end_prompt_arrival"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
+    # after selecting departure (PP/SHV) for a mission start
     if data.startswith("mission_depart|"):
         _, dep = data.split("|", 1)
         pending = context.user_data.get("pending_mission")
@@ -761,9 +746,18 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         pending["departure"] = dep
         context.user_data["pending_mission"] = pending
-        await query.edit_message_text(t(user_lang, "mission_start_prompt_staff"))
+
+        # Send a separate staff prompt message and remember its id so we can delete it when user replies.
+        try:
+            chat_id = update.effective_chat.id
+            staff_prompt_msg = await context.bot.send_message(chat_id=chat_id, text=t(user_lang, "mission_start_prompt_staff"))
+            context.user_data["last_bot_prompt"] = {"chat_id": staff_prompt_msg.chat_id, "message_id": staff_prompt_msg.message_id}
+        except Exception:
+            await query.edit_message_text(t(user_lang, "mission_start_prompt_staff"))
+            context.user_data.pop("last_bot_prompt", None)
         return
 
+    # after selecting arrival for a mission end
     if data.startswith("mission_arrival|"):
         _, arr = data.split("|", 1)
         pending = context.user_data.get("pending_mission")
@@ -788,7 +782,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("pending_mission", None)
         return
 
-    # start/end trip selection handlers from keyboard
+    # start/end trip selection handlers from keyboard: now record immediately (no GPS)
     if data.startswith("start|") or data.startswith("end|"):
         try:
             action, plate = data.split("|", 1)
@@ -803,20 +797,28 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if action == "start":
-            context.user_data["pending_action"] = ("start", plate)
-            await query.edit_message_text(t(user_lang, "prompt_location"))
+            res = record_start_trip(username, plate)
+            if res.get("ok"):
+                await query.edit_message_text(t(user_lang, "start_ok", plate=plate, driver=username, msg=res["message"]))
+            else:
+                await query.edit_message_text("❌ " + res.get("message", ""))
             return
         elif action == "end":
-            context.user_data["pending_action"] = ("end", plate)
-            await query.edit_message_text(t(user_lang, "prompt_location"))
+            res = record_end_trip(username, plate)
+            if res.get("ok"):
+                await query.edit_message_text(t(user_lang, "end_ok", plate=plate, driver=username, msg=res["message"]))
+            else:
+                await query.edit_message_text("❌ " + res.get("message", ""))
             return
 
     await query.edit_message_text(t(user_lang, "invalid_sel"))
 
 
-# Message handler for location / /skip / staff name
+# Message handler for staff-name replies (/skip or text).
+# This deletes the user's reply message and the stored bot prompt message (the "Optional: send staff name..." prompt),
+# then records the mission start (if pending_mission exists).
 async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Try delete the user's message (so /skip or text won't remain)
+    # delete the user's message (so staff /skip won't remain)
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -825,62 +827,48 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
-    pending = context.user_data.get("pending_action")
-    if not pending:
-        pending_mission = context.user_data.get("pending_mission")
-        if pending_mission and pending_mission.get("action") == "start":
-            # User either sent staff name or /skip (we already deleted their message)
-            text = update.message.text.strip() if update.message.text else ""
-            staff = text if text and text.lower().strip() != "/skip" else ""
-            plate = pending_mission.get("plate")
-            departure = pending_mission.get("departure")
-            username = user.username or user.full_name
-            driver_map = get_driver_map()
-            allowed = driver_map.get(user.username, []) if user and user.username else []
-            if allowed and plate not in allowed:
-                await update.effective_chat.send_message(t(user_lang, "not_allowed", plate=plate))
-                context.user_data.pop("pending_mission", None)
-                return
-            res = start_mission_record(username, plate, departure, staff_name=staff)
-            if res.get("ok"):
-                await update.effective_chat.send_message(t(user_lang, "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
-            else:
-                await update.effective_chat.send_message("❌ " + res.get("message", ""))
+
+    # If there is a stored bot prompt message from earlier, delete it now:
+    last_prompt = context.user_data.get("last_bot_prompt")
+    if last_prompt:
+        try:
+            chat_id = last_prompt.get("chat_id")
+            msg_id = last_prompt.get("message_id")
+            if chat_id and msg_id:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            # ignore deletion failures
+            pass
+        context.user_data.pop("last_bot_prompt", None)
+
+    # Handle staff-name reply for pending mission start
+    pending_mission = context.user_data.get("pending_mission")
+    if pending_mission and pending_mission.get("action") == "start":
+        text = update.message.text.strip() if update.message.text else ""
+        staff = text if text and text.lower().strip() != "/skip" else ""
+        plate = pending_mission.get("plate")
+        departure = pending_mission.get("departure")
+        username = user.username or user.full_name
+        driver_map = get_driver_map()
+        allowed = driver_map.get(user.username, []) if user and user.username else []
+        if allowed and plate not in allowed:
+            await update.effective_chat.send_message(t(user_lang, "not_allowed", plate=plate))
             context.user_data.pop("pending_mission", None)
             return
+        res = start_mission_record(username, plate, departure, staff_name=staff)
+        if res.get("ok"):
+            await update.effective_chat.send_message(t(user_lang, "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
+        else:
+            await update.effective_chat.send_message("❌ " + res.get("message", ""))
+        context.user_data.pop("pending_mission", None)
         return
 
-    action, plate = pending
-    lat = lon = None
-    if update.message.location:
-        loc: Location = update.message.location
-        lat = loc.latitude
-        lon = loc.longitude
-        logger.info("Received location from %s: %s,%s", user.username, lat, lon)
-    elif update.message.text and update.message.text.strip().lower() == "/skip":
-        await update.effective_chat.send_message(t(user_lang, "skip_loc"))
-    else:
-        await update.effective_chat.send_message(t(user_lang, "prompt_send_loc"))
-        return
-
-    if action == "start":
-        res = record_start_trip(user.username or user.full_name, plate, lat=lat, lon=lon)
-        if res["ok"]:
-            await update.effective_chat.send_message(t(user_lang, "start_ok", plate=plate, driver=user.username or user.full_name, msg=res["message"]))
-        else:
-            await update.effective_chat.send_message("❌ " + res["message"])
-    elif action == "end":
-        res = record_end_trip(user.username or user.full_name, plate, lat=lat, lon=lon)
-        if res["ok"]:
-            await update.effective_chat.send_message(t(user_lang, "end_ok", plate=plate, driver=user.username or user.full_name, msg=res["message"]))
-        else:
-            await update.effective_chat.send_message("❌ " + res["message"])
-    context.user_data.pop("pending_action", None)
+    # Otherwise ignore (we no longer handle GPS/location)
+    return
 
 
 # lang command: delete invoking message and save per-user preference
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # delete user's command message
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -919,7 +907,6 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # mission_report: delete invoking message then run
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # delete invoking message
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -966,7 +953,7 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.effective_chat.send_message(t(user_lang, "mission_invalid_cmd"))
 
 
-# Auto keyword listener (group) — keep as-is (don't delete normal chat messages)
+# Auto keyword listener (group)
 AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
 
@@ -1020,8 +1007,8 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_end", mission_end_command))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CallbackQueryHandler(plate_callback))
-    # location_or_skip handles LOCATION, /skip and free text (staff name)
-    application.add_handler(MessageHandler(filters.LOCATION | filters.Regex(r'(?i)^/skip$') | filters.TEXT, location_or_skip))
+    # location_or_skip now handles only /skip and free text (staff name)
+    application.add_handler(MessageHandler(filters.Regex(r'(?i)^/skip$') | filters.TEXT & (~filters.COMMAND), location_or_skip))
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
@@ -1153,13 +1140,8 @@ def migrate_mixed_sheet(original_tab_name: str):
             start = r.get("Start") or ""
             end = r.get("End") or ""
             duration = r.get("Duration") or ""
-            slat = r.get("StartLat") or ""
-            slon = r.get("StartLon") or ""
-            elat = r.get("EndLat") or ""
-            elon = r.get("EndLon") or ""
-            trip_row = [date, driver, plate, start, end, duration, slat, slon, elat, elon]
+            trip_row = [date, driver, plate, start, end, duration]
             records_ws.append_row(trip_row, value_input_option="USER_ENTERED")
             trip_count += 1
 
     logger.info("Migration complete: %d trips -> %s, %d missions -> %s", trip_count, RECORDS_TAB, mission_count, MISSIONS_TAB)
-
