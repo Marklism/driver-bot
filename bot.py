@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-driver-bot enhanced version with:
-- daily/weekly aggregation written to Google Sheet Summary tab
-- driver->plates restriction (env DRIVER_PLATE_MAP JSON or Drivers tab)
-- GPS location capture (optional prompt) for start/end
-- daily summary message to group
-- multi-language support (en, km)
-- configurable LOCAL_TZ (IANA)
+driver-bot enhanced version with missions and Roundtrip marking
 
-Save as driver_bot.py and run. Requires:
-pip install python-telegram-bot==20.* gspread oauth2client backports.zoneinfo (optional)
+Key additions:
+- Missions sheet includes new column "Roundtrip" (9th column).
+- When mission end is recorded, if Start Date and End Date are the same calendar day (same tz),
+  the script writes "Yes" into Roundtrip, otherwise "No".
+- Mission report (month/year) writes Roundtrip column and appends a summary block that counts
+  Roundtrip occurrences per plate in that period.
+
+Save as driver_bot.py and run (ensure env vars like BOT_TOKEN and Google creds are set).
 """
 
 import os
@@ -22,7 +22,7 @@ from typing import Optional, Dict, List, Any, Tuple
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# zoneinfo: try stdlib then backports
+# zoneinfo support
 try:
     from zoneinfo import ZoneInfo  # type: ignore
 except Exception:
@@ -67,7 +67,7 @@ PLATE_LIST = os.getenv(
 )
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Driver_Log")
 GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")  # optional
-# Local TZ: default to Asia/Phnom_Penh if not set (to match your environment)
+# Local TZ
 _env_tz = os.getenv("LOCAL_TZ")
 if _env_tz is None:
     LOCAL_TZ = "Asia/Phnom_Penh"
@@ -79,25 +79,28 @@ if LOCAL_TZ and ZoneInfo is None:
 
 PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
 
-# Driver map: try env var; if not, will load from Google sheet "Drivers"
+# Driver map env or sheet
 DRIVER_PLATE_MAP_JSON = os.getenv("DRIVER_PLATE_MAP", "").strip() or None
 
 # Summary / scheduling
-SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")  # chat to send daily summary; optional
-SUMMARY_HOUR = int(os.getenv("SUMMARY_HOUR", "20"))  # hour of day in SUMMARY_TZ
+SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
+SUMMARY_HOUR = int(os.getenv("SUMMARY_HOUR", "20"))
 SUMMARY_TZ = os.getenv("SUMMARY_TZ", LOCAL_TZ or "Asia/Phnom_Penh")
 
-# Language: 'en' or 'km' (default en)
+# Language
 DEFAULT_LANG = os.getenv("LANG", "en").lower()
 SUPPORTED_LANGS = ("en", "km")
 
 # Sheet tabs
-RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")  # raw records
+RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
 DRIVERS_TAB = os.getenv("DRIVERS_TAB", "Drivers")
 SUMMARY_TAB = os.getenv("SUMMARY_TAB", "Summary")
 
+# Missions tabs
+MISSIONS_TAB = os.getenv("MISSIONS_TAB", "Missions")  # where each mission row is stored
+MISSIONS_REPORT_TAB = os.getenv("MISSIONS_REPORT_TAB", "Missions_Report")  # where monthly/yearly reports are appended
+
 # Column mapping for records (1-indexed)
-# We extend columns to store GPS coords
 COL_DATE = 1
 COL_DRIVER = 2
 COL_PLATE = 3
@@ -108,7 +111,10 @@ COL_START_LAT = 7
 COL_START_LON = 8
 COL_END_LAT = 9
 COL_END_LON = 10
-# make sure Google sheet has headers reflecting these or script will still append rows (no header enforcement)
+
+# Missions columns (1-indexed in sheet)
+# We will use layout:
+# 1: No., 2: Name, 3: Plate, 4: Start Date, 5: End Date, 6: Departure, 7: Arrival, 8: Staff Name, 9: Roundtrip
 
 # Time formats
 TS_FMT = "%Y-%m-%d %H:%M:%S"
@@ -117,13 +123,10 @@ DATE_FMT = "%Y-%m-%d"
 # Google scopes
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# Conversation states for location collection
-ASK_LOC_FOR = 1  # state: waiting for location after asking start/end
+# Conversation states
+ASK_LOC_FOR = 1
 
-# Persistence keys in context.user_data: "pending_action" -> ("start" or "end", plate)
-#                    "lang" -> per-user language preference
-
-# ===== Translations =====
+# Translations (trimmed to essentials for brevity)
 TR = {
     "en": {
         "menu": "Driver Bot Menu — tap a button to perform an action:",
@@ -143,9 +146,22 @@ TR = {
         "lang_set": "Language set to {lang}.",
         "skip_loc": "Location skipped.",
         "prompt_send_loc": "Please send your location now or /skip.",
+        # missions
+        "mission_start_prompt_plate": "Please choose the plate for the mission start:",
+        "mission_start_prompt_depart": "Select departure city:",
+        "mission_start_prompt_staff": "Optional: send staff name accompanying you (or /skip).",
+        "mission_start_ok": "✅ Mission start recorded for {plate} at {start_date} departing {dep}.",
+        "mission_end_prompt_plate": "Please choose the plate to end the mission (will match your last open mission):",
+        "mission_end_prompt_arrival": "Select arrival city:",
+        "mission_end_ok": "✅ Mission end recorded for {plate} at {end_date} arriving {arr}.",
+        "mission_no_open": "No open mission found for {plate}.",
+        "mission_report_month_ok": "Monthly mission report for {month} generated and written to sheet.",
+        "mission_report_year_ok": "Yearly mission report for {year} generated and written to sheet.",
+        "mission_invalid_cmd": "Usage: /mission_report month YYYY-MM  OR  /mission_report year YYYY",
+        "mission_report_roundtrip_summary": "Roundtrip counts (period):",
     },
     "km": {
-        # Khmer translations (short/simple). You can refine these strings as needed.
+        # Khmer strings shortened for example
         "menu": "មិនីវរ​បូត — សូមចុចប៊ូតុងដើម្បីអនុវត្ត៖",
         "choose_start": "សូមជ្រើសលេខផ្ទះបណ្ដោះដើម្បីចាប់ផ្តើមដំណើរ:",
         "choose_end": "សូមជ្រើសលេខផ្ទះបណ្ដោះដើម្បីបញ្ចប់ដំណើរ:",
@@ -163,11 +179,23 @@ TR = {
         "lang_set": "បានកំណត់ភាសា​ជា {lang}.",
         "skip_loc": "បានរំលងទីតាំង។",
         "prompt_send_loc": "សូមផ្ញើទីតាំងឥឡូវ ឬ /skip.",
+        # missions
+        "mission_start_prompt_plate": "សូមជ្រើស plate សម្រាប់ចាប់ផ្តើមដើមកិច្ចធ្វើការទស្សនកិច្ច:",
+        "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញដើម (Departure):",
+        "mission_start_prompt_staff": "Optional: ផ្ញើឈ្មោះបុគ្គលិកដែលដើមជាមួយ (ឬ /skip).",
+        "mission_start_ok": "✅ កត់ត្រាចាប់ផ្តើមដំណើរ សម្រាប់ {plate} នៅ {start_date} ចេញពី {dep}.",
+        "mission_end_prompt_plate": "សូមជ្រើស plate ដើម្បីបញ្ចប់ដំណើរ (ចាំបាច់នឹងផ្គូតទៅកិច្ចការកំពុងបើក):",
+        "mission_end_prompt_arrival": "ជ្រើសទីក្រុងមកដល់ (Arrival):",
+        "mission_end_ok": "✅ កត់ត្រាបញ្ចប់ដំណើរសម្រាប់ {plate} នៅ {end_date} មកដល់ {arr}.",
+        "mission_no_open": "មិនមានកិច្ចការបើកសម្រាប់ {plate}.",
+        "mission_report_month_ok": "របាយការណ៍ខែ {month} បានបង្កើត និងបានសរសេរទៅ sheet។",
+        "mission_report_year_ok": "របាយការណ៍ឆ្នាំ {year} បានបង្កើត និងបានសរសេរទៅ sheet។",
+        "mission_invalid_cmd": "ប្រើ: /mission_report month YYYY-MM  ឬ  /mission_report year YYYY",
+        "mission_report_roundtrip_summary": "ចំនួន往返 (រយៈពេល):",
     },
 }
 
 
-# ===== Helper: i18n =====
 def t(user_lang: Optional[str], key: str, **kwargs) -> str:
     lang = (user_lang or DEFAULT_LANG or "en").lower()
     if lang not in SUPPORTED_LANGS:
@@ -228,13 +256,12 @@ def open_worksheet(tab: str = ""):
         return sh.sheet1
 
 
-# ===== Driver->plates management =====
+# ===== Driver map =====
 def load_driver_map_from_env() -> Dict[str, List[str]]:
     if not DRIVER_PLATE_MAP_JSON:
         return {}
     try:
         obj = json.loads(DRIVER_PLATE_MAP_JSON)
-        # normalize to username -> [plates]
         normalized = {}
         for k, v in obj.items():
             if isinstance(v, str):
@@ -324,7 +351,6 @@ def record_start_trip(driver: str, plate: str, lat: Optional[float] = None, lon:
     ws = open_worksheet(RECORDS_TAB)
     start_ts = now_str()
     row = [today_date_str(), driver, plate, start_ts, "", "", "", "", "", ""]
-    # set start gps if provided (cols 7/8)
     if lat is not None and lon is not None:
         row[COL_START_LAT - 1] = str(lat)
         row[COL_START_LON - 1] = str(lon)
@@ -373,10 +399,6 @@ def record_end_trip(driver: str, plate: str, lat: Optional[float] = None, lon: O
 
 # ===== Aggregation & Summary writing =====
 def aggregate_for_period(start_date: datetime, end_date: datetime) -> Dict[str, int]:
-    """
-    Compute total minutes per plate between start_date (inclusive) and end_date (exclusive).
-    Returns dict plate->minutes.
-    """
     ws = open_worksheet(RECORDS_TAB)
     totals: Dict[str, int] = {}
     try:
@@ -389,19 +411,12 @@ def aggregate_for_period(start_date: datetime, end_date: datetime) -> Dict[str, 
                 continue
             s_dt = parse_ts(start) if start else None
             e_dt = parse_ts(end) if end else None
-            # if both exist, consider portion overlapping period
             if s_dt and e_dt:
-                # treat as naive local datetimes matching sheet times
-                # convert to date for range check
-                # Overlap calculation:
                 actual_start = max(s_dt, start_date)
                 actual_end = min(e_dt, end_date)
                 if actual_end > actual_start:
                     minutes = int((actual_end - actual_start).total_seconds() // 60)
                     totals[plate] = totals.get(plate, 0) + minutes
-            else:
-                # skip incomplete record for aggregation
-                continue
         return totals
     except Exception:
         logger.exception("Failed to aggregate records")
@@ -415,24 +430,17 @@ def minutes_to_h_m(total_minutes: int) -> Tuple[int, int]:
 
 
 def write_daily_summary(date_dt: datetime) -> str:
-    """
-    Aggregate for the date (00:00 to 00:00 next day) and write a row to SUMMARY_TAB.
-    Returns text summary to send in chat.
-    """
     start = datetime.combine(date_dt.date(), dtime.min)
     end = start + timedelta(days=1)
     totals = aggregate_for_period(start, end)
     if not totals:
         return t(DEFAULT_LANG, "no_records", date=start.strftime(DATE_FMT))
-    # Prepare summary lines
     lines = []
     for plate, minutes in sorted(totals.items()):
         h, m = minutes_to_h_m(minutes)
         lines.append(t(DEFAULT_LANG, "summary_row", plate=plate, hours=h, minutes=m))
-    # write to summary sheet: create if missing
     try:
         ws = open_worksheet(SUMMARY_TAB)
-        # append a row: Date, PeriodType (daily), TotalMinutesJSON, HumanText
         row = [start.strftime(DATE_FMT), "daily", json.dumps(totals), "\n".join(lines)]
         ws.append_row(row, value_input_option="USER_ENTERED")
     except Exception:
@@ -442,10 +450,6 @@ def write_daily_summary(date_dt: datetime) -> str:
 
 
 def write_weekly_summary(week_start_dt: datetime) -> str:
-    """
-    Aggregate for week (week_start_dt inclusive, +7 days).
-    week_start_dt should be the monday of the week or any chosen boundary.
-    """
     start = datetime.combine(week_start_dt.date(), dtime.min)
     end = start + timedelta(days=7)
     totals = aggregate_for_period(start, end)
@@ -465,7 +469,162 @@ def write_weekly_summary(week_start_dt: datetime) -> str:
     return header + "\n" + "\n".join(lines)
 
 
-# ===== Telegram UI helpers =====
+# ===== Missions: helpers (with Roundtrip handling) =====
+def _missions_next_no(ws) -> int:
+    """Return next No. for missions sheet by counting existing rows (excluding header if present)."""
+    try:
+        all_vals = ws.get_all_values()
+        if not all_vals:
+            return 1
+        header = all_vals[0]
+        if any(h.lower().strip().startswith("no") or h.lower().strip().startswith("name") for h in header):
+            # next no = number of data rows + 0 (header present)
+            data_rows = len(all_vals) - 1
+            return data_rows + 1
+        else:
+            # no header, treat all rows as data
+            return len(all_vals) + 1
+    except Exception:
+        return 1
+
+
+def start_mission_record(driver: str, plate: str, departure: str, staff_name: str = "") -> dict:
+    """Append mission start row with Start Date and Departure. End Date/Arrival blank until end recorded."""
+    ws = open_worksheet(MISSIONS_TAB)
+    start_ts = now_str()
+    try:
+        next_no = _missions_next_no(ws)
+        # include Roundtrip blank initially
+        row = [next_no, driver, plate, start_ts, "", departure, "", staff_name, ""]
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        logger.info("Mission start recorded: %s %s %s %s", next_no, driver, plate, departure)
+        return {"ok": True, "no": next_no, "message": f"Mission start recorded for {plate} at {start_ts}"}
+    except Exception as e:
+        logger.exception("Failed to append mission start")
+        return {"ok": False, "message": "Failed to write mission start to sheet: " + str(e)}
+
+
+def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
+    """
+    Find last mission row for driver+plate with empty End Date and fill End Date, Arrival and Roundtrip.
+    If not found, return not found.
+    """
+    ws = open_worksheet(MISSIONS_TAB)
+    try:
+        records = ws.get_all_records()
+        for idx in range(len(records) - 1, -1, -1):
+            rec = records[idx]
+            rec_plate = str(rec.get("Plate", rec.get("plate", rec.get("Plate No", "")))).strip()
+            rec_name = str(rec.get("Name", rec.get("Driver", rec.get("name", "")))).strip()
+            end_val = str(rec.get("End Date", rec.get("End", ""))).strip()
+            start_val = str(rec.get("Start Date", rec.get("Start", ""))).strip()
+            if rec_plate == plate and (end_val == "" or end_val is None) and (rec_name == driver):
+                row_number = idx + 2  # account for header row
+                end_ts = now_str()
+                # write End Date (col 5), Arrival (col 7), Roundtrip (col 9)
+                ws.update_cell(row_number, 5, end_ts)
+                ws.update_cell(row_number, 7, arrival)
+                # determine roundtrip: same calendar date?
+                rt_value = "No"
+                s_dt = parse_ts(start_val) if start_val else None
+                e_dt = parse_ts(end_ts)
+                if s_dt and e_dt:
+                    # compare date in local tz (we used local wall-clock times)
+                    if s_dt.date() == e_dt.date():
+                        rt_value = "Yes"
+                # Write Roundtrip into 9th column
+                try:
+                    ws.update_cell(row_number, 9, rt_value)
+                except Exception:
+                    # If sheet shorter, append blank cells to reach column; simpler: read row and rewrite full row:
+                    try:
+                        existing = ws.row_values(row_number)
+                        # ensure length
+                        while len(existing) < 9:
+                            existing.append("")
+                        existing[4] = end_ts  # index 4 => col 5
+                        existing[6] = arrival  # index 6 => col 7
+                        existing[8] = rt_value  # index 8 => col 9
+                        ws.delete_row(row_number)
+                        ws.insert_row(existing, row_number)
+                    except Exception:
+                        logger.exception("Fallback write for mission end failed.")
+                logger.info("Mission end updated for %s row %d (Roundtrip=%s)", plate, row_number, rt_value)
+                return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "roundtrip": rt_value}
+        return {"ok": False, "message": "No open mission found"}
+    except Exception as e:
+        logger.exception("Failed to update mission end")
+        return {"ok": False, "message": "Failed to write mission end to sheet: " + str(e)}
+
+
+def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
+    """Return mission rows whose start date falls within [start_date, end_date). Each row as list of values including Roundtrip."""
+    ws = open_worksheet(MISSIONS_TAB)
+    out = []
+    try:
+        rows = ws.get_all_records()
+        for rec in rows:
+            start = str(rec.get("Start Date", rec.get("Start", ""))).strip()
+            if not start:
+                continue
+            s_dt = parse_ts(start)
+            if not s_dt:
+                continue
+            if start_date <= s_dt < end_date:
+                no = rec.get("No", rec.get("no", ""))
+                name = rec.get("Name", rec.get("name", ""))
+                plate = rec.get("Plate", rec.get("plate", ""))
+                end = rec.get("End Date", rec.get("End", ""))
+                dep = rec.get("Departure", rec.get("departure", ""))
+                arr = rec.get("Arrival", rec.get("arrival", ""))
+                staff = rec.get("Staff Name", rec.get("staff name", ""))
+                roundtrip = rec.get("Roundtrip", rec.get("roundtrip", ""))
+                out.append([no, name, plate, start, end, dep, arr, staff, roundtrip])
+        return out
+    except Exception:
+        logger.exception("Failed to fetch mission rows")
+        return []
+
+
+def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
+    """Append mission rows into MISSIONS_REPORT_TAB with a header row indicating period_label.
+       Also append a summary of Roundtrip counts per plate at the end of this report block.
+    """
+    try:
+        ws = open_worksheet(MISSIONS_REPORT_TAB)
+        # Append header for this report
+        ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
+        # Append column headers including Roundtrip
+        ws.append_row(["No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip"], value_input_option="USER_ENTERED")
+        # Append data rows
+        for r in rows:
+            # ensure length 9
+            while len(r) < 9:
+                r.append("")
+            ws.append_row(r, value_input_option="USER_ENTERED")
+        # compute roundtrip summary counts per plate
+        rt_counts: Dict[str, int] = {}
+        for r in rows:
+            plate = str(r[2]) if len(r) > 2 else ""
+            roundtrip = str(r[8]).strip().lower() if len(r) > 8 else ""
+            if plate:
+                if roundtrip == "yes":
+                    rt_counts[plate] = rt_counts.get(plate, 0) + 1
+        # append a small summary block
+        ws.append_row(["Roundtrip Summary:"], value_input_option="USER_ENTERED")
+        if rt_counts:
+            ws.append_row(["Plate", "Roundtrip Count"], value_input_option="USER_ENTERED")
+            for plate, cnt in sorted(rt_counts.items()):
+                ws.append_row([plate, cnt], value_input_option="USER_ENTERED")
+        else:
+            ws.append_row(["No roundtrips found in this period."], value_input_option="USER_ENTERED")
+        return True
+    except Exception:
+        logger.exception("Failed to write mission report to sheet.")
+        return False
+
+
+# ===== Telegram UI helpers and command handlers (including mission commands) =====
 def build_plate_keyboard(prefix: str, allowed_plates: Optional[List[str]] = None):
     buttons = []
     row = []
@@ -489,13 +648,14 @@ def build_reply_keyboard_buttons():
     return ReplyKeyboardMarkup(kb, resize_keyboard=True, one_time_keyboard=False)
 
 
-# ===== Conversation & callbacks =====
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     text = t(user_lang, "menu")
     keyboard = [
         [InlineKeyboardButton("Start trip (select plate)", callback_data="show_start"),
          InlineKeyboardButton("End trip (select plate)", callback_data="show_end")],
+        [InlineKeyboardButton("Mission start", callback_data="show_mission_start"),
+         InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
         [InlineKeyboardButton("Open menu", callback_data="menu_full"),
          InlineKeyboardButton("Help", callback_data="help")],
     ]
@@ -541,6 +701,31 @@ async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_message(t(user_lang, "choose_end"), reply_markup=build_plate_keyboard("end", allowed_plates=allowed))
 
 
+# Mission start/end commands and callbacks (similar to previous script)
+DEPARTURE_CHOICES = ["PP", "SHV"]
+ARRIVAL_CHOICES = ["PP", "SHV"]
+
+
+async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_lang = context.user_data.get("lang", DEFAULT_LANG)
+    driver_map = get_driver_map()
+    allowed = None
+    if user and user.username and driver_map.get(user.username):
+        allowed = driver_map.get(user.username)
+    await update.effective_chat.send_message(t(user_lang, "mission_start_prompt_plate"), reply_markup=build_plate_keyboard("mission_start_plate", allowed_plates=allowed))
+
+
+async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_lang = context.user_data.get("lang", DEFAULT_LANG)
+    driver_map = get_driver_map()
+    allowed = None
+    if user and user.username and driver_map.get(user.username):
+        allowed = driver_map.get(user.username)
+    await update.effective_chat.send_message(t(user_lang, "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate", allowed_plates=allowed))
+
+
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -549,6 +734,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
+    # existing actions for trips
     if data == "show_start":
         await query.edit_message_text(t(user_lang, "choose_start"), reply_markup=build_plate_keyboard("start"))
         return
@@ -566,37 +752,112 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "help"))
         return
 
-    try:
-        action, plate = data.split("|", 1)
-    except Exception:
-        await query.edit_message_text(t(user_lang, "invalid_sel"))
+    # mission flow callbacks
+    if data.startswith("mission_start_plate|"):
+        _, plate = data.split("|", 1)
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate}
+        kb = [[InlineKeyboardButton("PP", callback_data="mission_depart|PP"), InlineKeyboardButton("SHV", callback_data="mission_depart|SHV")]]
+        await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    # Authorization check
-    driver_map = get_driver_map()
-    if username and driver_map:
-        allowed = driver_map.get(username, [])
+    if data.startswith("mission_end_plate|"):
+        _, plate = data.split("|", 1)
+        context.user_data["pending_mission"] = {"action": "end", "plate": plate}
+        kb = [[InlineKeyboardButton("PP", callback_data="mission_arrival|PP"), InlineKeyboardButton("SHV", callback_data="mission_arrival|SHV")]]
+        await query.edit_message_text(t(user_lang, "mission_end_prompt_arrival"), reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data.startswith("mission_depart|"):
+        _, dep = data.split("|", 1)
+        pending = context.user_data.get("pending_mission")
+        if not pending or pending.get("action") != "start":
+            await query.edit_message_text(t(user_lang, "invalid_sel"))
+            return
+        pending["departure"] = dep
+        context.user_data["pending_mission"] = pending
+        await query.edit_message_text(t(user_lang, "mission_start_prompt_staff"))
+        return
+
+    if data.startswith("mission_arrival|"):
+        _, arr = data.split("|", 1)
+        pending = context.user_data.get("pending_mission")
+        if not pending or pending.get("action") != "end":
+            await query.edit_message_text(t(user_lang, "invalid_sel"))
+            return
+        pending["arrival"] = arr
+        context.user_data["pending_mission"] = pending
+        plate = pending.get("plate")
+        arrival = pending.get("arrival")
+        driver_map = get_driver_map()
+        allowed = driver_map.get(username, []) if username else []
+        if allowed and plate not in allowed:
+            await query.edit_message_text(t(user_lang, "not_allowed", plate=plate))
+            context.user_data.pop("pending_mission", None)
+            return
+        res = end_mission_record(username, plate, arrival)
+        if res.get("ok"):
+            await query.edit_message_text(t(user_lang, "mission_end_ok", plate=plate, end_date=now_str(), arr=arrival))
+        else:
+            await query.edit_message_text(t(user_lang, "mission_no_open", plate=plate))
+        context.user_data.pop("pending_mission", None)
+        return
+
+    # start/end trip selection handlers
+    if data.startswith("start|") or data.startswith("end|"):
+        try:
+            action, plate = data.split("|", 1)
+        except Exception:
+            await query.edit_message_text("Invalid selection.")
+            return
+
+        driver_map = get_driver_map()
+        allowed = driver_map.get(username, []) if username else []
         if allowed and plate not in allowed:
             await query.edit_message_text(t(user_lang, "not_allowed", plate=plate))
             return
 
-    # If authorized, ask for optional location: prompt and set pending_action in user_data
-    context.user_data["pending_action"] = (action, plate)
-    context.user_data["pending_from_query_id"] = query.message.message_id
-    # ask for location
-    await query.edit_message_text(t(user_lang, "prompt_location"))
-    # ask user to send location or /skip
-    return  # next message handler will catch location and /skip
+        if action == "start":
+            context.user_data["pending_action"] = ("start", plate)
+            await query.edit_message_text(t(user_lang, "prompt_location"))
+            return
+        elif action == "end":
+            context.user_data["pending_action"] = ("end", plate)
+            await query.edit_message_text(t(user_lang, "prompt_location"))
+            return
+
+    await query.edit_message_text(t(user_lang, "invalid_sel"))
 
 
-# Handler for location messages or /skip after a pending_action exists
 async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     pending = context.user_data.get("pending_action")
     if not pending:
-        # ignore stray locations
+        pending_mission = context.user_data.get("pending_mission")
+        if pending_mission and pending_mission.get("action") == "start":
+            text = update.message.text.strip() if update.message.text else ""
+            if text and text.lower().strip() != "/skip":
+                staff = text
+            else:
+                staff = ""
+            plate = pending_mission.get("plate")
+            departure = pending_mission.get("departure")
+            username = user.username or user.full_name
+            driver_map = get_driver_map()
+            allowed = driver_map.get(user.username, []) if user and user.username else []
+            if allowed and plate not in allowed:
+                await update.message.reply_text(t(user_lang, "not_allowed", plate=plate))
+                context.user_data.pop("pending_mission", None)
+                return
+            res = start_mission_record(username, plate, departure, staff_name=staff)
+            if res.get("ok"):
+                await update.message.reply_text(t(user_lang, "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
+            else:
+                await update.message.reply_text("❌ " + res.get("message", ""))
+            context.user_data.pop("pending_mission", None)
+            return
         return
+
     action, plate = pending
     lat = lon = None
     if update.message.location:
@@ -607,11 +868,9 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.message.text and update.message.text.strip().lower() == "/skip":
         await update.message.reply_text(t(user_lang, "skip_loc"))
     else:
-        # user sent other text — ignore (but could prompt)
         await update.message.reply_text(t(user_lang, "prompt_send_loc"))
         return
 
-    # perform action now
     if action == "start":
         res = record_start_trip(user.username or user.full_name, plate, lat=lat, lon=lon)
         if res["ok"]:
@@ -624,12 +883,9 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_chat.send_message(t(user_lang, "end_ok", plate=plate, driver=user.username or user.full_name, msg=res["message"]))
         else:
             await update.effective_chat.send_message("❌ " + res["message"])
-    # clear pending
     context.user_data.pop("pending_action", None)
-    context.user_data.pop("pending_from_query_id", None)
 
 
-# /lang command
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
@@ -643,7 +899,53 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(t(lang, "lang_set", lang=lang))
 
 
-# Auto keyword listener (group) - optional quick menu
+# Mission report command
+async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage:
+       /mission_report month YYYY-MM
+       /mission_report year YYYY
+    """
+    args = context.args
+    user_lang = context.user_data.get("lang", DEFAULT_LANG)
+    if not args or len(args) < 2:
+        await update.message.reply_text(t(user_lang, "mission_invalid_cmd"))
+        return
+    mode = args[0].lower()
+    if mode == "month":
+        try:
+            y_m = args[1]
+            dt = datetime.strptime(y_m + "-01", "%Y-%m-%d")
+            start = datetime(dt.year, dt.month, 1)
+            if dt.month == 12:
+                end = datetime(dt.year + 1, 1, 1)
+            else:
+                end = datetime(dt.year, dt.month + 1, 1)
+            rows = mission_rows_for_period(start, end)
+            ok = write_mission_report_rows(rows, period_label=start.strftime("%Y-%m"))
+            if ok:
+                await update.message.reply_text(t(user_lang, "mission_report_month_ok", month=start.strftime("%Y-%m")))
+            else:
+                await update.message.reply_text("❌ Failed to write mission report.")
+        except Exception:
+            await update.message.reply_text(t(user_lang, "mission_invalid_cmd"))
+    elif mode == "year":
+        try:
+            y = int(args[1])
+            start = datetime(y, 1, 1)
+            end = datetime(y + 1, 1, 1)
+            rows = mission_rows_for_period(start, end)
+            ok = write_mission_report_rows(rows, period_label=str(y))
+            if ok:
+                await update.message.reply_text(t(user_lang, "mission_report_year_ok", year=str(y)))
+            else:
+                await update.message.reply_text("❌ Failed to write mission report.")
+        except Exception:
+            await update.message.reply_text(t(user_lang, "mission_invalid_cmd"))
+    else:
+        await update.message.reply_text(t(user_lang, "mission_invalid_cmd"))
+
+
+# Auto keyword listener
 AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
 
@@ -665,14 +967,11 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # Scheduling jobs: daily summary
 async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
-    # job run: compute yesterday's summary (or today's depending on desired)
-    # We'll aggregate for previous day (yesterday)
     job_data = context.job.data if hasattr(context.job, "data") else {}
     chat_id = job_data.get("chat_id") or SUMMARY_CHAT_ID
     if not chat_id:
         logger.info("SUMMARY_CHAT_ID not set; skipping daily summary.")
         return
-    # decide date to summarize: yesterday in SUMMARY_TZ
     if SUMMARY_TZ and ZoneInfo:
         try:
             tz = ZoneInfo(SUMMARY_TZ)
@@ -696,14 +995,14 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("lang", lang_command))
+    application.add_handler(CommandHandler("mission_start", mission_start_command))
+    application.add_handler(CommandHandler("mission_end", mission_end_command))
+    application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CallbackQueryHandler(plate_callback))
-    # location/skip handler: catch Location messages or /skip text
-    application.add_handler(MessageHandler(filters.LOCATION | filters.Regex(r'(?i)^/skip$'), location_or_skip))
+    application.add_handler(MessageHandler(filters.LOCATION | filters.Regex(r'(?i)^/skip$') | filters.TEXT, location_or_skip))
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
-    # help fallback
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
-    # set bot commands
     try:
         async def _set_cmds():
             try:
@@ -712,6 +1011,9 @@ def register_ui_handlers(application):
                     BotCommand("end_trip", "End a trip (select plate)"),
                     BotCommand("menu", "Open trip menu"),
                     BotCommand("lang", "Set language /lang en|km"),
+                    BotCommand("mission_start", "Start a driver mission (PP<->SHV)"),
+                    BotCommand("mission_end", "End a driver mission"),
+                    BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
                 ])
             except Exception:
                 logger.exception("Failed to set bot commands.")
@@ -721,23 +1023,18 @@ def register_ui_handlers(application):
         logger.debug("Could not schedule set_my_commands.")
 
 
-# Main
 def ensure_env():
     if not BOT_TOKEN:
         raise RuntimeError(t(DEFAULT_LANG, "no_bot_token"))
 
 
 def schedule_daily_summary(application):
-    # schedule job at SUMMARY_HOUR in SUMMARY_TZ
     try:
         if SUMMARY_CHAT_ID:
             if ZoneInfo and SUMMARY_TZ:
                 tz = ZoneInfo(SUMMARY_TZ)
             else:
                 tz = None
-            # schedule using job_queue
-            job_kwargs = {"days": 1}
-            # determine time object
             job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
             application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
             logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
@@ -749,7 +1046,6 @@ def schedule_daily_summary(application):
 
 def main():
     ensure_env()
-    # log timezone
     if LOCAL_TZ:
         if ZoneInfo:
             try:
@@ -762,10 +1058,8 @@ def main():
     else:
         logger.info("LOCAL_TZ not set; using system local time.")
 
-    # Build application with persistence (optional)
     persistence = None
     try:
-        # create a small file-based persistence to remember per-user lang across restarts
         persistence = PicklePersistence(filepath="driver_bot_persistence.pkl")
     except Exception:
         persistence = None
@@ -773,11 +1067,8 @@ def main():
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
 
     register_ui_handlers(application)
-
-    # schedule daily summary job if configured
     schedule_daily_summary(application)
 
-    # start
     logger.info("Starting driver-bot polling...")
     application.run_polling()
 
