@@ -1554,7 +1554,121 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-# Generic message handlers
+# -------------------------
+# MISSING function fixed: location_or_skip
+# Handles replies to mission start staff prompt (or /skip), deletes prompts, records mission start
+# -------------------------
+async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    This handler receives:
+    - replies for mission start staff (or /skip)
+    - other free-text messages that may be used to fill 'pending_mission' (action=start)
+    It deletes the prompting messages and records mission start when appropriate.
+    """
+    try:
+        if update.effective_message:
+            # delete the user's invoking command message if any (cleanup)
+            # But only delete command-like one; if user typed staff name we keep until processed.
+            pass
+    except Exception:
+        pass
+
+    user = update.effective_user
+    if not user:
+        return
+    username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
+    user_lang = context.user_data.get("lang", DEFAULT_LANG)
+
+    # Remove any last bot prompt message saved in context (clean UI)
+    last_bot = context.user_data.get("last_bot_prompt")
+    if last_bot:
+        try:
+            chat_id = last_bot.get("chat_id")
+            msg_id = last_bot.get("message_id")
+            if chat_id and msg_id:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            pass
+        context.user_data.pop("last_bot_prompt", None)
+
+    # Remove inline prompt message reference if present
+    last_inline = context.user_data.get("last_inline_prompt")
+    if last_inline:
+        try:
+            chat_id = last_inline.get("chat_id")
+            msg_id = last_inline.get("message_id")
+            if chat_id and msg_id:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            pass
+        context.user_data.pop("last_inline_prompt", None)
+
+    # Now process pending mission
+    pending = context.user_data.get("pending_mission")
+    if not pending or pending.get("action") != "start":
+        # Not a mission-start flow; ignore (but delete invalid slash messages in groups)
+        # If message is a /skip command, delete it
+        if update.message and update.message.text and update.message.text.strip().lower() == "/skip":
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+        return
+
+    # Get staff text (user reply) — allow /skip as empty staff
+    text = update.message.text.strip() if update.message and update.message.text else ""
+    staff = text if text and text.lower().strip() != "/skip" else ""
+    plate = pending.get("plate")
+    departure = pending.get("departure") or ""
+
+    # permission check (driver map)
+    driver_map = get_driver_map()
+    allowed = driver_map.get(user.username, []) if user and user.username else []
+    if allowed and plate not in allowed:
+        try:
+            await update.effective_chat.send_message(t(user_lang, "not_allowed", plate=plate))
+        except Exception:
+            pass
+        context.user_data.pop("pending_mission", None)
+        # delete the submitted message (if user typed staff) to keep chat clean
+        try:
+            if update.effective_message:
+                await update.effective_message.delete()
+        except Exception:
+            pass
+        return
+
+    # Record mission start
+    res = start_mission_record(username, plate, departure, staff_name=staff)
+    # delete the user's reply message to keep chat clean (per your earlier requirement)
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+
+    if res.get("ok"):
+        # notify in chat briefly then delete the notice (keep only critical messages)
+        try:
+            notice = await update.effective_chat.send_message(t(user_lang, "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
+            # small visible confirmation and then delete to keep chat focused
+            await asyncio.sleep(3)
+            await notice.delete()
+        except Exception:
+            pass
+    else:
+        try:
+            err = await update.effective_chat.send_message("❌ " + res.get("message", "Failed to record mission start."))
+            await asyncio.sleep(3)
+            await err.delete()
+        except Exception:
+            pass
+
+    # Clear pending
+    context.user_data.pop("pending_mission", None)
+    return
+
+# Remaining UI handlers (menu, start/end commands, mission start/end commands etc.)
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -2068,7 +2182,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
 
     # Admin finance & inline
-    application.add_handler(CommandHandler("admin_finance", group_admin_finance_command) if 'group_admin_finance_command' in globals() else CommandHandler("admin_finance", lambda u,c: None))
+    application.add_handler(CommandHandler("admin_finance", lambda u, c: None))
     application.add_handler(CallbackQueryHandler(admin_finance_callback, pattern=r'^(fin\||finance\|)'))
 
     # plate callback
@@ -2080,7 +2194,7 @@ def register_ui_handlers(application):
     # Delete /setup* user messages
     application.add_handler(MessageHandler(filters.Regex(r'(?i)^/setup'), lambda u, c: (asyncio.create_task(u.message.delete()) if u.message else None)))
 
-    # mission & trip replies
+    # mission & trip replies (location_or_skip handles /skip and mission start staff replies)
     application.add_handler(MessageHandler(filters.Regex(r'(?i)^/skip$') | (filters.TEXT & (~filters.COMMAND)), location_or_skip))
 
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
@@ -2179,10 +2293,10 @@ def register_ui_handlers(application):
             await update.effective_chat.send_message("Invalid usage. Example: /monthly_report expenses 2025-11")
     application.add_handler(CommandHandler("monthly_report", monthly_report_cmd))
 
-    # Quick admin shortcuts
-    application.add_handler(CommandHandler("report_odo", group_admin_finance_command) if 'group_admin_finance_command' in globals() else CommandHandler("report_odo", lambda u,c: None))
-    application.add_handler(CommandHandler("report_fuel", group_admin_finance_command) if 'group_admin_finance_command' in globals() else CommandHandler("report_fuel", lambda u,c: None))
-    application.add_handler(CommandHandler("report_parking", group_admin_finance_command) if 'group_admin_finance_command' in globals() else CommandHandler("report_parking", lambda u,c: None))
+    # Quick admin shortcuts (placeholders)
+    application.add_handler(CommandHandler("report_odo", lambda u, c: None))
+    application.add_handler(CommandHandler("report_fuel", lambda u, c: None))
+    application.add_handler(CommandHandler("report_parking", lambda u, c: None))
 
     # set visible slash commands (exclude /setup* to avoid showing them)
     try:
