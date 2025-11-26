@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-driver-bot full script — final version
+Driver Bot — full script with 'delete invoking command message' enabled for all commands.
+
 Features:
-- Start/End trips with GPS
-- Driver permission (driver->plates)
-- Daily/weekly summary (writes to SUMMARY_TAB)
-- Missions (start/end), Roundtrip auto-mark when start & end on same day
-- Mission monthly/yearly report (writes to MISSIONS_REPORT_TAB, includes Roundtrip summary)
-- /lang en|km works in groups and private (deletes invoking message)
-- Robust open_worksheet(tab) that auto-creates required tabs with headers
-- migrate_mixed_sheet(original_tab_name): one-time helper to split old mixed data into RECORDS_TAB and MISSIONS_TAB
+- Start/End trip (with optional GPS)
+- Driver permissions (username -> allowed plates)
+- Missions (start/end), Roundtrip auto-mark when Start and End on same day
+- Mission monthly/yearly report
+- /lang en|km (works in groups and private) — per-user preference
+- Robust open_worksheet(tab) that auto-creates required tabs with sensible headers
+- All command handlers attempt to delete the user's invoking message to avoid clutter
+- One-time migration helper migrate_mixed_sheet(original_tab_name)
 
 Save as driver_bot.py and run.
 """
@@ -24,13 +25,13 @@ from typing import Optional, Dict, List, Any, Tuple
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# zoneinfo (Python 3.9+). If not available, ZoneInfo = None and we fallback to system time.
+# zoneinfo (Python 3.9+)
 try:
     from zoneinfo import ZoneInfo  # type: ignore
 except Exception:
     ZoneInfo = None  # type: ignore
 
-# Telegram
+# Telegram imports
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -64,8 +65,8 @@ PLATE_LIST = os.getenv(
     "2BB-3071,2BB-0809,2CI-8066,2CK-8066,2CJ-8066,3H-8066,2AV-6527,2AZ-6828,2AX-4635,2BV-8320",
 )
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Driver_Log")
-GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")  # optional base tab for legacy behavior
-# Local TZ
+GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")  # optional legacy base tab
+
 _env_tz = os.getenv("LOCAL_TZ")
 if _env_tz is None:
     LOCAL_TZ = "Asia/Phnom_Penh"
@@ -77,10 +78,10 @@ if LOCAL_TZ and ZoneInfo is None:
 
 PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
 
-# Driver map env or sheet (JSON mapping username -> [plates])
+# Driver map JSON env (username -> [plates])
 DRIVER_PLATE_MAP_JSON = os.getenv("DRIVER_PLATE_MAP", "").strip() or None
 
-# Summary / scheduling
+# Scheduling / summary
 SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
 SUMMARY_HOUR = int(os.getenv("SUMMARY_HOUR", "20"))
 SUMMARY_TZ = os.getenv("SUMMARY_TZ", LOCAL_TZ or "Asia/Phnom_Penh")
@@ -93,8 +94,6 @@ SUPPORTED_LANGS = ("en", "km")
 RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
 DRIVERS_TAB = os.getenv("DRIVERS_TAB", "Drivers")
 SUMMARY_TAB = os.getenv("SUMMARY_TAB", "Summary")
-
-# Missions tabs
 MISSIONS_TAB = os.getenv("MISSIONS_TAB", "Missions")
 MISSIONS_REPORT_TAB = os.getenv("MISSIONS_REPORT_TAB", "Missions_Report")
 
@@ -110,8 +109,7 @@ COL_START_LON = 8
 COL_END_LAT = 9
 COL_END_LON = 10
 
-# Missions columns (1-indexed)
-# 1: No., 2: Name, 3: Plate, 4: Start Date, 5: End Date, 6: Departure, 7: Arrival, 8: Staff Name, 9: Roundtrip
+# Missions columns (1-indexed): No., Name, Plate, Start Date, End Date, Departure, Arrival, Staff Name, Roundtrip
 
 # Time formats
 TS_FMT = "%Y-%m-%d %H:%M:%S"
@@ -120,7 +118,7 @@ DATE_FMT = "%Y-%m-%d"
 # Google scopes
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# Translations (minimal)
+# Minimal translations (en + km)
 TR = {
     "en": {
         "menu": "Driver Bot Menu — tap a button to perform an action:",
@@ -194,7 +192,7 @@ def t(user_lang: Optional[str], key: str, **kwargs) -> str:
     return TR.get(lang, TR["en"]).get(key, TR["en"].get(key, "")).format(**kwargs)
 
 
-# ===== Google Sheets helpers (robust open_worksheet with auto-create) =====
+# ===== Google Sheets helpers =====
 def _load_creds_from_base64(encoded: str) -> dict:
     try:
         if encoded.strip().startswith("{"):
@@ -468,7 +466,7 @@ def write_daily_summary(date_dt: datetime) -> str:
     return header + "\n" + "\n".join(lines)
 
 
-# ===== Missions (with Roundtrip) =====
+# ===== Missions (Roundtrip) =====
 def _missions_next_no(ws) -> int:
     try:
         all_vals = ws.get_all_values()
@@ -620,7 +618,15 @@ def build_reply_keyboard_buttons():
     return ReplyKeyboardMarkup(kb, resize_keyboard=True, one_time_keyboard=False)
 
 
+# All CommandHandlers attempt to delete the invoking message to avoid clutter in groups
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # delete invoking message if possible
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     text = t(user_lang, "menu")
     keyboard = [
@@ -632,11 +638,6 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("Help", callback_data="help")],
     ]
     try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
         pass
@@ -644,11 +645,13 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # delete invoking message
     try:
         if update.effective_message:
             await update.effective_message.delete()
     except Exception:
         pass
+
     user = update.effective_user
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     driver_map = get_driver_map()
@@ -659,11 +662,13 @@ async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # delete invoking message
     try:
         if update.effective_message:
             await update.effective_message.delete()
     except Exception:
         pass
+
     user = update.effective_user
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     driver_map = get_driver_map()
@@ -673,12 +678,14 @@ async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_message(t(user_lang, "choose_end"), reply_markup=build_plate_keyboard("end", allowed_plates=allowed))
 
 
-# Mission commands
-DEPARTURE_CHOICES = ["PP", "SHV"]
-ARRIVAL_CHOICES = ["PP", "SHV"]
-
-
 async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # delete invoking message
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+
     user = update.effective_user
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     driver_map = get_driver_map()
@@ -689,6 +696,13 @@ async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # delete invoking message
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+
     user = update.effective_user
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     driver_map = get_driver_map()
@@ -706,6 +720,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
+    # show submenus
     if data == "show_start":
         await query.edit_message_text(t(user_lang, "choose_start"), reply_markup=build_plate_keyboard("start"))
         return
@@ -723,7 +738,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "help"))
         return
 
-    # mission start selection
+    # mission flow callbacks
     if data.startswith("mission_start_plate|"):
         _, plate = data.split("|", 1)
         context.user_data["pending_mission"] = {"action": "start", "plate": plate}
@@ -773,7 +788,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("pending_mission", None)
         return
 
-    # start/end trip selection handlers
+    # start/end trip selection handlers from keyboard
     if data.startswith("start|") or data.startswith("end|"):
         try:
             action, plate = data.split("|", 1)
@@ -799,32 +814,38 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(t(user_lang, "invalid_sel"))
 
 
+# Message handler for location / /skip / staff name
 async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Try delete the user's message (so /skip or text won't remain)
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+
     user = update.effective_user
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     pending = context.user_data.get("pending_action")
     if not pending:
         pending_mission = context.user_data.get("pending_mission")
         if pending_mission and pending_mission.get("action") == "start":
+            # User either sent staff name or /skip (we already deleted their message)
             text = update.message.text.strip() if update.message.text else ""
-            if text and text.lower().strip() != "/skip":
-                staff = text
-            else:
-                staff = ""
+            staff = text if text and text.lower().strip() != "/skip" else ""
             plate = pending_mission.get("plate")
             departure = pending_mission.get("departure")
             username = user.username or user.full_name
             driver_map = get_driver_map()
             allowed = driver_map.get(user.username, []) if user and user.username else []
             if allowed and plate not in allowed:
-                await update.message.reply_text(t(user_lang, "not_allowed", plate=plate))
+                await update.effective_chat.send_message(t(user_lang, "not_allowed", plate=plate))
                 context.user_data.pop("pending_mission", None)
                 return
             res = start_mission_record(username, plate, departure, staff_name=staff)
             if res.get("ok"):
-                await update.message.reply_text(t(user_lang, "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
+                await update.effective_chat.send_message(t(user_lang, "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
             else:
-                await update.message.reply_text("❌ " + res.get("message", ""))
+                await update.effective_chat.send_message("❌ " + res.get("message", ""))
             context.user_data.pop("pending_mission", None)
             return
         return
@@ -837,9 +858,9 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lon = loc.longitude
         logger.info("Received location from %s: %s,%s", user.username, lat, lon)
     elif update.message.text and update.message.text.strip().lower() == "/skip":
-        await update.message.reply_text(t(user_lang, "skip_loc"))
+        await update.effective_chat.send_message(t(user_lang, "skip_loc"))
     else:
-        await update.message.reply_text(t(user_lang, "prompt_send_loc"))
+        await update.effective_chat.send_message(t(user_lang, "prompt_send_loc"))
         return
 
     if action == "start":
@@ -857,8 +878,9 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("pending_action", None)
 
 
-# ===== Updated lang_command: works in groups and deletes invoking message =====
+# lang command: delete invoking message and save per-user preference
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # delete user's command message
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -895,12 +917,19 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
 
-# ===== mission_report handler =====
+# mission_report: delete invoking message then run
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # delete invoking message
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+
     args = context.args
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     if not args or len(args) < 2:
-        await update.message.reply_text(t(user_lang, "mission_invalid_cmd"))
+        await update.effective_chat.send_message(t(user_lang, "mission_invalid_cmd"))
         return
     mode = args[0].lower()
     if mode == "month":
@@ -915,11 +944,11 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
             rows = mission_rows_for_period(start, end)
             ok = write_mission_report_rows(rows, period_label=start.strftime("%Y-%m"))
             if ok:
-                await update.message.reply_text(t(user_lang, "mission_report_month_ok", month=start.strftime("%Y-%m")))
+                await update.effective_chat.send_message(t(user_lang, "mission_report_month_ok", month=start.strftime("%Y-%m")))
             else:
-                await update.message.reply_text("❌ Failed to write mission report.")
+                await update.effective_chat.send_message("❌ Failed to write mission report.")
         except Exception:
-            await update.message.reply_text(t(user_lang, "mission_invalid_cmd"))
+            await update.effective_chat.send_message(t(user_lang, "mission_invalid_cmd"))
     elif mode == "year":
         try:
             y = int(args[1])
@@ -928,16 +957,16 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
             rows = mission_rows_for_period(start, end)
             ok = write_mission_report_rows(rows, period_label=str(y))
             if ok:
-                await update.message.reply_text(t(user_lang, "mission_report_year_ok", year=str(y)))
+                await update.effective_chat.send_message(t(user_lang, "mission_report_year_ok", year=str(y)))
             else:
-                await update.message.reply_text("❌ Failed to write mission report.")
+                await update.effective_chat.send_message("❌ Failed to write mission report.")
         except Exception:
-            await update.message.reply_text(t(user_lang, "mission_invalid_cmd"))
+            await update.effective_chat.send_message(t(user_lang, "mission_invalid_cmd"))
     else:
-        await update.message.reply_text(t(user_lang, "mission_invalid_cmd"))
+        await update.effective_chat.send_message(t(user_lang, "mission_invalid_cmd"))
 
 
-# Auto listener
+# Auto keyword listener (group) — keep as-is (don't delete normal chat messages)
 AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
 
@@ -957,7 +986,7 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-# Scheduling: daily summary
+# Scheduling: daily summary job
 async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data if hasattr(context.job, "data") else {}
     chat_id = job_data.get("chat_id") or SUMMARY_CHAT_ID
@@ -981,7 +1010,7 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Failed to send daily summary message.")
 
 
-# ===== Register handlers & startup =====
+# Register handlers
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
@@ -991,6 +1020,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_end", mission_end_command))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CallbackQueryHandler(plate_callback))
+    # location_or_skip handles LOCATION, /skip and free text (staff name)
     application.add_handler(MessageHandler(filters.LOCATION | filters.Regex(r'(?i)^/skip$') | filters.TEXT, location_or_skip))
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
@@ -1069,9 +1099,7 @@ if __name__ == "__main__":
     main()
 
 
-# ===== One-time migration helper =====
-# If you have a mixed sheet (e.g. sheet1) that contains both trips and missions,
-# run migrate_mixed_sheet("OldTabName") once (after backing up your sheet).
+# ===== One-time migration helper (run manually if needed) =====
 def migrate_mixed_sheet(original_tab_name: str):
     """
     Migrate rows from original_tab_name into RECORDS_TAB and MISSIONS_TAB.
@@ -1089,12 +1117,10 @@ def migrate_mixed_sheet(original_tab_name: str):
     records_ws = open_worksheet(RECORDS_TAB)
     missions_ws = open_worksheet(MISSIONS_TAB)
 
-    # Determine starting No. for missions
     existing = missions_ws.get_all_values()
     if not existing:
         next_no = 1
     else:
-        # if header present, next = len(existing)
         header = existing[0]
         if any("no" in str(h).lower() for h in header):
             next_no = len(existing)
@@ -1127,7 +1153,7 @@ def migrate_mixed_sheet(original_tab_name: str):
             start = r.get("Start") or ""
             end = r.get("End") or ""
             duration = r.get("Duration") or ""
-            slat = r.get("StartLat") or r.get("StartLat") or ""
+            slat = r.get("StartLat") or ""
             slon = r.get("StartLon") or ""
             elat = r.get("EndLat") or ""
             elon = r.get("EndLon") or ""
