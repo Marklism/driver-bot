@@ -2,13 +2,18 @@
 """
 Driver Bot — Full updated script (complete file)
 
-This file is your complete bot script with:
-- Improved admin finance ForceReply handling (prompt_message_id tracking)
-- Robust process_force_reply that requires replies to ForceReply (but has fallback)
-- Default admin includes 'markpeng1' if BOT_ADMINS not set
-- Keeps previous behaviors: missions header fix, roundtrip merge, monthly reports, /setup_menu pin, admin inline form, leave/maintenance/expenses tabs, etc.
-
-Replace your existing bot file with this entire script and restart the bot.
+Features included:
+- Missions header fix, conservative header insertion
+- Record start/end trips, mission start/end with roundtrip merge
+- Admin finance inline form + ForceReply handling (robust, avoids 'stuck' behavior)
+- Odometer, fuel, parking, wash, repair recording, with normalization and quick buttons
+- Leave add/list, maintenance records, expenses sheet
+- /setup_menu posts menu in group and pins it (admin only)
+- Removes unknown slash commands/messages in group (keeps chat clean)
+- Default admin: markpeng1 (if BOT_ADMINS not set)
+- Scheduled jobs: daily summary, unfinished mission detection & notification
+- Monthly reports: missions & expenses
+- Many defensive measures for Google Sheets operations
 """
 
 import os
@@ -1224,99 +1229,121 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         pass
 
-# Improved process_force_reply (complete replacement)
+# Robust process_force_reply replacement (to fix "stuck" behavior)
 async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Improved ForceReply processor:
-    - Only process when user replies TO the bot's ForceReply message (preferred),
-      or when pending exists and message looks like a valid value (fallback).
-    - Uses initiator_id to ensure only the admin who opened the prompt can respond.
-    - Deletes the user's message after recording, clears pending flags, notifies admins.
+    Robust ForceReply processor:
+    - Prefer replies that are reply_to the bot's prompt (prompt_message_id).
+    - Fallback: if pending exists and the current user is the initiator, accept direct messages too.
+    - Deletes user's message after recording, removes bot prompt where possible, clears pending flags.
     """
     if not update.message or not update.message.text:
         return
+
     text = update.message.text.strip()
     user = update.effective_user
     uid = user.id if user else None
     reply_to = update.message.reply_to_message
 
-    # Helper to check initiator
+    # helpers
     def _is_initiator(pending):
         if not pending:
             return False
         init = pending.get("initiator_id")
+        # if no initiator recorded, allow (backwards compatibility)
         return (init is None) or (uid == init)
 
-    # First: handle pending_finance_inline (must be a reply to bot's ForceReply message if present)
+    async def _delete_message_safe(msg):
+        try:
+            if msg:
+                await msg.delete()
+        except Exception:
+            pass
+
+    async def _delete_bot_prompt_if_present(pending):
+        try:
+            pmid = pending.get("prompt_message_id")
+            if pmid and update.effective_chat:
+                try:
+                    await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=pmid)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Load pendings (admin finance inline/custom, leave)
     pending_inline = context.user_data.get("pending_finance_inline")
+    pending_fin = context.user_data.get("pending_finance")
+    pending_leave = context.user_data.get("pending_leave")
+
+    # Process pending_finance_inline (one-line inline form)
     if pending_inline:
+        # only initiator can respond
         if not _is_initiator(pending_inline):
-            # not the initiator -> ignore/delete
+            await _delete_message_safe(update.effective_message)
+            return
+
+        pmid = pending_inline.get("prompt_message_id")
+        # accept if reply_to matches pmid OR (no pmid) OR (initiator direct message)
+        accepted = False
+        if pmid and reply_to and reply_to.message_id == pmid:
+            accepted = True
+        elif not pmid:
+            accepted = True
+        elif _is_initiator(pending_inline) and not reply_to:
+            # initiator direct message fallback
+            accepted = True
+
+        if not accepted:
+            # ask user to reply to the ForceReply and delete stray
             try:
-                await update.effective_message.delete()
+                await _delete_message_safe(update.effective_message)
+            except Exception:
+                pass
+            try:
+                prompt_warn = await update.effective_chat.send_message("Please reply TO the bot's prompt (tap reply) so it can record your entry.")
+                await asyncio.sleep(2)
+                await _delete_message_safe(prompt_warn)
             except Exception:
                 pass
             return
 
-        # prefer reply_to matching prompt_message_id
-        prompt_id = pending_inline.get("prompt_message_id")
-        if prompt_id and (not reply_to or reply_to.message_id != prompt_id):
-            # user didn't reply to the bot prompt; ask them to reply properly then delete their message
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
-                warn = await update.effective_chat.send_message("Please reply to the bot's prompt (tap reply) so the bot can record the entry.")
-                await asyncio.sleep(3)
-                await warn.delete()
-            except Exception:
-                pass
-            return
-
-        # parse inline one-line: <type> <plate> <amount> [notes]
+        # parse one-line: <type> <plate> <amount> [notes]
         parts = text.split(None, 3)
         if len(parts) < 3:
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
+            await _delete_message_safe(update.effective_message)
             context.user_data.pop("pending_finance_inline", None)
             return
         typ_raw = parts[0]
         typ = normalize_fin_type(typ_raw) or typ_raw
         plate = parts[1]
         amount_raw = parts[2]
-        notes = parts[3] if len(parts) >= 4 else ""
-        # process odo vs amount
+        notes = parts[3] if len(parts) > 3 else ""
+
         if typ == "odo":
+            m = None
             m_match = ODO_RE.match(amount_raw)
-            if not m_match:
+            if m_match:
+                m = m_match.group(1)
+            if not m:
+                await _delete_message_safe(update.effective_message)
                 try:
-                    await update.effective_message.delete()
-                except Exception:
-                    pass
-                try:
-                    s = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
-                    await asyncio.sleep(3)
-                    await s.delete()
+                    warn = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
+                    await asyncio.sleep(2)
+                    await _delete_message_safe(warn)
                 except Exception:
                     pass
                 context.user_data.pop("pending_finance_inline", None)
                 return
-            m = m_match.group(1)
             res = record_finance_entry("odo", plate, m, notes, user.username or "")
         else:
             m_match = AMOUNT_RE.match(amount_raw)
             if not m_match:
+                await _delete_message_safe(update.effective_message)
                 try:
-                    await update.effective_message.delete()
-                except Exception:
-                    pass
-                try:
-                    s = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
-                    await asyncio.sleep(3)
-                    await s.delete()
+                    warn = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
+                    await asyncio.sleep(2)
+                    await _delete_message_safe(warn)
                 except Exception:
                     pass
                 context.user_data.pop("pending_finance_inline", None)
@@ -1324,185 +1351,182 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             amt = m_match.group(1)
             res = record_finance_entry(typ, plate, amt, notes, user.username or "")
 
-        # delete user's reply and clean up pending
-        try:
-            await update.effective_message.delete()
-        except Exception:
-            pass
+        # cleanup: delete user's message + bot prompt, clear pending
+        await _delete_message_safe(update.effective_message)
+        await _delete_bot_prompt_if_present(pending_inline)
         context.user_data.pop("pending_finance_inline", None)
         context.user_data.pop("pending_finance", None)
 
-        # notify admins privately and ack briefly in group (then delete ack)
+        # notify admins privately and ack shortly in group
         if res.get("ok"):
-            conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ=typ.capitalize() if typ else "Entry", plate=plate, amount=(m if typ=="odo" else (amt if 'amt' in locals() else amount_raw)))
             try:
+                amount_shown = m if typ == "odo" else amt
+                conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ=typ.capitalize(), plate=plate, amount=amount_shown)
                 await notify_admins_private(context.bot, conf_text)
             except Exception:
-                logger.debug("Failed to notify admins privately.")
+                pass
             try:
                 ack = await update.effective_chat.send_message("Recorded (admins notified).")
                 await asyncio.sleep(2)
-                await ack.delete()
+                await _delete_message_safe(ack)
             except Exception:
                 pass
         else:
             try:
-                s = await update.effective_chat.send_message("Failed to record finance entry.")
-                await asyncio.sleep(3)
-                await s.delete()
+                errm = await update.effective_chat.send_message("Failed to record entry.")
+                await asyncio.sleep(2)
+                await _delete_message_safe(errm)
             except Exception:
                 pass
         return
 
-    # Second: handle pending_finance (custom path)
-    pending = context.user_data.get("pending_finance")
-    if pending:
-        if not _is_initiator(pending):
+    # Process pending_finance (custom flow started from "Custom" quick button)
+    if pending_fin:
+        if not _is_initiator(pending_fin):
+            await _delete_message_safe(update.effective_message)
+            return
+
+        pmid = pending_fin.get("prompt_message_id")
+        accepted = False
+        if pmid and reply_to and reply_to.message_id == pmid:
+            accepted = True
+        elif not pmid:
+            accepted = True
+        elif _is_initiator(pending_fin) and not reply_to:
+            accepted = True
+
+        if not accepted:
+            await _delete_message_safe(update.effective_message)
             try:
-                await update.effective_message.delete()
+                tmp = await update.effective_chat.send_message("Please reply TO the bot's prompt (tap reply) so it can record your entry.")
+                await asyncio.sleep(2)
+                await _delete_message_safe(tmp)
             except Exception:
                 pass
             return
 
-        # prefer reply_to matching the prompt message id (if present)
-        prompt_id = pending.get("prompt_message_id")
-        if prompt_id and (not reply_to or reply_to.message_id != prompt_id):
-            # user didn't reply to the bot prompt — require proper reply
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
-                warn = await update.effective_chat.send_message("Please reply to the bot's prompt (tap reply) so the bot can record the entry.")
-                await asyncio.sleep(3)
-                await warn.delete()
-            except Exception:
-                pass
-            return
-
-        typ_raw = pending.get("typ")
+        typ_raw = pending_fin.get("typ")
         typ = normalize_fin_type(typ_raw) or typ_raw
-        plate = pending.get("plate")
+        plate = pending_fin.get("plate")
 
+        # ODO handling
         if typ == "odo":
             m_match = ODO_RE.match(text)
             if not m_match:
+                await _delete_message_safe(update.effective_message)
                 try:
-                    await update.effective_message.delete()
-                except Exception:
-                    pass
-                try:
-                    s = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
-                    await asyncio.sleep(3)
-                    await s.delete()
+                    warn = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
+                    await asyncio.sleep(2)
+                    await _delete_message_safe(warn)
                 except Exception:
                     pass
                 context.user_data.pop("pending_finance", None)
                 return
             m = m_match.group(1)
             res = record_finance_entry("odo", plate, m, "", user.username or "")
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
+            await _delete_message_safe(update.effective_message)
+            await _delete_bot_prompt_if_present(pending_fin)
             context.user_data.pop("pending_finance", None)
             context.user_data.pop("pending_finance_inline", None)
             if res.get("ok"):
-                conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ="Odo", plate=plate, amount=m)
                 try:
+                    conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ="Odo", plate=plate, amount=m)
                     await notify_admins_private(context.bot, conf_text)
                 except Exception:
-                    logger.debug("Failed to notify admins privately.")
+                    pass
                 try:
                     ack = await update.effective_chat.send_message("Recorded (admins notified).")
                     await asyncio.sleep(2)
-                    await ack.delete()
+                    await _delete_message_safe(ack)
                 except Exception:
                     pass
             else:
                 try:
-                    s = await update.effective_chat.send_message("Failed to record ODO.")
-                    await asyncio.sleep(3)
-                    await s.delete()
-                except Exception:
-                    pass
-            return
-        else:
-            # expecting "<amount> [notes]"
-            parts = text.split(None, 1)
-            if not parts:
-                try:
-                    await update.effective_message.delete()
-                except Exception:
-                    pass
-                context.user_data.pop("pending_finance", None)
-                return
-            amount_raw = parts[0]
-            notes = parts[1] if len(parts) > 1 else ""
-            m_match = AMOUNT_RE.match(amount_raw)
-            if not m_match:
-                try:
-                    await update.effective_message.delete()
-                except Exception:
-                    pass
-                try:
-                    s = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
-                    await asyncio.sleep(3)
-                    await s.delete()
-                except Exception:
-                    pass
-                context.user_data.pop("pending_finance", None)
-                return
-            amt = m_match.group(1)
-            res = record_finance_entry(typ, plate, amt, notes, user.username or "")
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            context.user_data.pop("pending_finance", None)
-            context.user_data.pop("pending_finance_inline", None)
-            if res.get("ok"):
-                conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ=typ.capitalize(), plate=plate, amount=amt)
-                try:
-                    await notify_admins_private(context.bot, conf_text)
-                except Exception:
-                    logger.debug("Failed to notify admins privately.")
-                try:
-                    ack = await update.effective_chat.send_message("Recorded (admins notified).")
+                    errm = await update.effective_chat.send_message("Failed to record ODO.")
                     await asyncio.sleep(2)
-                    await ack.delete()
-                except Exception:
-                    pass
-            else:
-                try:
-                    s = await update.effective_chat.send_message("Failed to record finance entry.")
-                    await asyncio.sleep(3)
-                    await s.delete()
+                    await _delete_message_safe(errm)
                 except Exception:
                     pass
             return
 
-    # Third: handle pending_leave (ForceReply for leave_add)
-    pending_leave = context.user_data.get("pending_leave")
-    if pending_leave:
-        initiator = pending_leave.get("initiator_id")
-        if initiator and uid != initiator:
+        # Non-ODO (amount + optional notes)
+        parts = text.split(None, 1)
+        if not parts:
+            await _delete_message_safe(update.effective_message)
+            context.user_data.pop("pending_finance", None)
+            return
+        amount_raw = parts[0]
+        notes = parts[1] if len(parts) > 1 else ""
+        m_match = AMOUNT_RE.match(amount_raw)
+        if not m_match:
+            await _delete_message_safe(update.effective_message)
             try:
-                await update.effective_message.delete()
+                warn = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
+                await asyncio.sleep(2)
+                await _delete_message_safe(warn)
+            except Exception:
+                pass
+            context.user_data.pop("pending_finance", None)
+            return
+        amt = m_match.group(1)
+        res = record_finance_entry(typ, plate, amt, notes, user.username or "")
+        await _delete_message_safe(update.effective_message)
+        await _delete_bot_prompt_if_present(pending_fin)
+        context.user_data.pop("pending_finance", None)
+        context.user_data.pop("pending_finance_inline", None)
+        if res.get("ok"):
+            try:
+                conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ=typ.capitalize(), plate=plate, amount=amt)
+                await notify_admins_private(context.bot, conf_text)
+            except Exception:
+                pass
+            try:
+                ack = await update.effective_chat.send_message("Recorded (admins notified).")
+                await asyncio.sleep(2)
+                await _delete_message_safe(ack)
+            except Exception:
+                pass
+        else:
+            try:
+                errm = await update.effective_chat.send_message("Failed to record entry.")
+                await asyncio.sleep(2)
+                await _delete_message_safe(errm)
+            except Exception:
+                pass
+        return
+
+    # Process pending_leave (ForceReply flow for leave_add)
+    if pending_leave:
+        if not _is_initiator(pending_leave):
+            await _delete_message_safe(update.effective_message)
+            return
+
+        pmid = pending_leave.get("prompt_message_id")
+        accepted = False
+        if pmid and reply_to and reply_to.message_id == pmid:
+            accepted = True
+        elif not pmid:
+            accepted = True
+        elif _is_initiator(pending_leave) and not reply_to:
+            accepted = True
+
+        if not accepted:
+            await _delete_message_safe(update.effective_message)
+            try:
+                tmp = await update.effective_chat.send_message("Please reply TO the bot's prompt (tap reply) with leave info.")
+                await asyncio.sleep(2)
+                await _delete_message_safe(tmp)
             except Exception:
                 pass
             return
-        # require reply_to to be the bot's prompt if we had stored it
+
         parts = text.split(None, 4)
         if len(parts) < 4:
+            await _delete_message_safe(update.effective_message)
             try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
-                s = await update.effective_chat.send_message("Invalid format. " + t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
-                await asyncio.sleep(3)
-                await s.delete()
+                warn = await update.effective_chat.send_message("Invalid format. " + t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
+                await asyncio.sleep(2)
+                await _delete_message_safe(warn)
             except Exception:
                 pass
             context.user_data.pop("pending_leave", None)
@@ -1516,47 +1540,39 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             datetime.strptime(start, "%Y-%m-%d")
             datetime.strptime(end, "%Y-%m-%d")
         except Exception:
+            await _delete_message_safe(update.effective_message)
             try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
-                s = await update.effective_chat.send_message("Invalid dates. Expected YYYY-MM-DD.")
-                await asyncio.sleep(3)
-                await s.delete()
+                warn = await update.effective_chat.send_message("Invalid dates. Expected YYYY-MM-DD.")
+                await asyncio.sleep(2)
+                await _delete_message_safe(warn)
             except Exception:
                 pass
             context.user_data.pop("pending_leave", None)
             return
         res = add_driver_leave(driver, start, end, reason, notes)
-        try:
-            await update.effective_message.delete()
-        except Exception:
-            pass
+        await _delete_message_safe(update.effective_message)
+        await _delete_bot_prompt_if_present(pending_leave)
+        context.user_data.pop("pending_leave", None)
         if res.get("ok"):
             try:
-                s = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_confirm", driver=driver, start=start, end=end, reason=reason))
-                await asyncio.sleep(3)
-                await s.delete()
+                ack = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_confirm", driver=driver, start=start, end=end, reason=reason))
+                await asyncio.sleep(2)
+                await _delete_message_safe(ack)
             except Exception:
                 pass
         else:
             try:
-                s = await update.effective_chat.send_message("Failed to record leave.")
-                await asyncio.sleep(3)
-                await s.delete()
+                errm = await update.effective_chat.send_message("Failed to record leave.")
+                await asyncio.sleep(2)
+                await _delete_message_safe(errm)
             except Exception:
                 pass
-        context.user_data.pop("pending_leave", None)
         return
 
-    # If nothing pending, ignore or optionally delete stray message in group
+    # No pending -> remove stray numeric messages in group to keep chat clean
     if update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
         if ODO_RE.match(text) or AMOUNT_RE.match(text):
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
+            await _delete_message_safe(update.effective_message)
             return
 
     return
