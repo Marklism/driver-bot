@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """
-Driver Bot — Updated:
-- /leave_list returns a nice table
-- Admin inline finance supports more short aliases
-- Finance confirmations sent to BOT_ADMINS via private chat
-- Invalid slash commands in groups are deleted
-Replace your current bot file with this entire script.
+Driver Bot — Updated: fix stuck custom amount/ODO flow + default admin markpeng1
+Replace your bot file with this entire script.
 """
 
 import os
@@ -90,6 +86,9 @@ LEAVE_TAB = os.getenv("LEAVE_TAB", "Driver_Leave")
 MAINT_TAB = os.getenv("MAINT_TAB", "Vehicle_Maintenance")
 EXPENSE_TAB = os.getenv("EXPENSE_TAB", "Trip_Expenses")
 
+# default admin (used if BOT_ADMINS env not set)
+BOT_ADMINS_DEFAULT = "markpeng1"
+
 M_IDX_GUID = 0
 M_IDX_NO = 1
 M_IDX_NAME = 2
@@ -159,7 +158,7 @@ TR = {
     },
     "km": {
         "menu": "ម៉ឺនុយបូត — សូមជ្រើសប៊ូតុង:",
-        "choose_start": "ជ្រើស plate ដើម្បីចាប់ផ្ដើមដំណើរ:",
+        "choose_start": "ជ្រើស plate ដើម្បីចាប់ផ្តើមដំណើរ:",
         "choose_end": "ជ្រើស plate ដើម្បីបញ្ចប់ដំណើរ:",
         "start_ok": "✅ ចាប់ផ្ដើមដំណើរ {plate} ({driver}). {msg}",
         "end_ok": "✅ បញ្ចប់ដំណើរ {plate} ({driver}). {msg}",
@@ -734,14 +733,16 @@ def normalize_fin_type(typ: str) -> Optional[str]:
         return typ
     if typ in FIN_TYPE_ALIASES:
         return FIN_TYPE_ALIASES[typ]
-    # try prefix matches
     for k, v in FIN_TYPE_ALIASES.items():
         if typ.startswith(k):
             return v
     return None
 
 async def notify_admins_private(bot, text: str):
-    admins = [u.strip() for u in os.getenv("BOT_ADMINS", "markpeng1,kmnyy").split(",") if u.strip()]
+    raw = os.getenv("BOT_ADMINS", "").strip()
+    if not raw:
+        raw = BOT_ADMINS_DEFAULT
+    admins = [u.strip() for u in raw.split(",") if u.strip()]
     for a in admins:
         try:
             if a.startswith("@"):
@@ -811,7 +812,7 @@ async def notify_unfinished_missions(context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 logger.debug("Failed to DM driver %s; skipping.", driver)
     except Exception:
-        logger.exception("Failed notify_unfinished_missions")
+        logger.exception("Failed to notify_unfinished_missions")
 
 # Admin check helper
 async def is_chat_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, username: Optional[str] = None) -> bool:
@@ -823,7 +824,8 @@ async def is_chat_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_i
         logger.debug("Could not fetch chat member for admin check; falling back to BOT_ADMINS.")
     if username:
         uname = username.lstrip("@")
-        if uname in {u.strip() for u in os.getenv("BOT_ADMINS", "").split(",") if u.strip()}:
+        raw = os.getenv("BOT_ADMINS", "").strip() or BOT_ADMINS_DEFAULT
+        if uname in {u.strip() for u in raw.split(",") if u.strip()}:
             return True
     return False
 
@@ -1071,7 +1073,6 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     if data == "fin|inline":
-        # ask for one-line inline form: type plate amount [notes]
         context.user_data["pending_finance_inline"] = {"initiator_id": user.id}
         try:
             prompt = t(context.user_data.get("lang", DEFAULT_LANG), "fin_inline_prompt")
@@ -1095,7 +1096,8 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
                 prompt = "Please reply in this chat with ODO in KM (e.g. `12345` or `12345KM`). This message will be removed after recording."
             else:
                 prompt = f"Please reply in this chat with numeric amount (no currency) for {typ.upper()} on {plate}.\nFormat: <amount> [optional notes]\nExample: `23.5 bought diesel`"
-            await query.edit_message_text(prompt, reply_markup=_build_amount_buttons_for_fin(typ, plate))
+            context.user_data["pending_finance"] = {"typ": typ, "plate": plate, "initiator_id": user.id}
+            await query.edit_message_text(prompt, reply_markup=ForceReply(selective=True))
         except Exception:
             await query.message.reply_text(prompt, reply_markup=_build_amount_buttons_for_fin(typ, plate))
         return
@@ -1117,18 +1119,19 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
                     return
                 m = m_match.group(1)
                 res = record_finance_entry("odo", plate, m, "", username or "")
+                # make sure pending flags removed
+                context.user_data.pop("pending_finance", None)
+                context.user_data.pop("pending_finance_inline", None)
                 if res.get("ok"):
                     try:
                         await query.message.delete()
                     except Exception:
                         pass
-                    # send private confirmations to admins
                     conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ="Odo", plate=plate, amount=m)
                     try:
                         await notify_admins_private(context.bot, conf_text)
                     except Exception:
                         logger.debug("Failed to notify admins privately.")
-                    # ephemeral ack in group
                     try:
                         sent = await context.bot.send_message(chat_id=query.message.chat.id, text="Recorded (admins notified).")
                         await asyncio.sleep(3)
@@ -1152,6 +1155,8 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
                     return
                 amt = m_match.group(1)
                 res = record_finance_entry(typ, plate, amt, "", username or "")
+                context.user_data.pop("pending_finance", None)
+                context.user_data.pop("pending_finance_inline", None)
                 if res.get("ok"):
                     try:
                         await query.message.delete()
@@ -1201,16 +1206,13 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 # Process ForceReply replies for finance inline/custom and leave
 async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # This handler covers:
-    # - pending_finance (custom from amount->custom)
-    # - pending_finance_inline (one-line inline form)
-    # - pending_leave (leave ForceReply)
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip()
     user = update.effective_user
     uid = user.id if user else None
-    # Handle inline finance first
+
+    # Handle inline finance (one-line)
     pending_inline = context.user_data.get("pending_finance_inline")
     if pending_inline:
         initiator = pending_inline.get("initiator_id")
@@ -1262,6 +1264,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.effective_message.delete()
             except Exception:
                 pass
+            context.user_data.pop("pending_finance_inline", None)
+            context.user_data.pop("pending_finance", None)
             if res.get("ok"):
                 conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ="Odo", plate=plate, amount=m)
                 try:
@@ -1281,7 +1285,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await s.delete()
                 except Exception:
                     pass
-            context.user_data.pop("pending_finance_inline", None)
             return
         else:
             m_match = AMOUNT_RE.match(amount_raw)
@@ -1304,6 +1307,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.effective_message.delete()
             except Exception:
                 pass
+            context.user_data.pop("pending_finance_inline", None)
+            context.user_data.pop("pending_finance", None)
             if res.get("ok"):
                 conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ=typ.capitalize(), plate=plate, amount=amt)
                 try:
@@ -1323,7 +1328,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await s.delete()
                 except Exception:
                     pass
-            context.user_data.pop("pending_finance_inline", None)
             return
 
     # Handle custom finance pending_finance (from "Custom" option)
@@ -1360,6 +1364,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.effective_message.delete()
             except Exception:
                 pass
+            context.user_data.pop("pending_finance", None)
+            context.user_data.pop("pending_finance_inline", None)
             if res.get("ok"):
                 conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ="Odo", plate=plate, amount=m)
                 try:
@@ -1379,7 +1385,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await s.delete()
                 except Exception:
                     pass
-            context.user_data.pop("pending_finance", None)
             return
         else:
             parts = text.split(None, 1)
@@ -1412,6 +1417,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.effective_message.delete()
             except Exception:
                 pass
+            context.user_data.pop("pending_finance", None)
+            context.user_data.pop("pending_finance_inline", None)
             if res.get("ok"):
                 conf_text = t(context.user_data.get("lang", DEFAULT_LANG), "confirm_recorded", typ=typ.capitalize(), plate=plate, amount=amt)
                 try:
@@ -1431,7 +1438,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await s.delete()
                 except Exception:
                     pass
-            context.user_data.pop("pending_finance", None)
             return
 
     # Handle leave add ForceReply
@@ -2189,7 +2195,6 @@ def register_ui_handlers(application):
         if not rows:
             await update.effective_chat.send_message("No leave records found.")
             return
-        # build markdown table
         header = ["Driver", "Start", "End", "Reason", "Notes"]
         lines = ["| " + " | ".join(header) + " |", "| " + " | ".join(["---"] * len(header)) + " |"]
         for r in rows:
@@ -2203,7 +2208,6 @@ def register_ui_handlers(application):
         try:
             await update.effective_chat.send_message(md, parse_mode="Markdown")
         except Exception:
-            # fallback plain text
             text = "\n".join([f"{r.get('Driver','')}: {r.get('Start Date','')} -> {r.get('End Date','')} ({r.get('Reason','')}) {r.get('Notes','')}" for r in rows])
             await update.effective_chat.send_message(text)
     application.add_handler(CommandHandler("leave_list", leave_list_cmd))
@@ -2285,7 +2289,6 @@ def register_ui_handlers(application):
         text = (update.effective_message.text or "").strip()
         if not text.startswith("/"):
             return
-        # extract command name without bot username
         cmd = text.split(None, 1)[0][1:]
         cmd = cmd.split("@", 1)[0].lower()
         if cmd and cmd not in VALID_COMMANDS and not cmd.startswith("setup"):
