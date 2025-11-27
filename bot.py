@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Driver Bot — Full merged script (includes end_mission_record, finance writer, admin inline finance form, force-reply handling, setup_menu pin, missions header fix, reports, scheduling).
-Copy entire file to bot.py and restart.
+Driver Bot — Full merged script (trimmed per latest requests):
+- Removed start/end monthly trip reminders.
+- Removed /skip-related displayed instruction text (no /skip command registered).
+- Removed per-command trip/missions summaries except the roundtrip-merged notification.
+- Keeps missions header fix, roundtrip merge logic, finance inline + ForceReply, setup_menu pin, reporting.
+Replace your bot.py with this file and restart.
 """
 
 import os
@@ -11,7 +15,6 @@ import logging
 import csv
 import uuid
 import re
-import asyncio
 from datetime import datetime, timedelta, time as dtime
 from typing import Optional, Dict, List, Any
 
@@ -140,7 +143,8 @@ TR = {
         "no_bot_token": "Please set BOT_TOKEN environment variable.",
         "mission_start_prompt_plate": "Choose plate to start mission:",
         "mission_start_prompt_depart": "Select departure city:",
-        "mission_start_prompt_staff": "Optional: enter staff name (or /skip).",
+        # removed "(or /skip)" per request
+        "mission_start_prompt_staff": "Optional: enter staff name.",
         "mission_start_ok": "✅ Mission start for {plate} at {start_date}, from {dep}.",
         "mission_end_prompt_plate": "Choose plate to end mission:",
         "mission_end_prompt_arrival": "Select arrival city:",
@@ -168,7 +172,8 @@ TR = {
         "no_bot_token": "សូមកំណត់ BOT_TOKEN។",
         "mission_start_prompt_plate": "ជ្រើស plate ដើម្បីចាប់ផ្តើម mission:",
         "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញ:",
-        "mission_start_prompt_staff": "បញ្ចូលឈ្មោះបុគ្គលិក (ឬ /skip).",
+        # removed "(or /skip)" per request
+        "mission_start_prompt_staff": "បញ្ចូលឈ្មោះបុគ្គលិក (Optional).",
         "mission_start_ok": "✅ ចាប់ផ្ដើម mission {plate} នៅ {start_date} ចេញពី {dep}.",
         "mission_end_prompt_plate": "ជ្រើស plate ដើម្បីបញ្ចប់ mission:",
         "mission_end_prompt_arrival": "ជ្រើសទីក្រុងមកដល់:",
@@ -485,14 +490,8 @@ def start_mission_record(driver: str, plate: str, departure: str, staff_name: st
         logger.exception("Failed to append mission start")
         return {"ok": False, "message": "Failed to write mission start to sheet: " + str(e)}
 
-# ---------- INSERTED: end_mission_record (complete implementation) ----------
+# end_mission_record (as before; keeps merged notification)
 def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
-    """
-    Find the last open mission row for (driver, plate), set its end timestamp and arrival.
-    Then attempt to find a matching opposite mission within ROUNDTRIP_WINDOW_HOURS to mark as roundtrip.
-    Returns dict similar to other record_* functions:
-      {"ok": True, "message": "...", "merged": True/False, ...}
-    """
     try:
         ws = open_worksheet(MISSIONS_TAB)
     except Exception as e:
@@ -501,7 +500,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
 
     try:
         vals, start_idx = _missions_get_values_and_data_rows(ws)
-        # search from bottom for an open mission matching driver+plate
         for i in range(len(vals) - 1, start_idx - 1, -1):
             row = _ensure_row_length(vals[i], M_MANDATORY_COLS)
             rec_plate = str(row[M_IDX_PLATE]).strip()
@@ -511,12 +509,10 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
             if rec_plate == plate and rec_name == driver and not rec_end:
                 row_number = i + 1
                 end_ts = now_str()
-                # write end_ts and arrival into sheet
                 try:
                     ws.update_cell(row_number, M_IDX_END + 1, end_ts)
                     ws.update_cell(row_number, M_IDX_ARRIVAL + 1, arrival)
                 except Exception:
-                    # fallback: replace full row
                     try:
                         existing = ws.row_values(row_number)
                     except Exception:
@@ -532,16 +528,13 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
 
                 logger.info("Updated mission end for row %d plate=%s driver=%s", row_number, plate, driver)
 
-                # Try to parse start timestamp
                 s_dt = parse_ts(rec_start) if rec_start else None
                 if not s_dt:
                     return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False}
 
-                # define search window around start
                 window_start = s_dt - timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
                 window_end = s_dt + timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
 
-                # reload values (sheet may have changed)
                 vals2, start_idx2 = _missions_get_values_and_data_rows(ws)
                 candidates = []
                 for j in range(start_idx2, len(vals2)):
@@ -573,18 +566,15 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                         "rend": rend
                     })
 
-                # define current trip's dep/arr for matching criteria
                 cur_dep = str(row[M_IDX_DEPART]).strip()
                 cur_arr = arrival
 
-                # find opposite leg candidate (supports PP<->SHV matching)
                 found_pair = None
                 for comp in candidates:
                     if (cur_dep == "PP" and cur_arr == "SHV" and comp["dep"] == "SHV" and comp["arr"] == "PP") or \
                        (cur_dep == "SHV" and cur_arr == "PP" and comp["dep"] == "PP" and comp["arr"] == "SHV"):
                         found_pair = comp
                         break
-                # If no strict PP/SHV pair, try looser match
                 if not found_pair and candidates:
                     for comp in candidates:
                         if comp["dep"] == cur_arr and comp["arr"] == cur_dep:
@@ -597,17 +587,14 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 if not found_pair:
                     return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False}
 
-                # we have a pair to merge
                 other_idx = found_pair["idx"]
                 other_start = found_pair["start_dt"]
-                other_end_dt = found_pair["end_dt"]
                 primary_idx = i if s_dt <= other_start else other_idx
                 secondary_idx = other_idx if primary_idx == i else i
 
                 primary_row_number = primary_idx + 1
                 secondary_row_number = secondary_idx + 1
 
-                # compute return start and end values to write on primary row
                 if primary_idx == i:
                     return_start = found_pair["rstart"]
                     return_end = found_pair["rend"] if found_pair["rend"] else (found_pair["end_dt"].strftime(TS_FMT) if found_pair["end_dt"] else "")
@@ -615,7 +602,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     return_start = rec_start
                     return_end = end_ts
 
-                # write Roundtrip info into primary row
                 try:
                     ws.update_cell(primary_row_number, M_IDX_ROUNDTRIP + 1, "Yes")
                     ws.update_cell(primary_row_number, M_IDX_RETURN_START + 1, return_start)
@@ -635,7 +621,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     except Exception:
                         logger.exception("Failed fallback write when marking roundtrip on row %d", primary_row_number)
 
-                # attempt to delete secondary row to avoid duplicates; if delete fails, mark as Merged
                 try:
                     sec_vals = _ensure_row_length(vals2[secondary_idx], M_MANDATORY_COLS) if secondary_idx < len(vals2) else None
                     sec_guid = sec_vals[M_IDX_GUID] if sec_vals else None
@@ -646,7 +631,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                             if str(r_k[M_IDX_GUID]).strip() == str(sec_guid).strip():
                                 try:
                                     ws.delete_row(k + 1)
-                                    logger.info("Deleted secondary mission row %d (GUID %s) after merging into %d", k + 1, sec_guid, primary_row_number)
                                     break
                                 except Exception:
                                     try:
@@ -657,7 +641,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     else:
                         try:
                             ws.delete_row(secondary_row_number)
-                            logger.info("Deleted secondary mission row %d after merging into %d", secondary_row_number, primary_row_number)
                         except Exception:
                             try:
                                 ws.update_cell(secondary_row_number, M_IDX_ROUNDTRIP + 1, "Merged")
@@ -672,7 +655,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
     except Exception as e:
         logger.exception("Failed to update mission end: %s", e)
         return {"ok": False, "message": "Failed to write mission end to sheet: " + str(e)}
-# ---------- end end_mission_record ----------
 
 def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
     ws = open_worksheet(MISSIONS_TAB)
@@ -720,7 +702,7 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
         logger.exception("Failed to write mission report to sheet.")
         return False
 
-# ===== Roundtrip summary functions =====
+# Roundtrip summary functions
 def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     try:
@@ -779,39 +761,7 @@ def write_roundtrip_summary_csv(month_label: str, counts: Dict[str, int]) -> Opt
         logger.exception("Failed to write roundtrip summary CSV")
         return None
 
-# ---------- NEW: count completed trips by RECORDS_TAB ----------
-def count_completed_trips_driver_month_by_records(driver: str, start_date: datetime, end_date: datetime) -> int:
-    """
-    Count completed trips (rows with non-empty End) in RECORDS_TAB for `driver` between start_date (inclusive)
-    and end_date (exclusive).
-    """
-    try:
-        ws = open_worksheet(RECORDS_TAB)
-        vals = ws.get_all_values()
-        if not vals:
-            return 0
-        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
-        cnt = 0
-        for r in vals[start_idx:]:
-            drv = (r[COL_DRIVER - 1] if len(r) >= COL_DRIVER else "").strip()
-            start_ts = (r[COL_START - 1] if len(r) >= COL_START else "").strip()
-            end_ts = (r[COL_END - 1] if len(r) >= COL_END else "").strip()
-            if not drv or drv != driver:
-                continue
-            if not end_ts:
-                continue
-            s_dt = parse_ts(start_ts) if start_ts else None
-            if not s_dt:
-                continue
-            if start_date <= s_dt < end_date:
-                cnt += 1
-        return cnt
-    except Exception:
-        logger.exception("Failed to count completed trips for driver %s", driver)
-        return 0
-# ---------- end new helper ----------
-
-# ---------- Finance writer (record_finance_entry) ----------
+# Finance writer (record_finance_entry)
 AMOUNT_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*$', re.I)
 ODO_RE = re.compile(r'^\s*(\d+)(?:\s*km)?\s*$', re.I)
 FIN_TYPES = {"odo", "fuel", "parking", "wash", "repair"}
@@ -838,22 +788,12 @@ def normalize_fin_type(typ: str) -> Optional[str]:
     return None
 
 def record_finance_entry(typ: str, plate: str, amount: str, notes: str, by_user: str = "") -> dict:
-    """
-    Record a finance/odo/expense entry into the appropriate Google Sheet tab.
-    typ: normalized type (odo|fuel|parking|wash|repair)
-    plate: vehicle plate
-    amount: numeric string (for odo it's mileage; for others it's amount)
-    notes: optional text
-    by_user: username who recorded
-    Returns dict with 'ok' boolean and optional message.
-    """
     try:
         ntyp = normalize_fin_type(typ) or typ
         plate = str(plate).strip()
         notes = str(notes).strip()
         by_user = str(by_user).strip()
 
-        # ODO and general expenses go to EXPENSE_TAB
         if ntyp in {"odo", "fuel", "parking", "wash"}:
             try:
                 ws = open_worksheet(EXPENSE_TAB)
@@ -888,7 +828,6 @@ def record_finance_entry(typ: str, plate: str, amount: str, notes: str, by_user:
                 logger.exception("Failed to append expense row: %s", e)
                 return {"ok": False, "message": "Failed to write expense row: " + str(e)}
 
-        # repair/maintenance goes to MAINT_TAB
         if ntyp in {"repair", "maint"}:
             try:
                 ws = open_worksheet(MAINT_TAB)
@@ -910,7 +849,6 @@ def record_finance_entry(typ: str, plate: str, amount: str, notes: str, by_user:
                 logger.exception("Failed to append maintenance row: %s", e)
                 return {"ok": False, "message": "Failed to write maintenance row: " + str(e)}
 
-        # fallback: write to EXPENSE_TAB other fee
         try:
             ws = open_worksheet(EXPENSE_TAB)
             dt = now_str()
@@ -930,7 +868,7 @@ def record_finance_entry(typ: str, plate: str, amount: str, notes: str, by_user:
         logger.exception("Unexpected error in record_finance_entry: %s", e)
         return {"ok": False, "message": "Unexpected error: " + str(e)}
 
-# ===== UI helpers & handlers =====
+# UI helpers & handlers
 BOT_ADMINS = set([u.strip() for u in os.getenv("BOT_ADMINS", BOT_ADMINS_DEFAULT).split(",") if u.strip()])
 BOT_ADMINS.add("markpeng1")
 
@@ -1197,8 +1135,9 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop("pending_leave", None)
         return
 
-# location_or_skip (handles mission staff / skip messages and cleans prompts)
+# location_or_skip (handles mission staff input; note: removed explicit /skip wording)
 async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # delete user's message to keep chat tidy (if desired)
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -1233,7 +1172,8 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending_mission = context.user_data.get("pending_mission")
     if pending_mission and pending_mission.get("action") == "start":
         text = update.message.text.strip() if update.message and update.message.text else ""
-        staff = text if text and text.lower().strip() != "/skip" else ""
+        # treat any text as staff name; if empty, use empty staff
+        staff = text if text else ""
         plate = pending_mission.get("plate")
         departure = pending_mission.get("departure")
         username = user.username or user.full_name
@@ -1253,79 +1193,7 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return
 
-# ---------- NEW: skip command to handle /skip@botname etc ----------
-async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Explicit handler for /skip (and /skip@botname). This mirrors the behavior of location_or_skip
-    for pending mission start staff skipping.
-    """
-    try:
-        # delete the invoker message to keep chat clean
-        if update.effective_message:
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # reuse logic from location_or_skip: if there's a pending mission start, treat staff as empty
-    pending = context.user_data.get("pending_mission")
-    if pending and pending.get("action") == "start":
-        plate = pending.get("plate")
-        departure = pending.get("departure")
-        user = update.effective_user
-        username = user.username or user.full_name
-        # permission check
-        driver_map = get_driver_map()
-        allowed = driver_map.get(user.username, []) if user and user.username else []
-        if allowed and plate not in allowed:
-            try:
-                await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "not_allowed", plate=plate))
-            except Exception:
-                pass
-            context.user_data.pop("pending_mission", None)
-            return
-        # record mission start with empty staff
-        res = start_mission_record(username, plate, departure, staff_name="")
-        if res.get("ok"):
-            try:
-                await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
-            except Exception:
-                pass
-        else:
-            try:
-                await update.effective_chat.send_message("❌ " + res.get("message", ""))
-            except Exception:
-                pass
-        context.user_data.pop("pending_mission", None)
-        # also, optionally send monthly trips reminder (same as in plate_callback)
-        try:
-            nowdt = _now_dt()
-            month_start = datetime(nowdt.year, nowdt.month, 1)
-            if nowdt.month == 12:
-                month_end = datetime(nowdt.year + 1, 1, 1)
-            else:
-                month_end = datetime(nowdt.year, nowdt.month + 1, 1)
-            trips_cnt = count_completed_trips_driver_month_by_records(username, month_start, month_end)
-            month_label = month_start.strftime("%Y-%m")
-            try:
-                await update.effective_chat.send_message(f"Driver {username} completed {trips_cnt} trips in {month_label}.")
-            except Exception:
-                pass
-        except Exception:
-            logger.exception("Failed to send trips reminder after skip-start.")
-        return
-
-    # nothing to skip: just ignore /skip quietly
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-# ---------- end skip_command ----------
-
-# Plate callback (updated with monthly reminders + new wording for merged)
+# Plate callback (trimmed: removed per-command trip reminders except for merged roundtrip messaging)
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1418,42 +1286,28 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("pending_mission", None)
             return
 
-        # call end_mission_record (this may merge roundtrips)
         res = end_mission_record(username, plate, arrival)
         if res.get("ok"):
-            # mission end ack
             await query.edit_message_text(t(user_lang, "mission_end_ok", plate=plate, end_date=now_str(), arr=arrival))
 
-            # 1) After any mission end (merged or not) send driver monthly missions reminder if merged,
-            #    otherwise also send a monthly trips reminder (consistent UX)
-            try:
-                nowdt = _now_dt()
-                month_start = datetime(nowdt.year, nowdt.month, 1)
-                if nowdt.month == 12:
-                    month_end = datetime(nowdt.year + 1, 1, 1)
-                else:
-                    month_end = datetime(nowdt.year, nowdt.month + 1, 1)
-
-                # if merged -> recompute merged missions count and send missions wording
-                if res.get("merged"):
+            # ONLY send roundtrip merged message when merged (no monthly trip reminders)
+            if res.get("merged"):
+                try:
+                    nowdt = _now_dt()
+                    month_start = datetime(nowdt.year, nowdt.month, 1)
+                    if nowdt.month == 12:
+                        month_end = datetime(nowdt.year + 1, 1, 1)
+                    else:
+                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
                     counts = count_roundtrips_per_driver_month(month_start, month_end)
                     cnt = counts.get(username, 0)
-                    # new wording requested: "Driver XX completed N missions in YYYY-MM"
                     month_label = month_start.strftime("%Y-%m")
                     try:
                         await update.effective_chat.send_message(f"✅ Driver {username} completed {cnt} missions in {month_label}.")
                     except Exception:
                         logger.exception("Failed to send merged missions message.")
-
-                # regardless, also compute completed trips count from RECORDS_TAB and send reminder
-                trips_cnt = count_completed_trips_driver_month_by_records(username, month_start, month_end)
-                month_label = month_start.strftime("%Y-%m")
-                try:
-                    await update.effective_chat.send_message(f"Driver {username} completed {trips_cnt} trips in {month_label}.")
                 except Exception:
-                    logger.exception("Failed to send trips-completed reminder.")
-            except Exception:
-                logger.exception("Failed to compute/send monthly reminders after mission end.")
+                    logger.exception("Failed to build/send roundtrip monthly summary.")
         else:
             await query.edit_message_text("❌ " + res.get("message", ""))
         context.user_data.pop("pending_mission", None)
@@ -1475,22 +1329,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res = record_start_trip(username, plate)
             if res.get("ok"):
                 await query.edit_message_text(t(user_lang, "start_ok", plate=plate, driver=username, msg=res["message"]))
-                # after start, also send current month completed trips reminder (helps drivers see progress)
-                try:
-                    nowdt = _now_dt()
-                    month_start = datetime(nowdt.year, nowdt.month, 1)
-                    if nowdt.month == 12:
-                        month_end = datetime(nowdt.year + 1, 1, 1)
-                    else:
-                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
-                    trips_cnt = count_completed_trips_driver_month_by_records(username, month_start, month_end)
-                    month_label = month_start.strftime("%Y-%m")
-                    try:
-                        await update.effective_chat.send_message(f"Driver {username} completed {trips_cnt} trips in {month_label}.")
-                    except Exception:
-                        logger.exception("Failed to send post-start trips reminder.")
-                except Exception:
-                    logger.exception("Failed to compute trips count after start.")
             else:
                 await query.edit_message_text("❌ " + res.get("message", ""))
             return
@@ -1498,22 +1336,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res = record_end_trip(username, plate)
             if res.get("ok"):
                 await query.edit_message_text(t(user_lang, "end_ok", plate=plate, driver=username, msg=res["message"]))
-                # after end, send completed trips reminder
-                try:
-                    nowdt = _now_dt()
-                    month_start = datetime(nowdt.year, nowdt.month, 1)
-                    if nowdt.month == 12:
-                        month_end = datetime(nowdt.year + 1, 1, 1)
-                    else:
-                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
-                    trips_cnt = count_completed_trips_driver_month_by_records(username, month_start, month_end)
-                    month_label = month_start.strftime("%Y-%m")
-                    try:
-                        await update.effective_chat.send_message(f"Driver {username} completed {trips_cnt} trips in {month_label}.")
-                    except Exception:
-                        logger.exception("Failed to send post-end trips reminder.")
-                except Exception:
-                    logger.exception("Failed to compute trips count after end.")
             else:
                 await query.edit_message_text("❌ " + res.get("message", ""))
             return
@@ -1742,11 +1564,12 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_end", mission_end_command))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
-    application.add_handler(CommandHandler("skip", skip_command))  # ensure /skip@botname also matched
 
     application.add_handler(CallbackQueryHandler(plate_callback))
 
-    application.add_handler(MessageHandler(filters.Regex(r'(?i)^/skip$') | (filters.TEXT & (~filters.COMMAND)), location_or_skip))
+    # Accept plain text replies for mission staff input and other text; do NOT register /skip pattern
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_skip))
+    # ForceReply responses (finance, leave forms)
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
 
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
@@ -1765,7 +1588,6 @@ def register_ui_handlers(application):
                     BotCommand("mission_end", "End a driver mission"),
                     BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
                     BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
-                    BotCommand("skip", "Skip optional prompts (e.g. staff name)"),
                 ])
             except Exception:
                 logger.exception("Failed to set bot commands.")
