@@ -779,6 +779,38 @@ def write_roundtrip_summary_csv(month_label: str, counts: Dict[str, int]) -> Opt
         logger.exception("Failed to write roundtrip summary CSV")
         return None
 
+# ---------- NEW: count completed trips by RECORDS_TAB ----------
+def count_completed_trips_driver_month_by_records(driver: str, start_date: datetime, end_date: datetime) -> int:
+    """
+    Count completed trips (rows with non-empty End) in RECORDS_TAB for `driver` between start_date (inclusive)
+    and end_date (exclusive).
+    """
+    try:
+        ws = open_worksheet(RECORDS_TAB)
+        vals = ws.get_all_values()
+        if not vals:
+            return 0
+        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
+        cnt = 0
+        for r in vals[start_idx:]:
+            drv = (r[COL_DRIVER - 1] if len(r) >= COL_DRIVER else "").strip()
+            start_ts = (r[COL_START - 1] if len(r) >= COL_START else "").strip()
+            end_ts = (r[COL_END - 1] if len(r) >= COL_END else "").strip()
+            if not drv or drv != driver:
+                continue
+            if not end_ts:
+                continue
+            s_dt = parse_ts(start_ts) if start_ts else None
+            if not s_dt:
+                continue
+            if start_date <= s_dt < end_date:
+                cnt += 1
+        return cnt
+    except Exception:
+        logger.exception("Failed to count completed trips for driver %s", driver)
+        return 0
+# ---------- end new helper ----------
+
 # ---------- Finance writer (record_finance_entry) ----------
 AMOUNT_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*$', re.I)
 ODO_RE = re.compile(r'^\s*(\d+)(?:\s*km)?\s*$', re.I)
@@ -1221,7 +1253,79 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return
 
-# Plate callback (handles many inline actions)
+# ---------- NEW: skip command to handle /skip@botname etc ----------
+async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Explicit handler for /skip (and /skip@botname). This mirrors the behavior of location_or_skip
+    for pending mission start staff skipping.
+    """
+    try:
+        # delete the invoker message to keep chat clean
+        if update.effective_message:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # reuse logic from location_or_skip: if there's a pending mission start, treat staff as empty
+    pending = context.user_data.get("pending_mission")
+    if pending and pending.get("action") == "start":
+        plate = pending.get("plate")
+        departure = pending.get("departure")
+        user = update.effective_user
+        username = user.username or user.full_name
+        # permission check
+        driver_map = get_driver_map()
+        allowed = driver_map.get(user.username, []) if user and user.username else []
+        if allowed and plate not in allowed:
+            try:
+                await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "not_allowed", plate=plate))
+            except Exception:
+                pass
+            context.user_data.pop("pending_mission", None)
+            return
+        # record mission start with empty staff
+        res = start_mission_record(username, plate, departure, staff_name="")
+        if res.get("ok"):
+            try:
+                await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
+            except Exception:
+                pass
+        else:
+            try:
+                await update.effective_chat.send_message("❌ " + res.get("message", ""))
+            except Exception:
+                pass
+        context.user_data.pop("pending_mission", None)
+        # also, optionally send monthly trips reminder (same as in plate_callback)
+        try:
+            nowdt = _now_dt()
+            month_start = datetime(nowdt.year, nowdt.month, 1)
+            if nowdt.month == 12:
+                month_end = datetime(nowdt.year + 1, 1, 1)
+            else:
+                month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+            trips_cnt = count_completed_trips_driver_month_by_records(username, month_start, month_end)
+            month_label = month_start.strftime("%Y-%m")
+            try:
+                await update.effective_chat.send_message(f"Driver {username} completed {trips_cnt} trips in {month_label}.")
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("Failed to send trips reminder after skip-start.")
+        return
+
+    # nothing to skip: just ignore /skip quietly
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+# ---------- end skip_command ----------
+
+# Plate callback (updated with monthly reminders + new wording for merged)
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1230,6 +1334,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
+    # simple menu navigations
     if data == "show_start":
         await query.edit_message_text(t(user_lang, "choose_start"), reply_markup=build_plate_keyboard("start"))
         return
@@ -1246,6 +1351,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "help"))
         return
 
+    # admin finance entry launcher
     if data == "admin_finance":
         if (query.from_user.username or "") not in BOT_ADMINS:
             await query.edit_message_text("❌ Admins only.")
@@ -1255,6 +1361,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("fin_type|"):
         return await admin_fin_type_selected(update, context)
 
+    # mission start flow
     if data.startswith("mission_start_plate|"):
         _, plate = data.split("|", 1)
         context.user_data["pending_mission"] = {"action": "start", "plate": plate}
@@ -1262,6 +1369,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
+    # mission end flow
     if data.startswith("mission_end_plate|"):
         _, plate = data.split("|", 1)
         context.user_data["pending_mission"] = {"action": "end", "plate": plate}
@@ -1269,6 +1377,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "mission_end_prompt_arrival"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
+    # after selecting departure for start
     if data.startswith("mission_depart|"):
         _, dep = data.split("|", 1)
         pending = context.user_data.get("pending_mission")
@@ -1291,6 +1400,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("last_bot_prompt", None)
         return
 
+    # after selecting arrival for end
     if data.startswith("mission_arrival|"):
         _, arr = data.split("|", 1)
         pending = context.user_data.get("pending_mission")
@@ -1308,31 +1418,48 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("pending_mission", None)
             return
 
+        # call end_mission_record (this may merge roundtrips)
         res = end_mission_record(username, plate, arrival)
         if res.get("ok"):
+            # mission end ack
             await query.edit_message_text(t(user_lang, "mission_end_ok", plate=plate, end_date=now_str(), arr=arrival))
-            if res.get("merged"):
-                try:
-                    nowdt = _now_dt()
-                    month_start = datetime(nowdt.year, nowdt.month, 1)
-                    if nowdt.month == 12:
-                        month_end = datetime(nowdt.year + 1, 1, 1)
-                    else:
-                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+
+            # 1) After any mission end (merged or not) send driver monthly missions reminder if merged,
+            #    otherwise also send a monthly trips reminder (consistent UX)
+            try:
+                nowdt = _now_dt()
+                month_start = datetime(nowdt.year, nowdt.month, 1)
+                if nowdt.month == 12:
+                    month_end = datetime(nowdt.year + 1, 1, 1)
+                else:
+                    month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+
+                # if merged -> recompute merged missions count and send missions wording
+                if res.get("merged"):
                     counts = count_roundtrips_per_driver_month(month_start, month_end)
                     cnt = counts.get(username, 0)
-                    summary_msg = t(user_lang, "roundtrip_monthly_count", driver=username, count=cnt)
+                    # new wording requested: "Driver XX completed N missions in YYYY-MM"
+                    month_label = month_start.strftime("%Y-%m")
                     try:
-                        await update.effective_chat.send_message(t(user_lang, "roundtrip_merged_notify", driver=username, plate=plate, count_msg=summary_msg))
+                        await update.effective_chat.send_message(f"✅ Driver {username} completed {cnt} missions in {month_label}.")
                     except Exception:
-                        await update.effective_chat.send_message(summary_msg)
+                        logger.exception("Failed to send merged missions message.")
+
+                # regardless, also compute completed trips count from RECORDS_TAB and send reminder
+                trips_cnt = count_completed_trips_driver_month_by_records(username, month_start, month_end)
+                month_label = month_start.strftime("%Y-%m")
+                try:
+                    await update.effective_chat.send_message(f"Driver {username} completed {trips_cnt} trips in {month_label}.")
                 except Exception:
-                    logger.exception("Failed to build/send roundtrip monthly summary.")
+                    logger.exception("Failed to send trips-completed reminder.")
+            except Exception:
+                logger.exception("Failed to compute/send monthly reminders after mission end.")
         else:
             await query.edit_message_text("❌ " + res.get("message", ""))
         context.user_data.pop("pending_mission", None)
         return
 
+    # start/end quick handlers (start|end from the plate keyboard)
     if data.startswith("start|") or data.startswith("end|"):
         try:
             action, plate = data.split("|", 1)
@@ -1348,6 +1475,22 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res = record_start_trip(username, plate)
             if res.get("ok"):
                 await query.edit_message_text(t(user_lang, "start_ok", plate=plate, driver=username, msg=res["message"]))
+                # after start, also send current month completed trips reminder (helps drivers see progress)
+                try:
+                    nowdt = _now_dt()
+                    month_start = datetime(nowdt.year, nowdt.month, 1)
+                    if nowdt.month == 12:
+                        month_end = datetime(nowdt.year + 1, 1, 1)
+                    else:
+                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+                    trips_cnt = count_completed_trips_driver_month_by_records(username, month_start, month_end)
+                    month_label = month_start.strftime("%Y-%m")
+                    try:
+                        await update.effective_chat.send_message(f"Driver {username} completed {trips_cnt} trips in {month_label}.")
+                    except Exception:
+                        logger.exception("Failed to send post-start trips reminder.")
+                except Exception:
+                    logger.exception("Failed to compute trips count after start.")
             else:
                 await query.edit_message_text("❌ " + res.get("message", ""))
             return
@@ -1355,6 +1498,22 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res = record_end_trip(username, plate)
             if res.get("ok"):
                 await query.edit_message_text(t(user_lang, "end_ok", plate=plate, driver=username, msg=res["message"]))
+                # after end, send completed trips reminder
+                try:
+                    nowdt = _now_dt()
+                    month_start = datetime(nowdt.year, nowdt.month, 1)
+                    if nowdt.month == 12:
+                        month_end = datetime(nowdt.year + 1, 1, 1)
+                    else:
+                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+                    trips_cnt = count_completed_trips_driver_month_by_records(username, month_start, month_end)
+                    month_label = month_start.strftime("%Y-%m")
+                    try:
+                        await update.effective_chat.send_message(f"Driver {username} completed {trips_cnt} trips in {month_label}.")
+                    except Exception:
+                        logger.exception("Failed to send post-end trips reminder.")
+                except Exception:
+                    logger.exception("Failed to compute trips count after end.")
             else:
                 await query.edit_message_text("❌ " + res.get("message", ""))
             return
@@ -1583,6 +1742,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_end", mission_end_command))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
+    application.add_handler(CommandHandler("skip", skip_command))  # ensure /skip@botname also matched
 
     application.add_handler(CallbackQueryHandler(plate_callback))
 
@@ -1605,6 +1765,7 @@ def register_ui_handlers(application):
                     BotCommand("mission_end", "End a driver mission"),
                     BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
                     BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
+                    BotCommand("skip", "Skip optional prompts (e.g. staff name)"),
                 ])
             except Exception:
                 logger.exception("Failed to set bot commands.")
