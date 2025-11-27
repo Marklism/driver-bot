@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Driver Bot — Full updated script (complete file)
+Driver Bot — Final stable integrated script (Part 1/4)
 
-Includes:
-- Missions header fix, conservative header insertion
-- Record start/end trips, mission start/end with roundtrip merge
-- Admin finance inline form + ForceReply handling (robust, fixes 'stuck' issue)
+This file is the first chunk (~800 lines) of the final script. Combine parts
+in order to obtain full script.
+
+Features included across all parts:
+- Driver start/end, missions (start/end/merge), roundtrip detection & monthly reports
+- Admin finance inline form + ForceReply handling — robust, non-blocking
 - Odometer, fuel, parking, wash, repair recording
 - Leave add/list, maintenance records, expenses sheet
 - /setup_menu posts menu in group and pins it (admin only)
@@ -13,10 +16,12 @@ Includes:
 - Default admin: markpeng1 (if BOT_ADMINS not set)
 - Scheduled jobs: daily summary, unfinished mission detection & notification
 - Monthly reports: missions & expenses
-- NEW: /mission start ... and /mission end ... via single /mission command
+- Conservative header insertion and MISSIONS header fix
+- Multi-language (en/km)
 """
 
 import os
+import sys
 import json
 import base64
 import logging
@@ -27,14 +32,16 @@ import asyncio
 from datetime import datetime, timedelta, time as dtime
 from typing import Optional, Dict, List, Any
 
+# Google Sheets
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 try:
-    from zoneinfo import ZoneInfo  # type: ignore
+    from zoneinfo import ZoneInfo  # Python 3.9+
 except Exception:
-    ZoneInfo = None  # type: ignore
+    ZoneInfo = None
 
+# Telegram
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -55,10 +62,13 @@ from telegram.ext import (
     PicklePersistence,
 )
 
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("driver-bot")
 
-# ========= ENV & defaults =========
+# -------------------------
+# ENV & defaults
+# -------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GOOGLE_CREDS_BASE64 = os.getenv("GOOGLE_CREDS_BASE64")
 GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH")
@@ -98,9 +108,10 @@ LEAVE_TAB = os.getenv("LEAVE_TAB", "Driver_Leave")
 MAINT_TAB = os.getenv("MAINT_TAB", "Vehicle_Maintenance")
 EXPENSE_TAB = os.getenv("EXPENSE_TAB", "Trip_Expenses")
 
-# default admin (used if BOT_ADMINS env not set)
-BOT_ADMINS_DEFAULT = "markpeng1"
+# default admin(s)
+BOT_ADMINS_DEFAULT = os.getenv("BOT_ADMINS", "markpeng1")
 
+# Missions columns (0-based)
 M_IDX_GUID = 0
 M_IDX_NO = 1
 M_IDX_NAME = 2
@@ -115,6 +126,7 @@ M_IDX_RETURN_START = 10
 M_IDX_RETURN_END = 11
 M_MANDATORY_COLS = 12
 
+# Records columns (1-based for update_cell)
 COL_DATE = 1
 COL_DRIVER = 2
 COL_PLATE = 3
@@ -139,6 +151,7 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     EXPENSE_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Fuel Cost", "Parking Fee", "Other Fee"],
 }
 
+# Translations
 TR = {
     "en": {
         "menu": "Driver Bot Menu — tap a button:",
@@ -181,7 +194,7 @@ TR = {
         "mission_start_prompt_plate": "ជ្រើស plate ដើម្បីចាប់ផ្តើម mission:",
         "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញ:",
         "mission_start_prompt_staff": "បញ្ចូលឈ្មោះបុគ្គលិក (ឬ /skip).",
-        "mission_start_ok": "✅ ចាប់ផ្ដើម mission {plate} នៅ {start_date}ចេញពី {dep}.",
+        "mission_start_ok": "✅ ចាប់ផ្ដើម mission {plate} នៅ {start_date} ចេញពី {dep}.",
         "mission_end_prompt_plate": "ជ្រើស plate ដើម្បីបញ្ចប់ mission:",
         "mission_end_prompt_arrival": "ជ្រើសទីក្រុងមកដល់:",
         "mission_end_ok": "✅ បញ្ចប់ mission {plate} នៅ {end_date} មកដល់ {arr}.",
@@ -192,7 +205,7 @@ TR = {
         "invalid_odo": "Odometer មិនត្រឹមត្រូវ — សូមផ្ញើលេខ KM ដូចជា `12345` ឬ `12345KM`.",
         "confirm_recorded": "{typ} បានកត់ត្រាសម្រាប់ {plate}: {amount}",
         "leave_prompt": "សូមឆ្លើយជាមួយ: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]\nឧទាហរណ៍: markpeng1 2025-12-01 2025-12-05 annual_leave",
-        "leave_confirm": "បានកត់ត្រាច្បាប់សម្រាកសម្រាប់ {driver}: {start} -> {end} ({reason})",
+        "leave_confirm": "បានកត់ត្រាច្បាប់សម្រាកសម្រាប់ {driver}: {start} ដល់ {end} ({reason})",
         "fin_inline_prompt": "Inline finance form — ឆ្លើយជួរមួយ: <type> <plate> <amount> [notes]\nឧទាហរណ៍: fuel 2BB-3071 23.5 bought diesel",
     },
 }
@@ -203,7 +216,9 @@ def t(user_lang: Optional[str], key: str, **kwargs) -> str:
         lang = "en"
     return TR.get(lang, TR["en"]).get(key, TR["en"].get(key, "")).format(**kwargs)
 
-# ===== Google Sheets helpers =====
+# -------------------------
+# Google Sheets helpers
+# -------------------------
 def _load_creds_from_base64(encoded: str) -> dict:
     try:
         if encoded.strip().startswith("{"):
@@ -237,6 +252,9 @@ def get_gspread_client():
     return client
 
 def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
+    """
+    Only insert the headers if sheet has no rows at all (conservative).
+    """
     try:
         values = ws.get_all_values()
         if not values:
@@ -247,6 +265,10 @@ def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
 def _missions_header_fix_if_needed(ws):
+    """
+    Detect case where first data row has GUIDs but the header row is misaligned/not containing 'GUID',
+    then overwrite header row only with canonical headers for MISSIONS_TAB.
+    """
     try:
         values = ws.get_all_values()
         if not values:
@@ -273,7 +295,7 @@ def _missions_header_fix_if_needed(ws):
                     col_letter_end = chr(ord('A') + M_MANDATORY_COLS - 1)
                     rng = f"A1:{col_letter_end}1"
                     ws.update(rng, [h], value_input_option="USER_ENTERED")
-                    logger.info("Fixed MISSIONS header row to canonical headers due to GUID detected.")
+                    logger.info("Fixed MISSIONS header row due to GUID detected in first data column.")
                 except Exception:
                     logger.exception("Failed to update header row in MISSIONS sheet.")
     except Exception:
@@ -319,7 +341,9 @@ def open_worksheet(tab: str = ""):
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
         return sh.sheet1
 
-# Driver map
+# -------------------------
+# Driver map loaders
+# -------------------------
 def load_driver_map_from_env() -> Dict[str, List[str]]:
     if not DRIVER_PLATE_MAP_JSON:
         return {}
@@ -361,7 +385,9 @@ def get_driver_map() -> Dict[str, List[str]]:
     sheet_map = load_driver_map_from_sheet()
     return sheet_map
 
+# -------------------------
 # Time helpers
+# -------------------------
 def _now_dt() -> datetime:
     if LOCAL_TZ and ZoneInfo:
         try:
@@ -401,7 +427,9 @@ def compute_duration(start_ts: str, end_ts: str) -> str:
     except Exception:
         return ""
 
-# Trip records
+# -------------------------
+# Trip record functions
+# -------------------------
 def record_start_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
     start_ts = now_str()
@@ -450,7 +478,9 @@ def record_end_trip(driver: str, plate: str) -> dict:
         logger.exception("Failed to update end trip")
         return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
 
+# -------------------------
 # Missions helpers
+# -------------------------
 def _missions_get_values_and_data_rows(ws):
     values = ws.get_all_values()
     if not values:
@@ -497,12 +527,14 @@ def start_mission_record(driver: str, plate: str, departure: str, staff_name: st
         logger.exception("Failed to append mission start")
         return {"ok": False, "message": "Failed to write mission start to sheet: " + str(e)}
 
+# Multi-segment / generous complementary matching for roundtrip
 def _is_complementary_trip(dep1: str, arr1: str, dep2: str, arr2: str) -> bool:
     if not dep1 or not arr1 or not dep2 or not arr2:
         return False
     dep1, arr1, dep2, arr2 = dep1.strip().upper(), arr1.strip().upper(), dep2.strip().upper(), arr2.strip().upper()
     if (dep1 == "PP" and arr1 == "SHV" and dep2 == "SHV" and arr2 == "PP") or (dep1 == "SHV" and arr1 == "PP" and dep2 == "PP" and arr2 == "SHV"):
         return True
+    # allow multi-hop detection heuristics
     if arr1 == dep2 and arr2 == dep1:
         return True
     if dep1 == "PP" and arr2 == "PP" and dep2 == arr1:
@@ -609,6 +641,9 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
         logger.exception("Failed to update mission end: %s", e)
         return {"ok": False, "message": "Failed to write mission end to sheet: " + str(e)}
 
+# -------------------------
+# Mission rows & reports
+# -------------------------
 def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
     ws = open_worksheet(MISSIONS_TAB)
     out = []
@@ -677,7 +712,9 @@ def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) 
         logger.exception("Failed to count roundtrips per driver")
     return counts
 
-# Leave / maintenance / expenses
+# -------------------------
+# Leave / maintenance / expenses functions
+# -------------------------
 def add_driver_leave(driver: str, start: str, end: str, reason: str, notes: str = "") -> dict:
     ws = open_worksheet(LEAVE_TAB)
     try:
@@ -723,18 +760,20 @@ def add_trip_expense_record(plate: str, driver: str, mileage: str, fuel_cost: st
         logger.exception("Failed to add trip expense")
         return {"ok": False, "message": str(e)}
 
-# Finance routing & normalization
+# -------------------------
+# Finance normalization & routing
+# -------------------------
 AMOUNT_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*$', re.I)
 ODO_RE = re.compile(r'^\s*(\d+)(?:\s*km)?\s*$', re.I)
-FIN_TYPES = {"odo", "fuel", "parking", "wash", "repair"}
+FIN_TYPES = {"odo", "fuel", "parking", "wash", "repair", "other"}
 
-# Map aliases -> canonical
 FIN_TYPE_ALIASES = {
     "odo": "odo", "km": "odo", "odometer": "odo",
     "fuel": "fuel", "fu": "fuel", "gas": "fuel", "diesel": "fuel",
     "parking": "parking", "park": "parking", "pk": "parking",
     "wash": "wash", "carwash": "wash",
     "repair": "repair", "rep": "repair", "service": "repair", "maint": "repair",
+    "other": "other",
 }
 
 def normalize_fin_type(typ: str) -> Optional[str]:
@@ -751,9 +790,7 @@ def normalize_fin_type(typ: str) -> Optional[str]:
     return None
 
 async def notify_admins_private(bot, text: str):
-    raw = os.getenv("BOT_ADMINS", "").strip()
-    if not raw:
-        raw = BOT_ADMINS_DEFAULT
+    raw = os.getenv("BOT_ADMINS", "").strip() or BOT_ADMINS_DEFAULT
     admins = [u.strip() for u in raw.split(",") if u.strip()]
     for a in admins:
         try:
@@ -772,7 +809,7 @@ def record_finance_entry(typ: str, plate: str, amount_raw: str, notes: str, user
         if typ_norm == "odo":
             m = amount_raw.strip().upper().replace("KM", "").strip()
             date = today_date_str()
-            # add to maintenance (Odo)
+            # record as maintenance ODO entry
             return add_vehicle_maintenance(plate, m, "Odo", "", date, f"Reported by @{driver}" if driver else "", notes or f"Reported by @{driver}")
         else:
             fuel_cost = ""
@@ -794,7 +831,9 @@ def record_finance_entry(typ: str, plate: str, amount_raw: str, notes: str, user
         logger.exception("Failed to route finance entry")
         return {"ok": False, "message": str(e)}
 
-# Unfinished missions detection
+# -------------------------
+# Unfinished missions detection & notify
+# -------------------------
 def detect_unfinished_missions() -> Dict[str, List[dict]]:
     ws = open_worksheet(MISSIONS_TAB)
     out: Dict[str, List[dict]] = {}
@@ -827,7 +866,9 @@ async def notify_unfinished_missions(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Failed to notify_unfinished_missions")
 
+# -------------------------
 # Admin check helper
+# -------------------------
 async def is_chat_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, username: Optional[str] = None) -> bool:
     try:
         member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
@@ -842,7 +883,9 @@ async def is_chat_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_i
             return True
     return False
 
+# -------------------------
 # UI helpers
+# -------------------------
 def build_plate_keyboard(prefix: str, allowed_plates: Optional[List[str]] = None):
     buttons = []
     row = []
@@ -860,7 +903,7 @@ def build_reply_keyboard_buttons():
     kb = [[KeyboardButton("/start_trip")], [KeyboardButton("/end_trip")], [KeyboardButton("/menu")]]
     return ReplyKeyboardMarkup(kb, resize_keyboard=True, one_time_keyboard=False)
 
-# Admin finance button sets
+# Admin finance inline UI
 def _build_plate_buttons_for_fin(typ: str):
     buttons = []
     row = []
@@ -892,7 +935,9 @@ def _build_amount_buttons_for_fin(typ: str, plate: str):
                     InlineKeyboardButton("Cancel", callback_data="fin|cancel")])
     return InlineKeyboardMarkup(buttons)
 
-# Admin finance callback
+# -------------------------
+# Admin finance callback (robust)
+# -------------------------
 async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
@@ -908,7 +953,7 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
     if chat_id and user:
         is_admin_flag = await is_chat_admin(context, chat_id=chat_id, user_id=user.id, username=username)
     else:
-        if username and username.lstrip("@") in os.getenv("BOT_ADMINS", "").split(","):
+        if username and username.lstrip("@") in (os.getenv("BOT_ADMINS", "") or BOT_ADMINS_DEFAULT).split(","):
             is_admin_flag = True
     if not is_admin_flag:
         try:
@@ -925,6 +970,7 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     parts = data.split("|")
+    # Start flow: fin|start|<type>
     if len(parts) >= 3 and parts[1] == "start":
         typ_raw = parts[2]
         typ = normalize_fin_type(typ_raw) or typ_raw
@@ -934,6 +980,7 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.reply_text(f"Select plate for {typ.upper()}:", reply_markup=_build_plate_buttons_for_fin(typ))
         return
 
+    # Inline one-line form
     if data == "fin|inline":
         pending = {"initiator_id": user.id}
         context.user_data["pending_finance_inline"] = pending
@@ -955,6 +1002,7 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
                 pass
         return
 
+    # fin|select|<type>|<plate>
     if len(parts) >= 4 and parts[1] == "select":
         typ = parts[2]
         plate = parts[3]
@@ -978,25 +1026,28 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.reply_text(prompt_text, reply_markup=_build_amount_buttons_for_fin(typ, plate))
         return
 
+    # fin|amount|<typ>|<plate>|<amount_or_custom>
     if len(parts) >= 5 and parts[1] == "amount":
         typ = parts[2]
         plate = parts[3]
         amount = parts[4]
+        # quick amount selected
         if amount != "custom":
             if normalize_fin_type(typ) == "odo":
                 m_match = ODO_RE.match(amount)
                 if not m_match:
                     try:
                         await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
-                        await asyncio.sleep(4)
+                        await asyncio.sleep(3)
                         await query.delete_message()
                     except Exception:
                         pass
                     return
                 m = m_match.group(1)
                 res = record_finance_entry("odo", plate, m, "", username or "")
-                context.user_data.pop("pending_finance", None)
+                # cleanup user_data/chat_data pending entries by initiator
                 try:
+                    context.user_data.pop("pending_finance", None)
                     pmap = context.chat_data.get("pending_fin_by_prompt", {})
                     to_del = [k for k, v in pmap.items() if v.get("initiator_id") == user.id]
                     for k in to_del:
@@ -1016,7 +1067,7 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
                         logger.debug("Failed to notify admins privately.")
                     try:
                         sent = await context.bot.send_message(chat_id=query.message.chat.id, text="Recorded (admins notified).")
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(2)
                         await sent.delete()
                     except Exception:
                         pass
@@ -1030,15 +1081,15 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
                 if not m_match:
                     try:
                         await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
-                        await asyncio.sleep(4)
+                        await asyncio.sleep(3)
                         await query.delete_message()
                     except Exception:
                         pass
                     return
                 amt = m_match.group(1)
                 res = record_finance_entry(typ, plate, amt, "", username or "")
-                context.user_data.pop("pending_finance", None)
                 try:
+                    context.user_data.pop("pending_finance", None)
                     pmap = context.chat_data.get("pending_fin_by_prompt", {})
                     to_del = [k for k, v in pmap.items() if v.get("initiator_id") == user.id]
                     for k in to_del:
@@ -1058,7 +1109,7 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
                         logger.debug("Failed to notify admins privately.")
                     try:
                         sent = await context.bot.send_message(chat_id=query.message.chat.id, text="Recorded (admins notified).")
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(2)
                         await sent.delete()
                     except Exception:
                         pass
@@ -1069,6 +1120,7 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
                         pass
             return
         else:
+            # Custom -> ask via ForceReply
             context.user_data["pending_finance"] = {"typ": typ, "plate": plate, "initiator_id": user.id}
             try:
                 if normalize_fin_type(typ) == "odo":
@@ -1096,9 +1148,28 @@ async def admin_finance_callback(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         pass
 
-# ForceReply processor (robust)
+# -------------------------
+# ForceReply processing (robust)
+# -------------------------
 async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
+    """
+    Centralized ForceReply handler for:
+    - admin finance inline/custom
+    - leave add ForceReply
+    - mission form ForceReply (separate handler may also capture)
+    This implementation prefers matching by reply_to message id via context.chat_data['pending_fin_by_prompt'].
+    It enforces 'initiator' requirement and always clears pending state after processing.
+    """
+    if not update.message:
+        return
+    if not update.message.text:
+        # We only handle text replies here
+        try:
+            # delete other content types that may be accidental
+            if update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
+                await update.effective_message.delete()
+        except Exception:
+            pass
         return
 
     text = update.message.text.strip()
@@ -1107,13 +1178,14 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
     reply_to = update.message.reply_to_message
     chat = update.effective_chat
 
-    async def _del(msg):
+    async def _del_msg(msg):
         try:
             if msg:
                 await msg.delete()
         except Exception:
             pass
 
+    # Try to find pending by reply_to message id in chat_data (preferred)
     pending = None
     prompt_mid = None
     try:
@@ -1125,24 +1197,29 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception:
         pending = None
 
+    # fallback to specific user_data keys
     if not pending:
-        pending = context.user_data.get("pending_finance") or context.user_data.get("pending_finance_inline") or context.user_data.get("pending_leave")
+        pending = context.user_data.get("pending_finance") or context.user_data.get("pending_finance_inline") or context.user_data.get("pending_leave") or context.user_data.get("pending_mission_form")
 
+    # If still nothing, ignore but delete stray numeric messages in groups
     if not pending:
         if chat and chat.type in ("group", "supergroup"):
             if ODO_RE.match(text) or AMOUNT_RE.match(text):
-                await _del(update.effective_message)
+                await _del_msg(update.effective_message)
         return
 
+    # Check initiator (if present)
     init = pending.get("initiator_id")
     if init and uid != init:
-        await _del(update.effective_message)
+        # Not the initiator — delete stray message silently
+        await _del_msg(update.effective_message)
         return
 
-    ptype = pending.get("type") or ("inline" if "pending_finance_inline" in context.user_data else ("custom" if "pending_finance" in context.user_data else "leave"))
+    # Determine type
+    ptype = pending.get("type") or ("inline" if "pending_finance_inline" in context.user_data else ("custom" if "pending_finance" in context.user_data else ("leave" if "pending_leave" in context.user_data else pending.get("action"))))
 
-    # inline
-    if ptype == "inline" or context.user_data.get("pending_finance_inline") or (pending.get("type") == "inline"):
+    # ----- inline one-line form -----
+    if ptype == "inline" or context.user_data.get("pending_finance_inline"):
         pmid = pending.get("prompt_message_id") or prompt_mid
         accepted = False
         if pmid and reply_to and reply_to.message_id == pmid:
@@ -1152,11 +1229,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif init and uid == init:
             accepted = True
         if not accepted:
-            await _del(update.effective_message)
+            await _del_msg(update.effective_message)
             return
         parts = text.split(None, 3)
         if len(parts) < 3:
-            await _del(update.effective_message)
+            await _del_msg(update.effective_message)
             context.user_data.pop("pending_finance_inline", None)
             if prompt_mid:
                 context.chat_data.get("pending_fin_by_prompt", {}).pop(prompt_mid, None)
@@ -1169,11 +1246,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         if typ == "odo":
             m_match = ODO_RE.match(amount_raw)
             if not m_match:
-                await _del(update.effective_message)
+                await _del_msg(update.effective_message)
                 try:
                     warn = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
                     await asyncio.sleep(2)
-                    await _del(warn)
+                    await _del_msg(warn)
                 except Exception:
                     pass
                 context.user_data.pop("pending_finance_inline", None)
@@ -1185,11 +1262,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             m_match = AMOUNT_RE.match(amount_raw)
             if not m_match:
-                await _del(update.effective_message)
+                await _del_msg(update.effective_message)
                 try:
                     warn = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
                     await asyncio.sleep(2)
-                    await _del(warn)
+                    await _del_msg(warn)
                 except Exception:
                     pass
                 context.user_data.pop("pending_finance_inline", None)
@@ -1198,7 +1275,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return
             amt = m_match.group(1)
             res = record_finance_entry(typ, plate, amt, notes, user.username or "")
-        await _del(update.effective_message)
+        # cleanup & notify
+        await _del_msg(update.effective_message)
         if prompt_mid:
             try:
                 await context.bot.delete_message(chat_id=chat.id, message_id=prompt_mid)
@@ -1216,8 +1294,12 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
         return
 
-    # custom
-    if ptype == "custom" or context.user_data.get("pending_finance") or (pending.get("type") == "custom"):
+# End of Part 1
+# -------------------------
+# Continue process_force_reply: custom, leave, mission_form
+# -------------------------
+    # ----- custom pending_finance (ForceReply) -----
+    if ptype == "custom" or context.user_data.get("pending_finance"):
         pmid = pending.get("prompt_message_id") or prompt_mid
         accepted = False
         if pmid and reply_to and reply_to.message_id == pmid:
@@ -1227,18 +1309,18 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif init and uid == init:
             accepted = True
         if not accepted:
-            await _del(update.effective_message)
+            await _del_msg(update.effective_message)
             return
         typ = pending.get("typ")
         plate = pending.get("plate")
         if normalize_fin_type(typ) == "odo":
             m_match = ODO_RE.match(text)
             if not m_match:
-                await _del(update.effective_message)
+                await _del_msg(update.effective_message)
                 try:
                     warn = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
                     await asyncio.sleep(2)
-                    await _del(warn)
+                    await _del_msg(warn)
                 except Exception:
                     pass
                 context.user_data.pop("pending_finance", None)
@@ -1247,7 +1329,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return
             m = m_match.group(1)
             res = record_finance_entry("odo", plate, m, "", user.username or "")
-            await _del(update.effective_message)
+            await _del_msg(update.effective_message)
             if pmid:
                 try:
                     await context.bot.delete_message(chat_id=chat.id, message_id=pmid)
@@ -1262,22 +1344,23 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 except Exception:
                     pass
             return
-        parts = text.split(None, 1)
-        if not parts:
-            await _del(update.effective_message)
+        # non-odo: amount + optional notes
+        parts_amt = text.split(None, 1)
+        if not parts_amt:
+            await _del_msg(update.effective_message)
             context.user_data.pop("pending_finance", None)
             if pmid:
                 context.chat_data.get("pending_fin_by_prompt", {}).pop(pmid, None)
             return
-        amount_raw = parts[0]
-        notes = parts[1] if len(parts) > 1 else ""
+        amount_raw = parts_amt[0]
+        notes = parts_amt[1] if len(parts_amt) > 1 else ""
         m_match = AMOUNT_RE.match(amount_raw)
         if not m_match:
-            await _del(update.effective_message)
+            await _del_msg(update.effective_message)
             try:
                 warn = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
                 await asyncio.sleep(2)
-                await _del(warn)
+                await _del_msg(warn)
             except Exception:
                 pass
             context.user_data.pop("pending_finance", None)
@@ -1286,7 +1369,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         amt = m_match.group(1)
         res = record_finance_entry(typ, plate, amt, notes, user.username or "")
-        await _del(update.effective_message)
+        await _del_msg(update.effective_message)
         if pmid:
             try:
                 await context.bot.delete_message(chat_id=chat.id, message_id=pmid)
@@ -1302,8 +1385,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
         return
 
-    # leave pending
-    if ptype == "leave" or context.user_data.get("pending_leave") or (pending.get("type") == "leave"):
+    # ----- leave pending -----
+    if ptype == "leave" or context.user_data.get("pending_leave"):
         pmid = pending.get("prompt_message_id") or prompt_mid
         accepted = False
         if pmid and reply_to and reply_to.message_id == pmid:
@@ -1313,15 +1396,15 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif init and uid == init:
             accepted = True
         if not accepted:
-            await _del(update.effective_message)
+            await _del_msg(update.effective_message)
             return
         parts = text.split(None, 4)
         if len(parts) < 4:
-            await _del(update.effective_message)
+            await _del_msg(update.effective_message)
             try:
                 warn = await update.effective_chat.send_message("Invalid format. " + t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
                 await asyncio.sleep(2)
-                await _del(warn)
+                await _del_msg(warn)
             except Exception:
                 pass
             context.user_data.pop("pending_leave", None)
@@ -1337,11 +1420,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             datetime.strptime(start, "%Y-%m-%d")
             datetime.strptime(end, "%Y-%m-%d")
         except Exception:
-            await _del(update.effective_message)
+            await _del_msg(update.effective_message)
             try:
                 warn = await update.effective_chat.send_message("Invalid dates. Expected YYYY-MM-DD.")
                 await asyncio.sleep(2)
-                await _del(warn)
+                await _del_msg(warn)
             except Exception:
                 pass
             context.user_data.pop("pending_leave", None)
@@ -1349,7 +1432,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 context.chat_data.get("pending_fin_by_prompt", {}).pop(pmid, None)
             return
         res = add_driver_leave(driver, start, end, reason, notes)
-        await _del(update.effective_message)
+        await _del_msg(update.effective_message)
         if pmid:
             try:
                 await context.bot.delete_message(chat_id=chat.id, message_id=pmid)
@@ -1361,17 +1444,20 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 ack = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_confirm", driver=driver, start=start, end=end, reason=reason))
                 await asyncio.sleep(2)
-                await _del(ack)
+                await _del_msg(ack)
             except Exception:
                 pass
         return
 
+    # If we reach here: default delete stray numeric messages in group
     if chat and chat.type in ("group", "supergroup"):
         if ODO_RE.match(text) or AMOUNT_RE.match(text):
-            await _del(update.effective_message)
+            await _del_msg(update.effective_message)
     return
 
-# plate callback (fixed & extended)
+# -------------------------
+# plate_callback (handles start/end/menu/mission/finance)
+# -------------------------
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
@@ -1534,16 +1620,17 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-# location_or_skip for mission start staff prompt handling
+# -------------------------
+# location_or_skip handler (handles mission start staff or /skip)
+# -------------------------
 async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handles:
-    - replies for mission start staff (or /skip)
-    - other free-text messages that may be used to fill 'pending_mission' (action=start)
-    Deletes prompts and records mission start when appropriate.
+    Handles replies to mission start staff prompt (or /skip).
+    Deletes prompt messages and records mission start when appropriate.
     """
     try:
         if update.effective_message:
+            # keep minimal; we'll delete later where appropriate
             pass
     except Exception:
         pass
@@ -1554,7 +1641,7 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
-    # Remove last bot prompt
+    # Remove any last bot prompt message saved in context (clean UI)
     last_bot = context.user_data.get("last_bot_prompt")
     if last_bot:
         try:
@@ -1566,7 +1653,7 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         context.user_data.pop("last_bot_prompt", None)
 
-    # Remove inline prompt reference
+    # Remove inline prompt message reference if present
     last_inline = context.user_data.get("last_inline_prompt")
     if last_inline:
         try:
@@ -1578,8 +1665,10 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         context.user_data.pop("last_inline_prompt", None)
 
+    # Now process pending mission
     pending = context.user_data.get("pending_mission")
     if not pending or pending.get("action") != "start":
+        # Not a mission-start flow; ignore (but delete /skip)
         if update.message and update.message.text and update.message.text.strip().lower() == "/skip":
             try:
                 await update.message.delete()
@@ -1587,11 +1676,13 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         return
 
+    # Get staff text (user reply) — allow /skip as empty staff
     text = update.message.text.strip() if update.message and update.message.text else ""
     staff = text if text and text.lower().strip() != "/skip" else ""
     plate = pending.get("plate")
     departure = pending.get("departure") or ""
 
+    # permission check (driver map)
     driver_map = get_driver_map()
     allowed = driver_map.get(user.username, []) if user and user.username else []
     if allowed and plate not in allowed:
@@ -1600,6 +1691,7 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
         context.user_data.pop("pending_mission", None)
+        # delete the submitted message (if user typed staff) to keep chat clean
         try:
             if update.effective_message:
                 await update.effective_message.delete()
@@ -1607,7 +1699,9 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
+    # Record mission start
     res = start_mission_record(username, plate, departure, staff_name=staff)
+    # delete the user's reply message to keep chat clean (per requirement)
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -1615,24 +1709,28 @@ async def location_or_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     if res.get("ok"):
+        # briefly notify then delete so chat remains clean
         try:
             notice = await update.effective_chat.send_message(t(user_lang, "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             await notice.delete()
         except Exception:
             pass
     else:
         try:
             err = await update.effective_chat.send_message("❌ " + res.get("message", "Failed to record mission start."))
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             await err.delete()
         except Exception:
             pass
 
+    # Clear pending
     context.user_data.pop("pending_mission", None)
     return
 
-# menu and commands
+# -------------------------
+# Menu and command handlers
+# -------------------------
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -1644,8 +1742,8 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Start trip", callback_data="show_start"),
          InlineKeyboardButton("End trip", callback_data="show_end")],
-        [InlineKeyboardButton("Mission start", callback_data="show_mission_start"),
-         InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
+        [InlineKeyboardButton("Mission start", callback_data="mission_start_plate|SELECT"),
+         InlineKeyboardButton("Mission end", callback_data="mission_end_plate|SELECT")],
         [InlineKeyboardButton("Admin finance", callback_data="fin|start|odo"),
          InlineKeyboardButton("Help", callback_data="help")],
     ]
@@ -1653,9 +1751,15 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     except Exception:
         pass
-    await update.effective_chat.send_message(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+    # Use a plate keyboard for mission start/end properly if needed
+    # but here we show generic menu; the SELECT marker will be replaced by user choosing plate via plate keyboard
+    await update.effective_chat.send_message(text=text, reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("Start trip", callback_data="show_start"), InlineKeyboardButton("End trip", callback_data="show_end")],
+        [InlineKeyboardButton("Mission start", callback_data="show_mission_start"), InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
+        [InlineKeyboardButton("Admin finance", callback_data="fin|start|odo"), InlineKeyboardButton("Help", callback_data="help")]
+    ]))
 
-# /setup_menu admin (delete invoking command message then post & pin menu)
+# /setup_menu admin: post & pin menu message
 async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -1671,7 +1775,7 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if chat and user:
         is_admin_flag = await is_chat_admin(context, chat_id=chat.id, user_id=user.id, username=username)
     else:
-        if username and username.lstrip("@") in os.getenv("BOT_ADMINS", "").split(","):
+        if username and username.lstrip("@") in (os.getenv("BOT_ADMINS", "") or BOT_ADMINS_DEFAULT).split(","):
             is_admin_flag = True
     if not is_admin_flag:
         try:
@@ -1699,6 +1803,7 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception:
         logger.exception("Failed to send menu message for setup_menu.")
 
+# start/end/mission command wrappers
 async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -1711,6 +1816,7 @@ async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     allowed = None
     if user and user.username and driver_map.get(user.username):
         allowed = driver_map.get(user.username)
+    # show plate keyboard
     await update.effective_chat.send_message(t(user_lang, "choose_start"), reply_markup=build_plate_keyboard("start", allowed_plates=allowed))
 
 async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1755,39 +1861,7 @@ async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         allowed = driver_map.get(user.username)
     await update.effective_chat.send_message(t(user_lang, "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate", allowed_plates=allowed))
 
-# mission_report_command, lang_command already present
-async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    args = context.args
-    if not args:
-        try:
-            await update.effective_chat.send_message("Usage: /lang en|km")
-        except Exception:
-            if update.effective_message:
-                await update.effective_message.reply_text("Usage: /lang en|km")
-        return
-    lang = args[0].lower()
-    if lang not in SUPPORTED_LANGS:
-        try:
-            await update.effective_chat.send_message("Supported langs: en, km")
-        except Exception:
-            if update.effective_message:
-                await update.effective_message.reply_text("Supported langs: en, km")
-        return
-    context.user_data["lang"] = lang
-    try:
-        await update.effective_chat.send_message(t(lang, "lang_set", lang=lang))
-    except Exception:
-        if update.effective_message:
-            try:
-                await update.effective_message.reply_text(t(lang, "lang_set", lang=lang))
-            except Exception:
-                pass
-
+# mission_report command
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -1853,9 +1927,14 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
              InlineKeyboardButton("End trip", callback_data="show_end")],
             [InlineKeyboardButton("Open menu", callback_data="menu_full")],
         ]
-        await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
+        try:
+            await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception:
+            pass
 
-# Scheduling & reports (kept)
+# -------------------------
+# Scheduling & jobs
+# -------------------------
 async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
     job_data = getattr(context.job, "data", {}) if hasattr(context, "job") else {}
     chat_id = job_data.get("chat_id") or SUMMARY_CHAT_ID
@@ -1940,7 +2019,9 @@ async def detect_unfinished_missions_job(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         logger.exception("Failed to detect unfinished missions")
 
+# -------------------------
 # Monthly expense summary & helpers
+# -------------------------
 def monthly_expense_summary(year: int, month: int) -> Dict[str, Any]:
     out = {"by_plate": {}, "by_driver": {}, "totals": {}}
     try:
@@ -2061,7 +2142,9 @@ def write_monthly_expense_csv(year: int, month: int) -> Optional[str]:
         logger.exception("Failed to write monthly expense CSV")
         return None
 
-# Utility functions
+# -------------------------
+# Report helpers (roundtrip)
+# -------------------------
 def write_roundtrip_summary_tab(month_label: str, counts: Dict[str, int]) -> Optional[str]:
     tab_name = f"Roundtrip_Summary_{month_label}"
     try:
@@ -2098,6 +2181,9 @@ def write_roundtrip_summary_csv(month_label: str, counts: Dict[str, int]) -> Opt
         logger.exception("Failed to write roundtrip summary CSV")
         return None
 
+# -------------------------
+# Aggregation utility
+# -------------------------
 def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]:
     try:
         ws = open_worksheet(RECORDS_TAB)
@@ -2134,127 +2220,9 @@ def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]
         logger.exception("Failed to aggregate_for_period")
         return {}
 
-# ---------------------------
-# NEW: /mission command handler
-# Supports:
-#   /mission start <plate> <departure> [staff_name]
-#   /mission end <plate> <arrival>
-# This provides a direct (no-inline) way to start/end mission from chat.
-# ---------------------------
-async def mission_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # delete invoking message to keep group clean (if possible)
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-
-    args = context.args
-    user = update.effective_user
-    if not user:
-        return
-    username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
-    user_lang = context.user_data.get("lang", DEFAULT_LANG)
-
-    if not args or len(args) < 1:
-        try:
-            await update.effective_chat.send_message("Usage: /mission start <plate> <departure> [staff_name]\n       /mission end <plate> <arrival>")
-        except Exception:
-            pass
-        return
-
-    sub = args[0].lower()
-    if sub in ("start", "s"):
-        if len(args) < 3:
-            try:
-                await update.effective_chat.send_message("Usage: /mission start <plate> <departure> [staff_name]")
-            except Exception:
-                pass
-            return
-        plate = args[1]
-        departure = args[2]
-        staff = args[3] if len(args) >= 4 else ""
-        # permission check
-        driver_map = get_driver_map()
-        allowed = driver_map.get(user.username, []) if user and user.username else []
-        if allowed and plate not in allowed:
-            try:
-                await update.effective_chat.send_message(t(user_lang, "not_allowed", plate=plate))
-            except Exception:
-                pass
-            return
-        res = start_mission_record(username, plate, departure, staff_name=staff)
-        if res.get("ok"):
-            try:
-                # brief visible confirmation then delete to keep chat tidy
-                msg = await update.effective_chat.send_message(t(user_lang, "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
-                await asyncio.sleep(3)
-                await msg.delete()
-            except Exception:
-                pass
-        else:
-            try:
-                await update.effective_chat.send_message("❌ " + res.get("message", "Failed to start mission."))
-            except Exception:
-                pass
-        return
-
-    if sub in ("end", "e"):
-        if len(args) < 3:
-            try:
-                await update.effective_chat.send_message("Usage: /mission end <plate> <arrival>")
-            except Exception:
-                pass
-            return
-        plate = args[1]
-        arrival = args[2]
-        driver_map = get_driver_map()
-        allowed = driver_map.get(user.username, []) if user and user.username else []
-        if allowed and plate not in allowed:
-            try:
-                await update.effective_chat.send_message(t(user_lang, "not_allowed", plate=plate))
-            except Exception:
-                pass
-            return
-        res = end_mission_record(username, plate, arrival)
-        if res.get("ok"):
-            try:
-                msg = await update.effective_chat.send_message(t(user_lang, "mission_end_ok", plate=plate, end_date=now_str(), arr=arrival))
-                await asyncio.sleep(3)
-                await msg.delete()
-            except Exception:
-                pass
-            if res.get("merged"):
-                try:
-                    nowdt = _now_dt()
-                    month_start = datetime(nowdt.year, nowdt.month, 1)
-                    if nowdt.month == 12:
-                        month_end = datetime(nowdt.year + 1, 1, 1)
-                    else:
-                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
-                    counts = count_roundtrips_per_driver_month(month_start, month_end)
-                    cnt = counts.get(username, 0)
-                    summary_msg = t(user_lang, "roundtrip_monthly_count", driver=username, count=cnt)
-                    try:
-                        await update.effective_chat.send_message(t(user_lang, "roundtrip_merged_notify", driver=username, plate=plate, count_msg=summary_msg))
-                    except Exception:
-                        await update.effective_chat.send_message(summary_msg)
-                except Exception:
-                    logger.exception("Failed to build/send roundtrip monthly summary.")
-        else:
-            try:
-                await update.effective_chat.send_message("❌ " + res.get("message", ""))
-            except Exception:
-                pass
-        return
-
-    try:
-        await update.effective_chat.send_message("Unknown subcommand. Use start or end. Example: /mission start 2BB-3071 PP")
-    except Exception:
-        pass
-    return
-
-# register handlers
+# -------------------------
+# Register handlers and commands
+# -------------------------
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
@@ -2265,21 +2233,23 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
 
-    # NEW: /mission single command (supports subcommands start/end)
-    application.add_handler(CommandHandler("mission", mission_cmd))
-
-    # Admin finance & inline
-    application.add_handler(CommandHandler("admin_finance", lambda u, c: None))
+    # Admin finance & inline: callback handler
     application.add_handler(CallbackQueryHandler(admin_finance_callback, pattern=r'^(fin\||finance\|)'))
 
-    # plate callback
+    # plate callback for start/end/mission/menu/help
     application.add_handler(CallbackQueryHandler(plate_callback))
 
-    # ForceReply processor - for finance inline/custom and leave
+    # ForceReply processor - for finance inline/custom and leave and mission staff
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), process_force_reply), group=0)
 
-    # Delete /setup* user messages
-    application.add_handler(MessageHandler(filters.Regex(r'(?i)^/setup'), lambda u, c: (asyncio.create_task(u.message.delete()) if u.message else None)))
+    # Delete /setup* user messages quickly
+    async def _delete_setup_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            if update.message:
+                await update.message.delete()
+        except Exception:
+            pass
+    application.add_handler(MessageHandler(filters.Regex(r'(?i)^/setup'), _delete_setup_msg))
 
     # mission & trip replies (location_or_skip handles /skip and mission start staff replies)
     application.add_handler(MessageHandler(filters.Regex(r'(?i)^/skip$') | (filters.TEXT & (~filters.COMMAND)), location_or_skip))
@@ -2287,7 +2257,7 @@ def register_ui_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
-    # leave add: send ForceReply prompt (admin only)
+    # leave_add: send ForceReply prompt (admin only)
     async def leave_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if update.effective_message:
@@ -2301,7 +2271,7 @@ def register_ui_handlers(application):
         if chat_id and user:
             is_admin_flag = await is_chat_admin(context, chat_id=chat_id, user_id=user.id, username=username)
         else:
-            if username and username.lstrip("@") in os.getenv("BOT_ADMINS", "").split(","):
+            if username and username.lstrip("@") in (os.getenv("BOT_ADMINS", "") or BOT_ADMINS_DEFAULT).split(","):
                 is_admin_flag = True
         if not is_admin_flag:
             await update.effective_chat.send_message("You are not authorized to add leave.")
@@ -2309,7 +2279,11 @@ def register_ui_handlers(application):
         context.user_data["pending_leave"] = {"initiator_id": user.id}
         prompt = t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt")
         try:
-            await update.effective_chat.send_message(prompt, reply_markup=ForceReply(selective=True))
+            sent = await update.effective_chat.send_message(prompt, reply_markup=ForceReply(selective=True))
+            # register in chat_data
+            pmap = context.chat_data.get("pending_fin_by_prompt", {})
+            pmap[sent.message_id] = {"type": "leave", "initiator_id": user.id, "prompt_message_id": sent.message_id}
+            context.chat_data["pending_fin_by_prompt"] = pmap
         except Exception:
             try:
                 await update.effective_chat.send_message("Please reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
@@ -2380,7 +2354,7 @@ def register_ui_handlers(application):
             await update.effective_chat.send_message("Invalid usage. Example: /monthly_report expenses 2025-11")
     application.add_handler(CommandHandler("monthly_report", monthly_report_cmd))
 
-    # Quick admin shortcuts (placeholders)
+    # Quick admin shortcuts (placeholders kept to show slash commands)
     application.add_handler(CommandHandler("report_odo", lambda u, c: None))
     application.add_handler(CommandHandler("report_fuel", lambda u, c: None))
     application.add_handler(CommandHandler("report_parking", lambda u, c: None))
@@ -2404,7 +2378,6 @@ def register_ui_handlers(application):
                     BotCommand("leave_add", "Add driver leave record (admin)"),
                     BotCommand("leave_list", "View driver leave records"),
                     BotCommand("monthly_report", "Generate monthly expense report: /monthly_report expenses YYYY-MM"),
-                    BotCommand("mission", "Mission quick: /mission start|end ..."),
                 ])
             except Exception:
                 logger.exception("Failed to set bot commands.")
@@ -2416,7 +2389,7 @@ def register_ui_handlers(application):
     # Handler to delete unknown slash commands in groups
     VALID_COMMANDS = {
         "start_trip", "end_trip", "menu", "lang", "mission_start", "mission_end", "mission_report",
-        "admin_finance", "report_odo", "report_fuel", "report_parking", "leave_add", "leave_list", "monthly_report", "help", "mission"
+        "admin_finance", "report_odo", "report_fuel", "report_parking", "leave_add", "leave_list", "monthly_report", "help"
     }
     async def delete_unknown_slash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.effective_message or not update.effective_chat:
@@ -2435,6 +2408,9 @@ def register_ui_handlers(application):
                 pass
     application.add_handler(MessageHandler(filters.Regex(r'^/[\w@]+'), delete_unknown_slash), group=1)
 
+# -------------------------
+# Environment check & scheduling helper
+# -------------------------
 def ensure_env():
     if not BOT_TOKEN:
         raise RuntimeError(t(DEFAULT_LANG, "no_bot_token"))
@@ -2456,6 +2432,9 @@ def schedule_jobs(application):
     except Exception:
         logger.exception("Failed to schedule jobs.")
 
+# -------------------------
+# main()
+# -------------------------
 def main():
     ensure_env()
     if LOCAL_TZ and ZoneInfo:
