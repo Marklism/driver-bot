@@ -970,7 +970,7 @@ async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     user = update.effective_user
     prompt = t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt")
-    fr = ForceReply(force_reply=True, selective=False)
+    fr = ForceReply(selective=False)
     sent = await update.effective_chat.send_message(prompt, reply_markup=fr)
     context.user_data["pending_leave"] = {"prompt_chat": sent.chat_id, "prompt_msg_id": sent.message_id}
 
@@ -1011,8 +1011,9 @@ async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_
     # Use ForceReply to prompt — store pending_fin in user-specific context
     prompt = t(context.user_data.get("lang", DEFAULT_LANG), "fin_inline_prompt")
     try:
+        # Construct a ForceReply with the compatible signature
+        fr = ForceReply(selective=False)
         sent = await query.edit_message_text(f"Enter {typ} record — reply to this message.")
-        fr = ForceReply(force_reply=True, selective=False)
         m = await context.bot.send_message(chat_id=query.message.chat.id, text=prompt, reply_markup=fr)
         # store type in user_data for this user (context.user_data is per chat/user)
         context.user_data["pending_fin"] = {"type": typ, "prompt_chat": m.chat_id, "prompt_msg_id": m.message_id}
@@ -1228,7 +1229,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # leave menu quick
     if data == "leave_menu":
         # prompt ForceReply to collect leave info
-        fr = ForceReply(force_reply=True, selective=False)
+        fr = ForceReply(selective=False)
         sent = await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
         m = await context.bot.send_message(chat_id=sent.chat_id, text=t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"), reply_markup=fr)
         context.user_data["pending_leave"] = {"prompt_chat": m.chat_id, "prompt_msg_id": m.message_id}
@@ -1296,7 +1297,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # mission staff enter => ForceReply
     if data.startswith("mission_staff_enter|"):
         _, plate, dep = data.split("|", 2)
-        fr = ForceReply(force_reply=True, selective=False)
+        fr = ForceReply(selective=False)
         m = await query.edit_message_text("Please reply with staff name (this message will be removed).")
         await context.bot.send_message(chat_id=m.chat_id, text="Please reply with staff name.", reply_markup=fr)
         # mark pending to expect staff ForceReply
