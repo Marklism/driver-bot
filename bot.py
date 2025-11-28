@@ -3,6 +3,8 @@
 Driver Bot — Updated: auto-update sheet headers; finance prompts removed after entry.
 - Ensures EXPENSE_TAB header matches canonical header and updates the sheet header row when needed.
 - Deletes finance prompt messages (and the edited origin callback message) after user replies.
+- Removed pin (置顶) functionality.
+- Removed mission staff-name entry flow (no staff entry).
 """
 import os
 import json
@@ -140,7 +142,7 @@ TR = {
         "no_bot_token": "Please set BOT_TOKEN environment variable.",
         "mission_start_prompt_plate": "Choose plate to start mission:",
         "mission_start_prompt_depart": "Select departure city:",
-        "mission_start_prompt_staff": "Choose staff input or skip:",
+        # staff entry removed
         "mission_start_ok": "✅ Mission start for {plate} at {start_date}, from {dep}.",
         "mission_end_prompt_plate": "Choose plate to end mission:",
         "mission_end_prompt_arrival": "Select arrival city:",
@@ -171,7 +173,6 @@ TR = {
         "no_bot_token": "សូមកំណត់ BOT_TOKEN។",
         "mission_start_prompt_plate": "ជ្រើស plate ដើម្បីចាប់ផ្តើម mission:",
         "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញ:",
-        "mission_start_prompt_staff": "ជ្រើសបញ្ចូលឈ្មោះរឺលោត:",
         "mission_start_ok": "✅ ចាប់ផ្ដើម mission {plate} នៅ {start_date} ចេញពី {dep}.",
         "mission_end_prompt_plate": "ជ្រើស plate ដើម្បីបញ្ចប់ mission:",
         "mission_end_prompt_arrival": "ជ្រើសទីក្រុងមកដល់:",
@@ -1123,7 +1124,7 @@ async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_
     except Exception:
         logger.exception("Failed to present plate selection for finance.")
 
-# Process ForceReply replies: finance (multi-step), leave, mission staff entry (when 'enter staff' chosen)
+# Process ForceReply replies: finance (multi-step), leave
 async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.effective_message.text.strip() if update.effective_message and update.effective_message.text else ""
@@ -1172,12 +1173,25 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await update.effective_message.delete()
                 except Exception:
                     pass
-                # prompt for fuel cost with ForceReply (we will delete this prompt after fuel input)
+                # prompt for fuel cost by editing the original callback message and adding ForceReply
                 fr = ForceReply(selective=False)
                 try:
-                    mmsg = await context.bot.send_message(chat_id=update.effective_chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_fuel_cost", plate=plate), reply_markup=fr)
-                    pending_multi["prompt_chat"] = mmsg.chat_id
-                    pending_multi["prompt_msg_id"] = mmsg.message_id
+                    # edit origin callback message to show fuel prompt and attach ForceReply so user replies to it
+                    if origin:
+                        try:
+                            await context.bot.edit_message_text(chat_id=origin.get("chat"), message_id=origin.get("msg_id"), text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_fuel_cost", plate=plate), reply_markup=fr)
+                            # store same origin as prompt (so we will delete it after)
+                            pending_multi["prompt_chat"] = origin.get("chat")
+                            pending_multi["prompt_msg_id"] = origin.get("msg_id")
+                        except Exception:
+                            # fallback to sending a single prompt (should be rare)
+                            mmsg = await context.bot.send_message(chat_id=update.effective_chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_fuel_cost", plate=plate), reply_markup=fr)
+                            pending_multi["prompt_chat"] = mmsg.chat_id
+                            pending_multi["prompt_msg_id"] = mmsg.message_id
+                    else:
+                        mmsg = await context.bot.send_message(chat_id=update.effective_chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_fuel_cost", plate=plate), reply_markup=fr)
+                        pending_multi["prompt_chat"] = mmsg.chat_id
+                        pending_multi["prompt_msg_id"] = mmsg.message_id
                     context.user_data["pending_fin_multi"] = pending_multi
                 except Exception:
                     logger.exception("Failed to prompt for fuel cost.")
@@ -1229,7 +1243,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     res = record_finance_combined_odo_fuel(plate, km, fuel_amt, by_user=user.username or "", invoice=invoice, driver_paid=driver_paid)
                 except Exception:
                     res = {"ok": False}
-                # delete user's reply and the bot's prompt(s)
+                # delete user's reply and the prompt(s) (origin)
                 try:
                     await update.effective_message.delete()
                 except Exception:
@@ -1241,10 +1255,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         await safe_delete_message(context.bot, pchat, pmsg)
                 except Exception:
                     pass
-                # delete origin callback message if present
+                # delete origin callback message if present (already handled above)
                 try:
                     if origin:
-                        await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
+                        # origin already edited to show prompt; we deleted it above
+                        pass
                 except Exception:
                     pass
                 # send group notification as required (short)
@@ -1433,37 +1448,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop("pending_leave", None)
         return
 
-    # mission staff entry pending (we store pending_mission with "need_staff": "enter")
-    pending_mission = context.user_data.get("pending_mission")
-    if pending_mission and pending_mission.get("need_staff") == "enter":
-        staff = text
-        plate = pending_mission.get("plate")
-        departure = pending_mission.get("departure")
-        username = user.username or user.full_name
-        driver_map = get_driver_map()
-        allowed = driver_map.get(user.username, []) if user and user.username else []
-        if allowed and plate not in allowed:
-            await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "not_allowed", plate=plate))
-            context.user_data.pop("pending_mission", None)
-            return
-        res = start_mission_record(username, plate, departure, staff_name=staff)
-        try:
-            await update.effective_message.delete()
-        except Exception:
-            pass
-        if res.get("ok"):
-            try:
-                await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_start_ok", plate=plate, start_date=now_str(), dep=departure))
-            except Exception:
-                pass
-        else:
-            try:
-                await update.effective_chat.send_message("❌ " + res.get("message", ""))
-            except Exception:
-                pass
-        context.user_data.pop("pending_mission", None)
-        return
-
 # fallback free-text handler
 async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await process_force_reply(update, context)
@@ -1519,11 +1503,11 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["pending_fin_multi"] = {"type": "odo_fuel", "plate": plate, "step": "km", "origin": origin_info}
             fr = ForceReply(selective=False)
             try:
-                # edit to ask KM and send ForceReply prompt; store prompt id so we can delete later
-                await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate))
-                mmsg = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate), reply_markup=fr)
-                context.user_data["pending_fin_multi"]["prompt_chat"] = mmsg.chat_id
-                context.user_data["pending_fin_multi"]["prompt_msg_id"] = mmsg.message_id
+                # edit to ask KM and attach ForceReply on the edited callback message (no extra prompt message)
+                await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate), reply_markup=fr)
+                # use the same message as prompt (so we can delete it later)
+                context.user_data["pending_fin_multi"]["prompt_chat"] = origin_info["chat"]
+                context.user_data["pending_fin_multi"]["prompt_msg_id"] = origin_info["msg_id"]
             except Exception:
                 logger.exception("Failed to prompt for odo km.")
                 context.user_data.pop("pending_fin_multi", None)
@@ -1534,10 +1518,11 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["pending_fin_simple"] = {"type": typ, "plate": plate, "origin": origin_info}
             fr = ForceReply(selective=False)
             try:
-                await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "enter_amount_for", typ=typ, plate=plate))
-                mmsg = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_amount_for", typ=typ, plate=plate), reply_markup=fr)
-                context.user_data["pending_fin_simple"]["prompt_chat"] = mmsg.chat_id
-                context.user_data["pending_fin_simple"]["prompt_msg_id"] = mmsg.message_id
+                # edit the callback message to show the amount prompt and attach ForceReply (no extra message)
+                await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "enter_amount_for", typ=typ, plate=plate), reply_markup=fr)
+                # store same origin as prompt
+                context.user_data["pending_fin_simple"]["prompt_chat"] = origin_info["chat"]
+                context.user_data["pending_fin_simple"]["prompt_msg_id"] = origin_info["msg_id"]
             except Exception:
                 logger.exception("Failed to prompt for amount.")
                 context.user_data.pop("pending_fin_simple", None)
@@ -1547,9 +1532,9 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "leave_menu":
         fr = ForceReply(selective=False)
         try:
-            await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
-            m = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"), reply_markup=fr)
-            context.user_data["pending_leave"] = {"prompt_chat": m.chat_id, "prompt_msg_id": m.message_id}
+            await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"), reply_markup=fr)
+            # store prompt info
+            context.user_data["pending_leave"] = {"prompt_chat": query.message.chat.id, "prompt_msg_id": query.message.message_id}
         except Exception:
             logger.exception("Failed to prompt leave.")
         return
@@ -1557,9 +1542,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # mission start choose plate
     if data.startswith("mission_start_plate|"):
         _, plate = data.split("|", 1)
+        # directly ask departure (no staff entry option)
         context.user_data["pending_mission"] = {"action": "start", "plate": plate}
-        kb = [[InlineKeyboardButton("No staff", callback_data=f"mission_staff|none|{plate}"), InlineKeyboardButton("Enter staff", callback_data=f"mission_staff|enter|{plate}")]]
-        await query.edit_message_text(t(user_lang, "mission_start_prompt_staff"), reply_markup=InlineKeyboardMarkup(kb))
+        dep_kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"), InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
+        await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(dep_kb))
         return
 
     # mission end choose plate
@@ -1570,53 +1556,14 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "mission_end_prompt_arrival"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    # mission staff choices
-    if data.startswith("mission_staff|"):
-        parts = data.split("|")
-        if len(parts) < 3:
-            await query.edit_message_text("Invalid selection.")
-            return
-        _, choice, plate = parts
-        pending = context.user_data.get("pending_mission") or {}
-        pending["plate"] = plate
-        if choice == "none":
-            dep_kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"), InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
-            context.user_data["pending_mission"] = pending
-            await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(dep_kb))
-            return
-        elif choice == "enter":
-            dep_kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"), InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
-            context.user_data["pending_mission"] = pending
-            await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(dep_kb))
-            return
-
-    # mission depart after choosing staff option
+    # mission depart after choosing departure city: start mission immediately WITHOUT staff entry
     if data.startswith("mission_depart|"):
         parts = data.split("|")
         if len(parts) < 3:
             await query.edit_message_text("Invalid selection.")
             return
         _, dep, plate = parts
-        pending = context.user_data.get("pending_mission") or {}
-        pending["departure"] = dep
-        pending["plate"] = plate
-        context.user_data["pending_mission"] = pending
-        kb = [[InlineKeyboardButton("Start with no staff", callback_data=f"mission_start_now|{plate}|{dep}"), InlineKeyboardButton("Enter staff name", callback_data=f"mission_staff_enter|{plate}|{dep}")]]
-        await query.edit_message_text("Choose staff option:", reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    # mission staff enter => ForceReply
-    if data.startswith("mission_staff_enter|"):
-        _, plate, dep = data.split("|", 2)
-        fr = ForceReply(selective=False)
-        m = await query.edit_message_text("Please reply with staff name (this message will be removed).")
-        await context.bot.send_message(chat_id=m.chat_id, text="Please reply with staff name.", reply_markup=fr)
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "need_staff": "enter"}
-        return
-
-    # mission start now (no staff)
-    if data.startswith("mission_start_now|"):
-        _, plate, dep = data.split("|", 2)
+        # start mission immediately, staff_name empty
         username = query.from_user.username or query.from_user.full_name
         res = start_mission_record(username, plate, dep, staff_name="")
         if res.get("ok"):
@@ -1910,7 +1857,7 @@ def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]
         logger.exception("Failed to aggregate for period.")
     return totals
 
-# setup_menu command: post & pin main menu in group
+# setup_menu command: post main menu in group (pin removed)
 async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if (user.username or "") not in BOT_ADMINS:
@@ -1923,12 +1870,8 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             [InlineKeyboardButton("Mission start", callback_data="show_mission_start"), InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
             [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"), InlineKeyboardButton("Leave", callback_data="leave_menu")],
         ]
-        sent = await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
-        try:
-            await context.bot.pin_chat_message(chat_id=update.effective_chat.id, message_id=sent.message_id)
-            logger.info("Pinned menu message in chat %s", update.effective_chat.id)
-        except Exception:
-            logger.exception("Could not pin menu message.")
+        # Just send the menu message; do not pin it (pin removed as requested).
+        await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception:
         logger.exception("Failed to setup menu.")
 
@@ -1955,7 +1898,7 @@ def register_ui_handlers(application):
 
     application.add_handler(CallbackQueryHandler(plate_callback))
 
-    # ForceReply responses for finance, leave, mission staff
+    # ForceReply responses for finance, leave
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
     # fallback text handler (used to route some free text entries)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
@@ -1976,7 +1919,7 @@ def register_ui_handlers(application):
                     BotCommand("mission", "Quick mission menu"),
                     BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
                     BotCommand("leave", "Record leave (admin)"),
-                    BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
+                    BotCommand("setup_menu", "Post the main menu (admins only)"),
                 ])
             except Exception:
                 logger.exception("Failed to set bot commands.")
