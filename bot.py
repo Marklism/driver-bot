@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-Driver Bot — Updated full script with ODO+Fuel delta, invoice fields, and prompt deletion.
-- ForceReply(selective=False) used everywhere
-- EXPENSE_TAB gains columns: Mileage, Delta KM, Fuel Cost, Invoice, DriverPaid
-- Combined ODO+Fuel writes a single row with Delta computed from previous mileage
-- Prompts & callback origin messages deleted after processing
+Driver Bot — Updated: auto-update sheet headers; finance prompts removed after entry.
+- Ensures EXPENSE_TAB header matches canonical header and updates the sheet header row when needed.
+- Deletes finance prompt messages (and the edited origin callback message) after user replies.
 """
 import os
 import json
@@ -233,12 +231,37 @@ def get_gspread_client():
     return client
 
 def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
+    """
+    If the sheet is empty, insert headers.
+    """
     try:
         values = ws.get_all_values()
         if not values:
             ws.insert_row(headers, index=1)
     except Exception:
         logger.exception("Failed to ensure headers on %s", getattr(ws, "title", "<ws>"))
+
+def ensure_sheet_headers_match(ws, headers: List[str]):
+    """
+    Ensure first row equals headers. If different, update A1.. to new headers.
+    This will overwrite the first row.
+    """
+    try:
+        values = ws.get_all_values()
+        if not values:
+            ws.insert_row(headers, index=1)
+            return
+        first_row = values[0]
+        # normalize lengths for comparison
+        norm_first = [str(c).strip() for c in first_row]
+        norm_headers = [str(c).strip() for c in headers]
+        if norm_first != norm_headers:
+            # write header row
+            rng = f"A1:{chr(ord('A') + len(headers) - 1)}1"
+            ws.update(rng, [headers], value_input_option="USER_ENTERED")
+            logger.info("Updated header row on %s", getattr(ws, "title", "<ws>"))
+    except Exception:
+        logger.exception("Failed to ensure/update headers on %s", getattr(ws, "title", "<ws>"))
 
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
@@ -276,6 +299,9 @@ def _missions_header_fix_if_needed(ws):
         logger.exception("Error checking/fixing missions header.")
 
 def open_worksheet(tab: str = ""):
+    """
+    Opens a worksheet; ensures headers match templates if available (auto-update).
+    """
     gc = get_gspread_client()
     sh = gc.open(GOOGLE_SHEET_NAME)
     def _create_tab(name: str, headers: Optional[List[str]] = None):
@@ -296,7 +322,9 @@ def open_worksheet(tab: str = ""):
             ws = sh.worksheet(tab)
             template = HEADERS_BY_TAB.get(tab)
             if template:
+                # if sheet exists, ensure headers match template (overwrite if needed)
                 ensure_sheet_has_headers_conservative(ws, template)
+                ensure_sheet_headers_match(ws, template)
             if tab == MISSIONS_TAB:
                 _missions_header_fix_if_needed(ws)
             return ws
@@ -309,6 +337,7 @@ def open_worksheet(tab: str = ""):
                 ws = sh.worksheet(GOOGLE_SHEET_TAB)
                 if GOOGLE_SHEET_TAB in HEADERS_BY_TAB:
                     ensure_sheet_has_headers_conservative(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
+                    ensure_sheet_headers_match(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
                 return ws
             except Exception:
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
@@ -1218,18 +1247,17 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
                 except Exception:
                     pass
-                # send group notification as required
+                # send group notification as required (short)
                 try:
                     delta_txt = res.get("delta", "")
                     m_val = res.get("mileage", km)
                     fuel_val = res.get("fuel", fuel_amt)
                     nowd = _now_dt().strftime(DATE_FMT)
-                    # Example: "2BB-3071 @ 12345 km + $222 fuel in 2025-11-28, difference from previous odo is 120 km."
                     msg = f"{plate} @ {m_val} km + ${fuel_val} fuel in {nowd}, difference from previous odo is {delta_txt} km."
                     await update.effective_chat.send_message(msg)
                 except Exception:
                     logger.exception("Failed to send group notification for odo+fuel")
-                # privately DM admin user with brief confirmation (optional; safe)
+                # privately DM admin user with brief confirmation
                 try:
                     await context.bot.send_message(chat_id=user.id, text=f"Recorded {plate}: {km}KM and ${fuel_amt} fuel. Delta {delta_txt} km. Invoice={invoice} Paid={driver_paid}")
                 except Exception:
@@ -1328,7 +1356,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 pass
             try:
-                # group silent for flow; DM admin
+                # DM operator
                 await context.bot.send_message(chat_id=user.id, text=f"Recorded {typ} ${amt} for {plate}. Invoice={invoice} Paid={driver_paid}")
             except Exception:
                 pass
@@ -1502,6 +1530,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         # other types -> ask for amount (single-step)
         if typ in ("parking", "wash", "repair", "fuel"):
+            # store origin and prompt info to delete later
             context.user_data["pending_fin_simple"] = {"type": typ, "plate": plate, "origin": origin_info}
             fr = ForceReply(selective=False)
             try:
@@ -1933,10 +1962,9 @@ def register_ui_handlers(application):
 
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
 
-    application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
-
-    # Delete any leftover command messages after command handlers run (group=1 so it runs after)
     application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
+
+    application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
     try:
         async def _set_cmds():
