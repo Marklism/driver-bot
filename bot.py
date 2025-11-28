@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-Driver Bot — Updated full script:
-- All ForceReply(...) fixed to ForceReply(selective=False)
-- All deprecated ws.delete_row(...) replaced with ws.delete_rows(...)
-- Missions: only notify completed roundtrip counts when the *return/end* completes the merge (second end)
-- Finance: combined ODO+Fuel written into single expense row; parking/repair/wash single-row
-- All admin finance & leave bot prompts & user commands deleted after processing (no leftover chat clutter)
-- Start/End trip messages changed as requested
+Driver Bot — Updated full script with ODO+Fuel delta, invoice fields, and prompt deletion.
+- ForceReply(selective=False) used everywhere
+- EXPENSE_TAB gains columns: Mileage, Delta KM, Fuel Cost, Invoice, DriverPaid
+- Combined ODO+Fuel writes a single row with Delta computed from previous mileage
+- Prompts & callback origin messages deleted after processing
 """
 import os
 import json
@@ -127,7 +125,8 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     DRIVERS_TAB: ["Username", "Plates"],
     LEAVE_TAB: ["Driver", "Start Date", "End Date", "Reason", "Notes"],
     MAINT_TAB: ["Plate", "Mileage", "Maintenance Item", "Cost", "Date", "Workshop", "Notes"],
-    EXPENSE_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Fuel Cost", "Parking Fee", "Other Fee"],
+    # EXPENSE_TAB extended: include Delta KM, Invoice, DriverPaid
+    EXPENSE_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Delta KM", "Fuel Cost", "Parking Fee", "Other Fee", "Invoice", "DriverPaid"],
 }
 
 TR = {
@@ -159,7 +158,7 @@ TR = {
         "leave_confirm": "Leave recorded for {driver}: {start} to {end} ({reason})",
         "fin_inline_prompt": "Inline finance form — reply: <plate> <amount> [notes]\nExample: 2BB-3071 23.5 bought diesel",
         "enter_odo_km": "Enter odometer reading (KM) for {plate}:",
-        "enter_fuel_cost": "Enter fuel cost in $ for {plate}:",
+        "enter_fuel_cost": "Enter fuel cost in $ for {plate}: (optionally add `inv:INV123 paid:yes`)",
         "enter_amount_for": "Enter amount in $ for {typ} for {plate}:",
     },
     "km": {
@@ -189,7 +188,7 @@ TR = {
         "leave_confirm": "បានកត់សម្រាកសម្រាប់ {driver}: {start} ដល់ {end} ({reason})",
         "fin_inline_prompt": "Finance form — ឆ្លើយ: <plate> <amount> [notes]",
         "enter_odo_km": "បញ្ជូលលេខម៉ាស៊ីន (KM) សម្រាប់ {plate}:",
-        "enter_fuel_cost": "បញ្ជូលចំណាយប្រេង ($) សម្រាប់ {plate}:",
+        "enter_fuel_cost": "បញ្ជូលចំណាយប្រេង ($) សម្រាប់ {plate}: (អាចបញ្ចូល `inv:INV123 paid:yes`)",
         "enter_amount_for": "បញ្ជូលចំនួន ($) សម្រាប់ {typ} សម្រាប់ {plate}:",
     },
 }
@@ -500,8 +499,7 @@ def start_mission_record(driver: str, plate: str, departure: str, staff_name: st
         logger.exception("Failed to append mission start")
         return {"ok": False, "message": "Failed to write mission start to sheet: " + str(e)}
 
-# Strict mission end merge: prefer exact PP<->SHV return pairing first, then fallback by time proximity.
-# Only return merged=True if the current processed row is the SECONDARY (i.e., this end completed the pair).
+# Strict mission end merge (as before)
 def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
     try:
         ws = open_worksheet(MISSIONS_TAB)
@@ -573,7 +571,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                         continue
                     candidates.append({"idx": j, "start": r_s_dt, "end": parse_ts(rend), "dep": dep, "arr": arr, "rstart": rstart, "rend": rend})
 
-                # prefer exact complementary return (PP<->SHV)
                 found_pair = None
                 cur_dep = rec_dep
                 cur_arr = arrival
@@ -583,14 +580,12 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                         found_pair = comp
                         break
 
-                # fallback: check if candidate has dep==cur_arr and arr==cur_dep (complementary)
                 if not found_pair:
                     for comp in candidates:
                         if comp["dep"] == cur_arr and comp["arr"] == cur_dep:
                             found_pair = comp
                             break
 
-                # final fallback: nearest by start time
                 if not found_pair and candidates:
                     candidates.sort(key=lambda x: abs((x["start"] - s_dt).total_seconds()))
                     found_pair = candidates[0]
@@ -635,7 +630,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     except Exception:
                         logger.exception("Failed to insert fallback primary row at %d", primary_row_number)
 
-                # attempt to delete secondary
                 try:
                     sec_vals = _ensure_row_length(vals2[secondary_idx], M_MANDATORY_COLS) if secondary_idx < len(vals2) else None
                     sec_guid = sec_vals[M_IDX_GUID] if sec_vals else None
@@ -796,7 +790,7 @@ def count_trips_for_month(driver: str, month_start: datetime, month_end: datetim
         logger.exception("Failed to count trips for month")
     return cnt
 
-# Finance handling
+# Finance handling (regex and helpers)
 AMOUNT_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*$', re.I)
 ODO_RE = re.compile(r'^\s*(\d+)(?:\s*km)?\s*$', re.I)
 FIN_TYPES = {"odo", "fuel", "parking", "wash", "repair"}
@@ -808,6 +802,9 @@ FIN_TYPE_ALIASES = {
     "wash": "wash", "carwash": "wash",
     "repair": "repair", "rep": "repair", "service": "repair", "maint": "repair",
 }
+
+INV_RE = re.compile(r'(?i)\binv[:#\s]*([^\s,;]+)')
+PAID_RE = re.compile(r'(?i)\bpaid[:\s]*(yes|y|no|n)\b')
 
 def normalize_fin_type(typ: str) -> Optional[str]:
     if not typ:
@@ -822,15 +819,51 @@ def normalize_fin_type(typ: str) -> Optional[str]:
             return v
     return None
 
-def record_finance_combined_odo_fuel(plate: str, mileage: str, fuel_cost: str, by_user: str = "") -> dict:
-    """Write a single row containing both mileage and fuel cost into EXPENSE_TAB"""
+def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
     try:
         ws = open_worksheet(EXPENSE_TAB)
+        vals = ws.get_all_values()
+        if not vals:
+            return None
+        # find header row index
+        start_idx = 1 if any("plate" in c.lower() for c in vals[0] if c) else 0
+        # iterate bottom-up to find first row with a mileage (col index 4 in our header)
+        for r in reversed(vals[start_idx:]):
+            if len(r) >= 4:
+                rp = str(r[0]).strip() if len(r) > 0 else ""
+                mileage_cell = str(r[3]).strip() if len(r) > 3 else ""
+                if rp == plate and mileage_cell:
+                    m = re.search(r'(\d+)', mileage_cell)
+                    if m:
+                        return int(m.group(1))
+        return None
+    except Exception:
+        logger.exception("Failed to find last mileage for plate")
+        return None
+
+def record_finance_combined_odo_fuel(plate: str, mileage: str, fuel_cost: str, by_user: str = "", invoice: str = "", driver_paid: str = "") -> dict:
+    """Write a single row containing Mileage, Delta KM, Fuel Cost, Invoice, DriverPaid into EXPENSE_TAB"""
+    try:
+        ws = open_worksheet(EXPENSE_TAB)
+        # ensure headers exist (open_worksheet will insert if sheet empty)
+        prev_m = _find_last_mileage_for_plate(plate)
+        m_int = None
+        try:
+            m_int = int(re.search(r'(\d+)', str(mileage)).group(1))
+        except Exception:
+            m_int = None
+        delta = ""
+        if prev_m is not None and m_int is not None:
+            try:
+                delta_val = m_int - prev_m
+                delta = str(delta_val)
+            except Exception:
+                delta = ""
         dt = now_str()
-        row = [plate, by_user or "Unknown", dt, str(mileage), str(fuel_cost), "", ""]
+        row = [plate, by_user or "Unknown", dt, str(m_int) if m_int is not None else str(mileage), delta, str(fuel_cost), "", "", invoice or "", driver_paid or ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info("Recorded combined ODO+Fuel row for %s km=%s fuel=%s", plate, mileage, fuel_cost)
-        return {"ok": True}
+        logger.info("Recorded combined ODO+Fuel: plate=%s mileage=%s delta=%s fuel=%s invoice=%s paid=%s", plate, m_int, delta, fuel_cost, invoice, driver_paid)
+        return {"ok": True, "delta": delta, "mileage": m_int, "fuel": fuel_cost}
     except Exception as e:
         logger.exception("Failed to append combined odo+fuel row: %s", e)
         return {"ok": False, "message": str(e)}
@@ -857,7 +890,7 @@ def record_finance_entry_single_row(typ: str, plate: str, amount: str, notes: st
                     notes = f"{ntyp}: {notes}"
                 else:
                     notes = ntyp
-            row = [plate, by_user or "Unknown", dt, mileage, fuel_cost, parking_fee, other_fee]
+            row = [plate, by_user or "Unknown", dt, mileage, "", "", parking_fee, other_fee, notes, ""]
             ws.append_row(row, value_input_option="USER_ENTERED")
             logger.info("Recorded expense entry: %s %s %s", ntyp, plate, amount)
             return {"ok": True}
@@ -876,7 +909,7 @@ def record_finance_entry_single_row(typ: str, plate: str, amount: str, notes: st
         # fallback: generic
         ws = open_worksheet(EXPENSE_TAB)
         dt = now_str()
-        row = [plate, by_user or "Unknown", dt, "", "", "", str(amount)]
+        row = [plate, by_user or "Unknown", dt, "", "", "", "", "", str(amount), ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("Recorded generic finance entry for unknown type '%s': %s", typ, plate)
         return {"ok": True}
@@ -1027,7 +1060,6 @@ async def admin_finance_callback_handler(update: Update, context: ContextTypes.D
         [InlineKeyboardButton("Repair", callback_data="fin_type|repair")],
     ]
     try:
-        # show and keep track of the callback message id so we can delete it later
         await query.edit_message_text("Select finance type:", reply_markup=InlineKeyboardMarkup(kb))
     except Exception:
         logger.exception("Failed to prompt finance options.")
@@ -1056,19 +1088,9 @@ async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_
         except Exception:
             pass
         return
-    # For finance, first ask for plate via inline keyboard, use prefix fin_plate|{typ}
     try:
-        # edit the callback message to ask plate; store origin msg id in user_data for deletion later
-        try:
-            await query.edit_message_text("Choose plate:", reply_markup=build_plate_keyboard(f"fin_plate|{typ}"))
-        except Exception:
-            # fallback: send new message
-            sent = await query.message.chat.send_message("Choose plate:", reply_markup=build_plate_keyboard(f"fin_plate|{typ}"))
-            # store origin prompt id
-            context.user_data["pending_fin_origin"] = {"chat": sent.chat_id, "msg_id": sent.message_id}
-            return
-        # store the origin callback message id
-        context.user_data["pending_fin_origin"] = {"chat": query.message.chat.id, "msg_id": query.message.message_id, "typ": typ}
+        # ask plate selection (we will edit the callback message to the plate keyboard so we can later delete it)
+        await query.edit_message_text("Choose plate:", reply_markup=build_plate_keyboard(f"fin_plate|{typ}"))
     except Exception:
         logger.exception("Failed to present plate selection for finance.")
 
@@ -1085,7 +1107,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         ptype = pending_multi.get("type")
         plate = pending_multi.get("plate")
         step = pending_multi.get("step")
-        origin = pending_multi.get("origin")  # optional origin callback message to delete later
+        origin = pending_multi.get("origin")  # origin callback message info to delete later
         if ptype == "odo_fuel":
             if step == "km":
                 # validate odometer
@@ -1116,7 +1138,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pending_multi["km"] = km
                 pending_multi["step"] = "fuel"
                 context.user_data["pending_fin_multi"] = pending_multi
-                # delete user's reply message
+                # delete user's reply
                 try:
                     await update.effective_message.delete()
                 except Exception:
@@ -1124,13 +1146,12 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 # prompt for fuel cost with ForceReply (we will delete this prompt after fuel input)
                 fr = ForceReply(selective=False)
                 try:
-                    m = await context.bot.send_message(chat_id=update.effective_chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_fuel_cost", plate=plate), reply_markup=fr)
-                    pending_multi["prompt_chat"] = m.chat_id
-                    pending_multi["prompt_msg_id"] = m.message_id
+                    mmsg = await context.bot.send_message(chat_id=update.effective_chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_fuel_cost", plate=plate), reply_markup=fr)
+                    pending_multi["prompt_chat"] = mmsg.chat_id
+                    pending_multi["prompt_msg_id"] = mmsg.message_id
                     context.user_data["pending_fin_multi"] = pending_multi
                 except Exception:
                     logger.exception("Failed to prompt for fuel cost.")
-                    # cleanup
                     try:
                         if origin:
                             await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
@@ -1139,10 +1160,19 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     context.user_data.pop("pending_fin_multi", None)
                 return
             elif step == "fuel":
-                # validate fuel amount
-                m = AMOUNT_RE.match(text)
-                if not m:
-                    m2 = re.search(r'(\d+(?:\.\d+)?)', text)
+                raw = text  # raw text may contain amount + inv + paid
+                # parse invoice and paid tokens
+                inv_m = INV_RE.search(raw)
+                paid_m = PAID_RE.search(raw)
+                invoice = inv_m.group(1) if inv_m else ""
+                driver_paid = ""
+                if paid_m:
+                    v = paid_m.group(1).lower()
+                    driver_paid = "yes" if v.startswith("y") else "no"
+                # extract fuel numeric
+                am = AMOUNT_RE.match(raw)
+                if not am:
+                    m2 = re.search(r'(\d+(?:\.\d+)?)', raw)
                     if m2:
                         fuel_amt = m2.group(1)
                     else:
@@ -1154,8 +1184,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                             await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
                         except Exception:
                             pass
-                        # cleanup origin
-                        origin = pending_multi.get("origin")
+                        # cleanup origin prompt
                         try:
                             if origin:
                                 await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
@@ -1164,11 +1193,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         context.user_data.pop("pending_fin_multi", None)
                         return
                 else:
-                    fuel_amt = m.group(1)
+                    fuel_amt = am.group(1)
                 km = pending_multi.get("km", "")
-                # record both entries into single row
+                # attempt to record combined row (compute delta inside)
                 try:
-                    res = record_finance_combined_odo_fuel(plate, km, fuel_amt, by_user=user.username or "")
+                    res = record_finance_combined_odo_fuel(plate, km, fuel_amt, by_user=user.username or "", invoice=invoice, driver_paid=driver_paid)
                 except Exception:
                     res = {"ok": False}
                 # delete user's reply and the bot's prompt(s)
@@ -1176,7 +1205,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await update.effective_message.delete()
                 except Exception:
                     pass
-                # delete the last ForceReply prompt
                 try:
                     pchat = pending_multi.get("prompt_chat")
                     pmsg = pending_multi.get("prompt_msg_id")
@@ -1185,17 +1213,25 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 except Exception:
                     pass
                 # delete origin callback message if present
-                origin = pending_multi.get("origin")
                 try:
                     if origin:
                         await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
                 except Exception:
                     pass
-                # do not send any confirmation in group (requirement: admin finance messages removed). Send only to admin in private if needed.
-                # We silently finish here (no group message). Optionally, you can DM the admin.
+                # send group notification as required
                 try:
-                    await context.bot.send_message(chat_id=user.id, text=f"Recorded ODO {km}KM and Fuel ${fuel_amt} for {plate}.")
-                    # then delete the DM to avoid leaving traces? We keep the DM (private) so admin gets confirmation; group remains clean.
+                    delta_txt = res.get("delta", "")
+                    m_val = res.get("mileage", km)
+                    fuel_val = res.get("fuel", fuel_amt)
+                    nowd = _now_dt().strftime(DATE_FMT)
+                    # Example: "2BB-3071 @ 12345 km + $222 fuel in 2025-11-28, difference from previous odo is 120 km."
+                    msg = f"{plate} @ {m_val} km + ${fuel_val} fuel in {nowd}, difference from previous odo is {delta_txt} km."
+                    await update.effective_chat.send_message(msg)
+                except Exception:
+                    logger.exception("Failed to send group notification for odo+fuel")
+                # privately DM admin user with brief confirmation (optional; safe)
+                try:
+                    await context.bot.send_message(chat_id=user.id, text=f"Recorded {plate}: {km}KM and ${fuel_amt} fuel. Delta {delta_txt} km. Invoice={invoice} Paid={driver_paid}")
                 except Exception:
                     pass
                 context.user_data.pop("pending_fin_multi", None)
@@ -1207,11 +1243,12 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         typ = pending_simple.get("type")
         plate = pending_simple.get("plate")
         origin = pending_simple.get("origin")
-        # expect amount in message
+        # expect amount in message; also allow inv/paid tags in same text
+        raw = text
         if typ == "odo":
-            m = ODO_RE.match(text)
+            m = ODO_RE.match(raw)
             if not m:
-                m2 = re.search(r'(\d+)', text)
+                m2 = re.search(r'(\d+)', raw)
                 if m2:
                     km = m2.group(1)
                 else:
@@ -1233,7 +1270,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 km = m.group(1)
             res = record_finance_entry_single_row("odo", plate, km, "", by_user=user.username or "")
-            # delete user's reply and origin prompts
             try:
                 await update.effective_message.delete()
             except Exception:
@@ -1250,10 +1286,17 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data.pop("pending_fin_simple", None)
             return
         else:
-            # amount $
-            m = AMOUNT_RE.match(text)
-            if not m:
-                m2 = re.search(r'(\d+(?:\.\d+)?)', text)
+            # parse invoice and paid tokens also from raw
+            inv_m = INV_RE.search(raw)
+            paid_m = PAID_RE.search(raw)
+            invoice = inv_m.group(1) if inv_m else ""
+            driver_paid = ""
+            if paid_m:
+                v = paid_m.group(1).lower()
+                driver_paid = "yes" if v.startswith("y") else "no"
+            am = AMOUNT_RE.match(raw)
+            if not am:
+                m2 = re.search(r'(\d+(?:\.\d+)?)', raw)
                 if m2:
                     amt = m2.group(1)
                 else:
@@ -1273,8 +1316,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     context.user_data.pop("pending_fin_simple", None)
                     return
             else:
-                amt = m.group(1)
-            res = record_finance_entry_single_row(typ, plate, amt, "", by_user=user.username or "")
+                amt = am.group(1)
+            res = record_finance_entry_single_row(typ, plate, amt, invoice or "", by_user=user.username or "")
             try:
                 await update.effective_message.delete()
             except Exception:
@@ -1285,7 +1328,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 pass
             try:
-                await context.bot.send_message(chat_id=user.id, text=f"Recorded {typ} ${amt} for {plate}.")
+                # group silent for flow; DM admin
+                await context.bot.send_message(chat_id=user.id, text=f"Recorded {typ} ${amt} for {plate}. Invoice={invoice} Paid={driver_paid}")
             except Exception:
                 pass
             context.user_data.pop("pending_fin_simple", None)
@@ -1347,7 +1391,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
             except Exception:
                 pass
-            # do not post leave confirmation in group; DM admin user instead
+            # DM confirmation (group silent)
             try:
                 await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "leave_confirm", driver=driver, start=start, end=end, reason=reason))
             except Exception:
@@ -1396,7 +1440,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await process_force_reply(update, context)
 
-# Plate callback with fixed flows and improved mission staff selection and finance flows
+# Plate callback with finance & mission flows; ensures deletion of prompts/origin messages
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1422,7 +1466,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t(user_lang, "help"))
         return
 
-    # admin finance
+    # admin finance menu
     if data == "admin_finance":
         if (query.from_user.username or "") not in BOT_ADMINS:
             await query.edit_message_text("❌ Admins only.")
@@ -1445,15 +1489,13 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # For combined odo+fuel, start multi-step
         if typ == "odo_fuel":
             context.user_data["pending_fin_multi"] = {"type": "odo_fuel", "plate": plate, "step": "km", "origin": origin_info}
-            # prompt for km privately (force reply in the same chat but we'll delete later)
             fr = ForceReply(selective=False)
             try:
-                # edit the callback message to ask for KM, also send a ForceReply message to receive the reply
+                # edit to ask KM and send ForceReply prompt; store prompt id so we can delete later
                 await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate))
-                m = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate), reply_markup=fr)
-                # store the prompt id to delete later
-                context.user_data["pending_fin_multi"]["prompt_chat"] = m.chat_id
-                context.user_data["pending_fin_multi"]["prompt_msg_id"] = m.message_id
+                mmsg = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate), reply_markup=fr)
+                context.user_data["pending_fin_multi"]["prompt_chat"] = mmsg.chat_id
+                context.user_data["pending_fin_multi"]["prompt_msg_id"] = mmsg.message_id
             except Exception:
                 logger.exception("Failed to prompt for odo km.")
                 context.user_data.pop("pending_fin_multi", None)
@@ -1464,9 +1506,9 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fr = ForceReply(selective=False)
             try:
                 await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "enter_amount_for", typ=typ, plate=plate))
-                m = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_amount_for", typ=typ, plate=plate), reply_markup=fr)
-                context.user_data["pending_fin_simple"]["prompt_chat"] = m.chat_id
-                context.user_data["pending_fin_simple"]["prompt_msg_id"] = m.message_id
+                mmsg = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_amount_for", typ=typ, plate=plate), reply_markup=fr)
+                context.user_data["pending_fin_simple"]["prompt_chat"] = mmsg.chat_id
+                context.user_data["pending_fin_simple"]["prompt_msg_id"] = mmsg.message_id
             except Exception:
                 logger.exception("Failed to prompt for amount.")
                 context.user_data.pop("pending_fin_simple", None)
@@ -1476,7 +1518,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "leave_menu":
         fr = ForceReply(selective=False)
         try:
-            # edit and send prompt, store prompt id for deletion after processed
             await query.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
             m = await context.bot.send_message(chat_id=query.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"), reply_markup=fr)
             context.user_data["pending_leave"] = {"prompt_chat": m.chat_id, "prompt_msg_id": m.message_id}
@@ -1609,11 +1650,9 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "start":
             res = record_start_trip(username, plate)
             if res.get("ok"):
-                # send required start message format
                 try:
                     await query.edit_message_text(t(user_lang, "start_ok", driver=username, ts=res.get("ts")))
                 except Exception:
-                    # fallback: send new message then delete callback
                     try:
                         await query.message.chat.send_message(t(user_lang, "start_ok", driver=username, ts=res.get("ts")))
                         await safe_delete_message(context.bot, query.message.chat.id, query.message.message_id)
@@ -1630,7 +1669,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if res.get("ok"):
                 ts = res.get("ts")
                 dur = res.get("duration") or ""
-                # compute todays count and month count
                 nowdt = _now_dt()
                 n_today = count_trips_for_day(username, nowdt)
                 month_start = datetime(nowdt.year, nowdt.month, 1)
@@ -1639,7 +1677,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     month_end = datetime(nowdt.year, nowdt.month + 1, 1)
                 n_month = count_trips_for_month(username, month_start, month_end)
-                # compose end message
                 try:
                     await query.edit_message_text(t(user_lang, "end_ok", driver=username, ts=ts, dur=dur, n_today=n_today, n_month=n_month, month=month_start.strftime("%Y-%m")))
                 except Exception:
