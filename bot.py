@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """
-Driver Bot — Updated full script with requested fixes:
-- End trip -> sends "Driver X completed N trips in YYYY-MM."
-- Mission completion counts only PP<->SHV roundtrips (PP->SHV->PP or SHV->PP->SHV).
-- /mission and /leave commands added.
-- Mission start: staff can choose "No staff" or "Enter staff" (no /skip).
-- Admin finance inline form + ForceReply fixed (accept numbers/ODO).
-- Removed previous per-command trip summaries and removed /skip mentions.
-- Replace your bot.py with this file and restart.
+Driver Bot — Updated full script:
+- All ForceReply(...) fixed to ForceReply(selective=False)
+- All deprecated ws.delete_row(...) replaced with ws.delete_rows(...)
+- Mission/Trip/Finance/Leave flows as before
 """
 import os
 import json
@@ -430,8 +426,15 @@ def record_end_trip(driver: str, plate: str) -> dict:
                         existing.append("")
                     existing[COL_END - 1] = end_ts
                     existing[COL_DURATION - 1] = duration_text
-                    ws.delete_row(row_number)
-                    ws.insert_row(existing, row_number)
+                    # replace row
+                    try:
+                        ws.delete_rows(row_number)
+                    except Exception:
+                        logger.exception("Failed to delete row for fallback replacement at %d", row_number)
+                    try:
+                        ws.insert_row(existing, row_number)
+                    except Exception:
+                        logger.exception("Failed to insert fallback row at %d", row_number)
                 logger.info("Recorded end trip for %s row %d", plate, row_number)
                 return {"ok": True, "message": f"End time recorded for {plate} at {end_ts} (duration {duration_text})"}
         end_ts = now_str()
@@ -522,10 +525,13 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     existing[M_IDX_END] = end_ts
                     existing[M_IDX_ARRIVAL] = arrival
                     try:
-                        ws.delete_row(row_number)
+                        ws.delete_rows(row_number)
+                    except Exception:
+                        logger.exception("Failed to delete row for fallback replacement at %d", row_number)
+                    try:
                         ws.insert_row(existing, row_number)
                     except Exception:
-                        logger.exception("Failed fallback write for mission end at row %d", row_number)
+                        logger.exception("Failed to insert fallback row at %d", row_number)
 
                 logger.info("Updated mission end for row %d plate=%s driver=%s", row_number, plate, driver)
 
@@ -613,10 +619,13 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     existing[M_IDX_RETURN_START] = return_start
                     existing[M_IDX_RETURN_END] = return_end
                     try:
-                        ws.delete_row(primary_row_number)
+                        ws.delete_rows(primary_row_number)
+                    except Exception:
+                        logger.exception("Failed to delete primary row for fallback replacement at %d", primary_row_number)
+                    try:
                         ws.insert_row(existing, primary_row_number)
                     except Exception:
-                        logger.exception("Failed fallback write when marking roundtrip on row %d", primary_row_number)
+                        logger.exception("Failed to insert fallback primary row at %d", primary_row_number)
 
                 # attempt to delete secondary
                 try:
@@ -628,7 +637,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                             r_k = _ensure_row_length(all_vals_post[k], M_MANDATORY_COLS)
                             if str(r_k[M_IDX_GUID]).strip() == str(sec_guid).strip():
                                 try:
-                                    ws.delete_row(k + 1)
+                                    ws.delete_rows(k + 1)
                                     break
                                 except Exception:
                                     try:
@@ -638,7 +647,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                                     break
                     else:
                         try:
-                            ws.delete_row(secondary_row_number)
+                            ws.delete_rows(secondary_row_number)
                         except Exception:
                             try:
                                 ws.update_cell(secondary_row_number, M_IDX_ROUNDTRIP + 1, "Merged")
@@ -1011,11 +1020,9 @@ async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_
     # Use ForceReply to prompt — store pending_fin in user-specific context
     prompt = t(context.user_data.get("lang", DEFAULT_LANG), "fin_inline_prompt")
     try:
-        # Construct a ForceReply with the compatible signature
         fr = ForceReply(selective=False)
         sent = await query.edit_message_text(f"Enter {typ} record — reply to this message.")
         m = await context.bot.send_message(chat_id=query.message.chat.id, text=prompt, reply_markup=fr)
-        # store type in user_data for this user (context.user_data is per chat/user)
         context.user_data["pending_fin"] = {"type": typ, "prompt_chat": m.chat_id, "prompt_msg_id": m.message_id}
     except Exception:
         logger.exception("Failed to prompt for finance entry.")
