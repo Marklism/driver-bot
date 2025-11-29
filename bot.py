@@ -872,19 +872,47 @@ def register_handlers(application):
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN env required")
-    # persistence optional
+        logger.error("BOT_TOKEN not set — aborting startup.")
+        return
+
+    # optional persistence
     persistence = None
     try:
+        from telegram.ext import PicklePersistence
         persistence = PicklePersistence(filepath="driver_bot_persistence.pkl")
     except Exception:
         persistence = None
 
-    application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
-    register_handlers(application)
+    application = None
+    try:
+        application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+        register_handlers(application)
+    except Exception:
+        logger.exception("Failed building application.")
+        # still try to avoid exit so platform logs can be inspected
+        return
 
-    logger.info("Starting driver-bot polling...")
-    application.run_polling()
+    # Post-init handlers already attached via register_handlers
+    try:
+        logger.info("Starting driver-bot (polling)...")
+        # run_polling will block; wrap in try/catch to log any exceptions
+        application.run_polling()
+    except Exception as e:
+        # log full traceback to make crash reason obvious in logs
+        logger.exception("Application.run_polling terminated with exception: %s", e)
+        # If it's a getUpdates Conflict, give explicit hint
+        if "Conflict" in str(e) or "terminated by other getUpdates request" in str(e):
+            logger.error("Telegram Conflict detected: likely another bot instance or webhook uses same BOT_TOKEN. Ensure only one instance.")
+    finally:
+        # try graceful shutdown
+        try:
+            if application:
+                application.stop()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        logger.exception("Uncaught exception in main — exiting.")
