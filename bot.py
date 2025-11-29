@@ -1503,45 +1503,81 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
-                nowdt = _now_dt()
-                month_start = datetime(nowdt.year, nowdt.month, 1)
-                if nowdt.month == 12:
-                    month_end = datetime(nowdt.year + 1, 1, 1)
-                else:
-                    month_end = datetime(nowdt.year, nowdt.month + 1, 1)
-
-                counts = count_roundtrips_per_driver_month(month_start, month_end)
-                d_month = counts.get(username, 0)
-                year_start = datetime(nowdt.year, 1, 1)
-                counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
-                d_year = counts_year.get(username, 0)
-
-                plate_counts_month = 0
-                plate_counts_year = 0
                 try:
-                    vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
-                    for r in vals_all[sidx:]:
-                        rpl = r[M_IDX_PLATE] if len(r) > M_IDX_PLATE else ""
-                        rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
-                        rstart = r[M_IDX_START] if len(r) > M_IDX_START else ""
-                        if rpl == plate and rrt == "yes":
-                            sdt = parse_ts(rstart)
-                            if sdt and month_start <= sdt < month_end:
-                                plate_counts_month += 1
-                            if sdt and year_start <= sdt < datetime(nowdt.year + 1, 1, 1):
-                                plate_counts_year += 1
-                except Exception:
-                    pass
+                    # 简单去重：同一 driver|plate 在短时间内只发送一次合并提醒
+                    chat_data = context.chat_data
+                    if "last_merge_sent" not in chat_data:
+                        chat_data["last_merge_sent"] = {}
+                    last_map = chat_data["last_merge_sent"]
 
-                month_label = month_start.strftime("%Y-%m")
-                msg = t(user_lang, "roundtrip_merged_notify",
-                        driver=username, d_month=d_month, month=month_label,
-                        d_year=d_year, year=nowdt.year,
-                        plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
-                try:
-                    await q.message.chat.send_message(msg)
+                    nowdt = _now_dt()
+                    key = f"{username}|{plate}"
+                    last_time = last_map.get(key)
+
+                    # 若上次发送在 60 秒内，则视为重复触发，跳过此次发送
+                    skip_seconds = 60
+                    if last_time:
+                        try:
+                            # last_time 存为 ISO 字符串时也能兼容
+                            if isinstance(last_time, str):
+                                lt = datetime.fromisoformat(last_time)
+                            else:
+                                lt = last_time
+                            if (nowdt - lt).total_seconds() < skip_seconds:
+                                logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
+                                # 清理 pending_mission 并返回
+                                context.user_data.pop("pending_mission", None)
+                                return
+                        except Exception:
+                            # 如果解析失败，继续发送并覆盖 last_time
+                            pass
+
+                    month_start = datetime(nowdt.year, nowdt.month, 1)
+                    if nowdt.month == 12:
+                        month_end = datetime(nowdt.year + 1, 1, 1)
+                    else:
+                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+
+                    counts = count_roundtrips_per_driver_month(month_start, month_end)
+                    d_month = counts.get(username, 0)
+                    year_start = datetime(nowdt.year, 1, 1)
+                    counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
+                    d_year = counts_year.get(username, 0)
+
+                    plate_counts_month = 0
+                    plate_counts_year = 0
+                    try:
+                        vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                        for r in vals_all[sidx:]:
+                            rpl = r[M_IDX_PLATE] if len(r) > M_IDX_PLATE else ""
+                            rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
+                            rstart = r[M_IDX_START] if len(r) > M_IDX_START else ""
+                            if rpl == plate and rrt == "yes":
+                                sdt = parse_ts(rstart)
+                                if sdt and month_start <= sdt < month_end:
+                                    plate_counts_month += 1
+                                if sdt and year_start <= sdt < datetime(nowdt.year + 1, 1, 1):
+                                    plate_counts_year += 1
+                    except Exception:
+                        logger.exception("Failed to compute plate roundtrip counts for merged notify")
+
+                    month_label = month_start.strftime("%Y-%m")
+                    msg = t(user_lang, "roundtrip_merged_notify",
+                            driver=username, d_month=d_month, month=month_label,
+                            d_year=d_year, year=nowdt.year,
+                            plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                    try:
+                        await q.message.chat.send_message(msg)
+                        # 记录发送时间（以 ISO 字符串保存，跨重启也能被 pickle）
+                        try:
+                            last_map[key] = nowdt.isoformat()
+                            chat_data["last_merge_sent"] = last_map
+                        except Exception:
+                            logger.exception("Failed to persist last_merge_sent timestamp")
+                    except Exception:
+                        logger.exception("Failed to send merged roundtrip summary.")
                 except Exception:
-                    logger.exception("Failed to send merged roundtrip summary.")
+                    logger.exception("Failed preparing merged roundtrip summary.")
 
         except Exception:
             logger.exception("Failed mission end flow")
