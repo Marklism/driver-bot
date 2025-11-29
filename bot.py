@@ -969,10 +969,17 @@ async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.delete()
     except Exception:
         pass
-    prompt = t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt")
-    fr = ForceReply(selective=False)
-    sent = await update.effective_chat.send_message(prompt, reply_markup=fr)
-    context.user_data["pending_leave"] = {"prompt_chat": sent.chat_id, "prompt_msg_id": sent.message_id}
+    # Make leave a pending entry similar to finance: do not show long instruction
+    try:
+        sent = await update.effective_chat.send_message("Pending leave entry — reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
+        context.user_data["pending_leave"] = {"prompt_chat": sent.chat_id, "prompt_msg_id": sent.message_id, "origin": {"chat": sent.chat_id, "msg_id": sent.message_id}}
+    except Exception:
+        logger.exception("Failed to notify pending leave.")
+        try:
+            await update.effective_chat.send_message("Pending leave entry — please reply with driver, start, end, reason.")
+            context.user_data["pending_leave"] = {"prompt_chat": update.effective_chat.id, "prompt_msg_id": None}
+        except Exception:
+            pass
 
 async def admin_finance_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1061,7 +1068,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         return
                 else:
                     km = m.group(1)
-                # We no longer send an \"Enter fuel cost\" ForceReply message here.
+                # We no longer send an "Enter fuel cost" ForceReply message here.
                 # Just advance the state; the user should next send fuel amount in chat.
                 pending_multi["km"] = km
                 pending_multi["step"] = "fuel"
@@ -1130,7 +1137,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     m_val = res.get("mileage", km)
                     fuel_val = res.get("fuel", fuel_amt)
                     nowd = _now_dt().strftime(DATE_FMT)
-                    msg = f"{plate} @ {m_val} km + ${fuel_val} fuel on {nowd} paid by {user.username or user.first_name}. difference from previous odo is {delta_txt} km."
+                    # 公共群通知固定显示 "paid by Mark"
+                    msg = f"{plate} @ {m_val} km + ${fuel_val} fuel on {nowd} paid by Mark. difference from previous odo is {delta_txt} km."
                     await update.effective_chat.send_message(msg)
                 except Exception:
                     logger.exception("Failed to send group notification for odo+fuel")
@@ -1225,13 +1233,14 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             res = {"ok": False}
             if typ == "parking":
                 res = record_parking(plate, amt, by_user=user.username or "")
-                msg_pub = f"{plate} parking fee ${amt} on {today_date_str()} paid by {user.username or user.first_name}."
+                # 公共群通知固定显示 "paid by Mark"
+                msg_pub = f"{plate} parking fee ${amt} on {today_date_str()} paid by Mark."
             elif typ == "wash":
                 res = record_wash(plate, amt, by_user=user.username or "")
-                msg_pub = f"{plate} wash fee ${amt} on {today_date_str()} paid by {user.username or user.first_name}."
+                msg_pub = f"{plate} wash fee ${amt} on {today_date_str()} paid by Mark."
             elif typ == "repair":
                 res = record_repair(plate, amt, by_user=user.username or "")
-                msg_pub = f"{plate} repair fee ${amt} on {today_date_str()} paid by {user.username or user.first_name}."
+                msg_pub = f"{plate} repair fee ${amt} on {today_date_str()} paid by Mark."
             else:
                 msg_pub = f"{plate} {typ} recorded ${amt}."
             try:
@@ -1363,7 +1372,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         origin_info = {"chat": q.message.chat.id, "msg_id": q.message.message_id, "typ": typ}
         if typ == "odo_fuel":
-            # Set pending state but DO NOT send a separate \"Enter odometer...\" ForceReply message.
+            # Set pending state but DO NOT send a separate "Enter odometer..." ForceReply message.
             context.user_data["pending_fin_multi"] = {"type": "odo_fuel", "plate": plate, "step": "km", "origin": origin_info}
             try:
                 # Edit the callback message minimally to reflect pending state; do not send a new ForceReply prompt.
@@ -1372,7 +1381,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.exception("Failed to edit message for pending odo_fuel entry.")
             return
         if typ in ("parking", "wash", "repair", "fuel"):
-            # Set pending simple state but DO NOT send a separate \"Enter amount...\" ForceReply message.
+            # Set pending simple state but DO NOT send a separate "Enter amount..." ForceReply message.
             context.user_data["pending_fin_simple"] = {"type": typ, "plate": plate, "origin": origin_info}
             try:
                 await q.edit_message_text(f"Pending {typ} entry for {plate}. Please send amount in chat.")
@@ -1381,11 +1390,14 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if data == "leave_menu":
-        fr = ForceReply(selective=False)
+        # Make leave pending without sending the long instruction (minimal prompt)
         try:
-            await q.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
-            m = await context.bot.send_message(chat_id=q.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"), reply_markup=fr)
-            context.user_data["pending_leave"] = {"prompt_chat": m.chat_id, "prompt_msg_id": m.message_id}
+            m = await context.bot.send_message(chat_id=q.message.chat.id, text="Pending leave entry — reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
+            context.user_data["pending_leave"] = {"prompt_chat": m.chat_id, "prompt_msg_id": m.message_id, "origin": {"chat": m.chat_id, "msg_id": m.message_id}}
+            try:
+                await q.edit_message_text("Leave entry pending. Please reply in chat with the leave details.")
+            except Exception:
+                pass
         except Exception:
             logger.exception("Failed to prompt leave.")
         return
