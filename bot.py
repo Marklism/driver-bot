@@ -141,6 +141,7 @@ TR = {
         "help": "Help: Use /start_trip or /end_trip and select a plate.",
         "mission_start_prompt_plate": "Choose plate to start mission:",
         "mission_start_prompt_depart": "Select departure city:",
+        "mission_end_prompt_plate": "Choose plate to end mission:",
         "mission_start_ok": "Driver {driver} (plate {plate}) departures from {dep} at {ts}.",
         "mission_end_ok": "Driver {driver} (plate {plate}) arrives at {arr} at {ts}.",
         "mission_no_open": "No open mission found for {plate}.",
