@@ -1061,6 +1061,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         return
                 else:
                     km = m.group(1)
+                # We no longer send an \"Enter fuel cost\" ForceReply message here.
+                # Just advance the state; the user should next send fuel amount in chat.
                 pending_multi["km"] = km
                 pending_multi["step"] = "fuel"
                 context.user_data["pending_fin_multi"] = pending_multi
@@ -1068,20 +1070,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await update.effective_message.delete()
                 except Exception:
                     pass
-                fr = ForceReply(selective=False)
-                try:
-                    mmsg = await context.bot.send_message(chat_id=update.effective_chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_fuel_cost", plate=plate), reply_markup=fr)
-                    pending_multi["prompt_chat"] = mmsg.chat_id
-                    pending_multi["prompt_msg_id"] = mmsg.message_id
-                    context.user_data["pending_fin_multi"] = pending_multi
-                except Exception:
-                    logger.exception("Failed to prompt for fuel cost.")
-                    try:
-                        if origin:
-                            await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-                    except Exception:
-                        pass
-                    context.user_data.pop("pending_fin_multi", None)
+                # Do NOT send a ForceReply prompt; user will provide fuel amount directly.
                 return
             elif step == "fuel":
                 raw = text
@@ -1183,6 +1172,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 km = m.group(1)
             try:
+                # odo simple used record_parking by previous mistake in older code; keep behavior unchanged.
                 res = record_parking(plate, "", by_user=user.username or "")
             except Exception:
                 res = {"ok": False}
@@ -1373,28 +1363,21 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         origin_info = {"chat": q.message.chat.id, "msg_id": q.message.message_id, "typ": typ}
         if typ == "odo_fuel":
+            # Set pending state but DO NOT send a separate \"Enter odometer...\" ForceReply message.
             context.user_data["pending_fin_multi"] = {"type": "odo_fuel", "plate": plate, "step": "km", "origin": origin_info}
-            fr = ForceReply(selective=False)
             try:
-                await q.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate))
-                mmsg = await context.bot.send_message(chat_id=q.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate), reply_markup=fr)
-                context.user_data["pending_fin_multi"]["prompt_chat"] = mmsg.chat_id
-                context.user_data["pending_fin_multi"]["prompt_msg_id"] = mmsg.message_id
+                # Edit the callback message minimally to reflect pending state; do not send a new ForceReply prompt.
+                await q.edit_message_text(f"Pending ODO+Fuel entry for {plate}. Please send odometer (KM) in chat.")
             except Exception:
-                logger.exception("Failed to prompt for odo km.")
-                context.user_data.pop("pending_fin_multi", None)
+                logger.exception("Failed to edit message for pending odo_fuel entry.")
             return
         if typ in ("parking", "wash", "repair", "fuel"):
+            # Set pending simple state but DO NOT send a separate \"Enter amount...\" ForceReply message.
             context.user_data["pending_fin_simple"] = {"type": typ, "plate": plate, "origin": origin_info}
-            fr = ForceReply(selective=False)
             try:
-                await q.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate) if typ=="odo" else t(context.user_data.get("lang", DEFAULT_LANG), "enter_odo_km", plate=plate))
-                mmsg = await context.bot.send_message(chat_id=q.message.chat.id, text=f"Enter amount for {typ} for {plate}:", reply_markup=fr)
-                context.user_data["pending_fin_simple"]["prompt_chat"] = mmsg.chat_id
-                context.user_data["pending_fin_simple"]["prompt_msg_id"] = mmsg.message_id
+                await q.edit_message_text(f"Pending {typ} entry for {plate}. Please send amount in chat.")
             except Exception:
-                logger.exception("Failed to prompt for amount.")
-                context.user_data.pop("pending_fin_simple", None)
+                logger.exception("Failed to edit message for pending simple finance entry.")
             return
 
     if data == "leave_menu":
