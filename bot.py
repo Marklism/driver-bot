@@ -846,26 +846,43 @@ def register_handlers(application):
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), process_force_reply))
 
     # global command list
-    async def _post_init(app):
-        # ensure webhook deleted before polling to avoid conflict
-        try:
-            await app.bot.delete_webhook()
-            logger.info("Deleted existing webhook (if any).")
-        except Exception:
-            logger.exception("Failed to delete webhook (ignored).")
-        # set bot commands
-        try:
-            await app.bot.set_my_commands([
-                BotCommand("start_trip", "Start a trip (select plate)"),
-                BotCommand("end_trip", "End a trip (select plate)"),
-                BotCommand("fuel", "Record fuel (select plate)"),
-                BotCommand("mission_start", "Mission start (select plate)"),
-                BotCommand("mission_end", "Mission end (select plate)"),
-                BotCommand("leave", "Record leave (admin)"),
-            ])
-            logger.info("Bot commands set.")
-        except Exception:
-            logger.exception("Failed to set bot commands.")
+   # ----------------------------
+# safe post_init registration
+# ----------------------------
+async def _post_init(app):
+    """Post-init tasks run once application is starting up."""
+    try:
+        # set bot commands (async call)
+        await app.bot.set_my_commands([
+            BotCommand("start_trip", "Start a trip (select plate)"),
+            BotCommand("end_trip", "End a trip (select plate)"),
+            BotCommand("menu", "Open trip menu"),
+            BotCommand("mission", "Quick mission menu"),
+            BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
+            BotCommand("leave", "Record leave (admin)"),
+            BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
+        ])
+        logger.info("Bot commands set (post_init).")
+    except Exception:
+        logger.exception("Failed to set bot commands in post_init.")
+
+# Ensure application.post_init is a list we can append to (safe for different PTB versions)
+if getattr(application, "post_init", None) is None:
+    try:
+        # in some PTB versions post_init must be a list
+        application.post_init = []
+    except Exception:
+        # fallback: if attribute is read-only, try to set via setattr
+        setattr(application, "post_init", [])
+# Now append the coroutine function (not awaited here)
+try:
+    application.post_init.append(_post_init)
+except Exception:
+    # last-resort: if append fails, attach to application as attribute and call manually in main()
+    logger.exception("Failed to append to application.post_init; will attempt manual call during startup.")
+    # store fallback hook
+    application._post_init_fallback = _post_init
+
     # attach post_init
     if hasattr(application, "post_init"):
         application.post_init.append(_post_init)
