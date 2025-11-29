@@ -1404,29 +1404,55 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("mission_start_plate|"):
-        _, plate = data.split("|", 1)
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate}
-        kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"), InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
+            # callback like "mission_start_plate|2BB-3071"
+        parts = data.split("|", 1)
+        if len(parts) < 2:
+            await q.edit_message_text("Invalid selection.")
+            return
+        _, plate = parts
+            # show departure choices
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": username}
+        kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"),
+               InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
         await q.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    if data.startswith("mission_end_plate|"):
-        _, plate = data.split("|", 1)
-        context.user_data["pending_mission"] = {"action": "end", "plate": plate}
+   if data.startswith("mission_end_plate|"):
+            # callback like "mission_end_plate|2BB-3071"
+        parts = data.split("|", 1)
+        if len(parts) < 2:
+            await q.edit_message_text("Invalid selection.")
+            return
+         _, plate = parts
+        context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": username}
+            # allow immediate end (auto arrival) button; callback includes plate for robustness
         kb = [[InlineKeyboardButton("End mission now (auto arrival)", callback_data=f"mission_end_now|{plate}")]]
         await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
         return
-
-        if data.startswith("mission_end_now|") or data == "mission_end_now":
-            # 支持两种回调格式： "mission_end_now|{plate}" 或者 "mission_end_now"（后者从 pending_mission 读取 plate）
-            if data == "mission_end_now":
-                pending = context.user_data.get("pending_mission") or {}
-                plate = pending.get("plate")
-                if not plate:
-                    await q.edit_message_text(t(user_lang, "invalid_sel"))
-                    return
-            else:
-                _, plate = data.split("|", 1)
+   if data.startswith("mission_depart|"):
+       parts = data.split("|")
+       if len(parts) < 3:
+           await q.edit_message_text("Invalid selection.")
+           return
+       _, dep, plate = parts
+       context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
+       res = start_mission_record(username, plate, dep)
+       if res.get("ok"):
+                # mission_start_ok template already adjusted to not show the word "plate"
+           await q.edit_message_text(t(user_lang, "mission_start_ok", driver=username, plate=plate, dep=dep, ts=res.get("start_ts")))
+       else:
+           await q.edit_message_text("❌ " + res.get("message", ""))
+       return
+    if data.startswith("mission_end_now|") or data == "mission_end_now":
+        if data == "mission_end_now":
+                # try to get plate from pending_mission
+            pending = context.user_data.get("pending_mission") or {}
+            plate = pending.get("plate")
+            if not plate:
+                await q.edit_message_text(t(user_lang, "invalid_sel"))
+                return
+        else:
+             _, plate = data.split("|", 1)
 
             pending = context.user_data.get("pending_mission") or {}
             driver_map = get_driver_map()
@@ -1435,6 +1461,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text(t(user_lang, "not_allowed", plate=plate))
                 return
             try:
+                # find last open mission for this driver+plate
                 ws = open_worksheet(MISSIONS_TAB)
                 vals, start_idx = _missions_get_values_and_data_rows(ws)
                 found_idx = None
@@ -1453,14 +1480,11 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await q.edit_message_text(t(user_lang, "mission_no_open", plate=plate))
                     return
 
-                # arrival 自动取反（PP<->SHV）
                 arrival = "SHV" if found_dep == "PP" else "PP"
                 res = end_mission_record(username, plate, arrival)
-
                 if not res.get("ok"):
                     await q.edit_message_text("❌ " + res.get("message", ""))
                     return
-
                 # 使用标准到达句式显示（已在 TR 修改为不显示 "plate" 字样）
                 end_ts = res.get("end_ts") or ""
                 try:
@@ -1484,8 +1508,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     counts = count_roundtrips_per_driver_month(month_start, month_end)
                     d_month = counts.get(username, 0)
                     year_start = datetime(nowdt.year, 1, 1)
-                    year_end = datetime(nowdt.year + 1, 1, 1)
-                    counts_year = count_roundtrips_per_driver_month(year_start, year_end)
+                    counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
                     d_year = counts_year.get(username, 0)
 
                     plate_counts_month = 0
@@ -1500,7 +1523,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 sdt = parse_ts(rstart)
                                 if sdt and month_start <= sdt < month_end:
                                     plate_counts_month += 1
-                                if sdt and year_start <= sdt < year_end:
+                                if sdt and year_start <= sdt < datetime(nowdt.year + 1, 1, 1):
                                     plate_counts_year += 1
                     except Exception:
                         pass
