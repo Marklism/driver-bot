@@ -1417,22 +1417,17 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    if data.startswith("mission_depart|"):
-        parts = data.split("|")
-        if len(parts) < 3:
-            await q.edit_message_text("Invalid selection.")
-            return
-        _, dep, plate = parts
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
-        res = start_mission_record(username, plate, dep)
-        if res.get("ok"):
-            await q.edit_message_text(f"Driver {username} (plate {plate}) departures from {dep} at {res.get('start_ts')}.")
-        else:
-            await q.edit_message_text("❌ " + res.get("message", ""))
-        return
+        if data.startswith("mission_end_now|") or data == "mission_end_now":
+            # 支持两种回调格式： "mission_end_now|{plate}" 或者 "mission_end_now"（后者从 pending_mission 读取 plate）
+            if data == "mission_end_now":
+                pending = context.user_data.get("pending_mission") or {}
+                plate = pending.get("plate")
+                if not plate:
+                    await q.edit_message_text(t(user_lang, "invalid_sel"))
+                    return
+            else:
+                _, plate = data.split("|", 1)
 
-        if data.startswith("mission_end_now|"):
-            _, plate = data.split("|", 1)
             pending = context.user_data.get("pending_mission") or {}
             driver_map = get_driver_map()
             allowed = driver_map.get(username, []) if username else []
@@ -1458,7 +1453,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await q.edit_message_text(t(user_lang, "mission_no_open", plate=plate))
                     return
 
-                # 自动到达方向：PP→SHV，SHV→PP
+                # arrival 自动取反（PP<->SHV）
                 arrival = "SHV" if found_dep == "PP" else "PP"
                 res = end_mission_record(username, plate, arrival)
 
@@ -1466,14 +1461,18 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await q.edit_message_text("❌ " + res.get("message", ""))
                     return
 
-                # 统一到达句式（含时间）
+                # 使用标准到达句式显示（已在 TR 修改为不显示 "plate" 字样）
                 end_ts = res.get("end_ts") or ""
-                await q.edit_message_text(
-                    t(user_lang, "mission_end_ok",
-                      driver=username, plate=plate, arr=arrival, ts=end_ts)
-                )
+                try:
+                    await q.edit_message_text(t(user_lang, "mission_end_ok", driver=username, plate=plate, arr=arrival, ts=end_ts))
+                except Exception:
+                    try:
+                        await q.message.chat.send_message(t(user_lang, "mission_end_ok", driver=username, plate=plate, arr=arrival, ts=end_ts))
+                        await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
+                    except Exception:
+                        pass
 
-                # 若合并 roundtrip，则发送统计消息
+                # 若为合并完成（roundtrip），再发送最终统计（不包含 mission days / per-diem）
                 if res.get("merged"):
                     nowdt = _now_dt()
                     month_start = datetime(nowdt.year, nowdt.month, 1)
@@ -1482,7 +1481,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         month_end = datetime(nowdt.year, nowdt.month + 1, 1)
 
-                    # driver roundtrip count
                     counts = count_roundtrips_per_driver_month(month_start, month_end)
                     d_month = counts.get(username, 0)
                     year_start = datetime(nowdt.year, 1, 1)
@@ -1490,34 +1488,32 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     counts_year = count_roundtrips_per_driver_month(year_start, year_end)
                     d_year = counts_year.get(username, 0)
 
-                    # plate roundtrip count
                     plate_counts_month = 0
                     plate_counts_year = 0
-                    vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
-                    for r in vals_all[sidx:]:
-                        rpl = r[M_IDX_PLATE]
-                        rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower()
-                        rstart = r[M_IDX_START]
-                        if rpl == plate and rrt == "yes":
-                            sdt = parse_ts(rstart)
-                            if sdt and month_start <= sdt < month_end:
-                                plate_counts_month += 1
-                            if sdt and year_start <= sdt < year_end:
-                                plate_counts_year += 1
+                    try:
+                        vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                        for r in vals_all[sidx:]:
+                            rpl = r[M_IDX_PLATE] if len(r) > M_IDX_PLATE else ""
+                            rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
+                            rstart = r[M_IDX_START] if len(r) > M_IDX_START else ""
+                            if rpl == plate and rrt == "yes":
+                                sdt = parse_ts(rstart)
+                                if sdt and month_start <= sdt < month_end:
+                                    plate_counts_month += 1
+                                if sdt and year_start <= sdt < year_end:
+                                    plate_counts_year += 1
+                    except Exception:
+                        pass
 
-                    msg = t(
-                        user_lang,
-                        "roundtrip_merged_notify",
-                        driver=username,
-                        month=month_start.strftime("%Y-%m"),
-                        d_month=d_month,
-                        d_year=d_year,
-                        year=nowdt.year,
-                        plate=plate,
-                        p_month=plate_counts_month,
-                        p_year=plate_counts_year,
-                    )
-                    await q.message.chat.send_message(msg)
+                    month_label = month_start.strftime("%Y-%m")
+                    msg = t(user_lang, "roundtrip_merged_notify",
+                            driver=username, d_month=d_month, month=month_label,
+                            d_year=d_year, year=nowdt.year,
+                            plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                    try:
+                        await q.message.chat.send_message(msg)
+                    except Exception:
+                        logger.exception("Failed to send merged roundtrip summary.")
 
             except Exception:
                 logger.exception("Failed mission end flow")
