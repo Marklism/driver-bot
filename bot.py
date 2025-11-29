@@ -1,33 +1,17 @@
 #!/usr/bin/env python3
 """
-Driver Bot — patched version (changes annotated)
-- Main goal: preserve original features, but modify finance/leave/mission/trip flows per user's request.
-- Key changes:
-  1) Finance: after entry delete all "enter" prompts/messages; for odo+fuel produce single-row write and group msg text:
-     "plate @ odo km + $fuel on YYYY-MM-DD paid by <user>, difference from previous odo is X km."
-     For parking/wash/repair: after write pop a short message:
-     "PLATE washing/repair/parking fee XX$ YYYY-MM-DD paid from <user>."
-  2) Leave: after recording delete prompt+reply messages, then post reminder summary:
-     "Driver XXX YYYY-MM-DD to YYYY-MM-DD AL/SL. Driver xxx has xx leaves in MM and xx leaves in YYYY."
-  3) Mission: remove staff-entry flow. Mission start -> choose plate -> choose departure -> immediately record start.
-     Mission end -> choose plate -> choose arrival -> record end. Only when a roundtrip gets merged (i.e., second leg closes)
-     then post aggregated message "Driver xxx completed N mission(s) in MM and M in YYYY." Single leg end does not post.
-     Also change mission step messages:
-       - departure: "Driver xx (plate yy) departures from PP/SHV at HH:MM:SS."
-       - arrival:   "Driver xx (plate yy) arrives at SHV/PP at HH:MM:SS."
-  4) Trip: message formats:
-       - start: "Driver xx (plate yy) starts trip at HH:MM:SS."
-       - end:   "Driver xx (plate yy) ends trip at HH:MM:SS."
-     After end, post combined summary for driver and plate for today/month/year.
-- Minimal other edits.
+Driver Bot — Updated: auto-update sheet headers; finance prompts removed after entry.
+- Ensures EXPENSE_TAB header matches canonical header and updates the sheet header row when needed.
+- Deletes finance prompt messages (and the edited origin callback message) after user replies.
+- Adds mission days/per-diem A-2 rule, leave statistics, improved mission merge logic.
 """
-# (rest of your imports remain the same)
 import os
 import json
 import base64
 import logging
 import uuid
 import re
+import math
 from datetime import datetime, timedelta, time as dtime
 from typing import Optional, Dict, List, Any
 import urllib.request
@@ -134,6 +118,10 @@ DATE_FMT = "%Y-%m-%d"
 ROUNDTRIP_WINDOW_HOURS = int(os.getenv("ROUNDTRIP_WINDOW_HOURS", "24"))
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
+# per diem
+PER_DIEM = float(os.getenv("PER_DIEM", "15.0"))
+ANNUAL_LEAVE_DAYS = int(os.getenv("ANNUAL_LEAVE_DAYS", "12"))
+
 HEADERS_BY_TAB: Dict[str, List[str]] = {
     RECORDS_TAB: ["Date", "Driver", "Plate", "Start DateTime", "End DateTime", "Duration"],
     MISSIONS_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
@@ -142,23 +130,24 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     DRIVERS_TAB: ["Username", "Plates"],
     LEAVE_TAB: ["Driver", "Start Date", "End Date", "Reason", "Notes"],
     MAINT_TAB: ["Plate", "Mileage", "Maintenance Item", "Cost", "Date", "Workshop", "Notes"],
-    # EXPENSE_TAB extended: include Delta KM, Invoice, DriverPaid
     EXPENSE_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Delta KM", "Fuel Cost", "Parking Fee", "Other Fee", "Invoice", "DriverPaid"],
 }
 
+# Translation / templates (English + Khmer skeleton). We add new English entries required.
 TR = {
     "en": {
         "menu": "Driver Bot Menu — tap a button:",
         "choose_start": "Choose vehicle plate to START trip:",
         "choose_end": "Choose vehicle plate to END trip:",
-        "start_ok": "Driver {driver} starts trip at {ts}.",
-        "end_ok": "Driver {driver} ends trip at {ts} (duration {dur}). Driver {driver} completed {n_today} trips today and {n_month} trips in {month}.",
+        "start_ok": "Driver {driver} start trip at {ts}.",
+        "end_ok": "Driver {driver} end trip at {ts} (duration {dur}). Driver {driver} completed {n_today} trips today and {n_month} trips in {month}.",
         "not_allowed": "❌ You are not allowed to operate plate: {plate}.",
         "invalid_sel": "Invalid selection.",
         "help": "Help: Use /start_trip or /end_trip and select a plate.",
         "no_bot_token": "Please set BOT_TOKEN environment variable.",
         "mission_start_prompt_plate": "Choose plate to start mission:",
         "mission_start_prompt_depart": "Select departure city:",
+        "mission_start_prompt_staff": "Choose staff input or skip:",
         "mission_start_ok": "✅ Mission start for {plate} at {start_date}, from {dep}.",
         "mission_end_prompt_plate": "Choose plate to end mission:",
         "mission_end_prompt_arrival": "Select arrival city:",
@@ -176,18 +165,31 @@ TR = {
         "enter_odo_km": "Enter odometer reading (KM) for {plate}:",
         "enter_fuel_cost": "Enter fuel cost in $ for {plate}: (optionally add `inv:INV123 paid:yes`)",
         "enter_amount_for": "Enter amount in $ for {typ} for {plate}:",
+        # New templates added
+        "finance_odo_fuel_receipt": "{plate} @ {odo} km + ${fuel} fuel on {date} paid by {by}, difference from previous odo is {delta} km.",
+        "finance_expense_receipt": "{plate} {typ} fee ${amt} on {date} paid by {by}.",
+        "leave_record_receipt": "Driver {driver} {start} to {end} ({reason}).",
+        "leave_summary_msg": "Driver {driver} has {month_count} leave days in {month} and {year_count} leave days in {year}. Remaining annual entitlement: {remaining} days.",
+        "mission_departure": "Driver {driver} (plate {plate}) departures from {dep} at {ts}.",
+        "mission_arrival": "Driver {driver} (plate {plate}) arrives at {arr} at {ts}.",
+        "mission_completed_notify": "✅ Driver {driver} completed {month_count} mission(s) in {month} and {year_count} in {year}. Mission days: {days}, Per-diem: ${per_diem}.",
+        "trip_start_msg": "Driver {driver} (plate {plate}) starts trip at {ts}.",
+        "trip_end_msg": "Driver {driver} (plate {plate}) ends trip at {ts}.",
+        "trip_summary_notify": "Driver {driver} completed {n_today} trip(s) today and {n_month} trip(s) in {month} and {n_year} trip(s) in {year}. Plate {plate} completed {p_today} today, {p_month} in {month}, {p_year} in {year}.",
     },
     "km": {
+        # keep existing km templates minimal (not all new keys translated)
         "menu": "ម្ហឺនុយបូត — សូមជ្រើសប៊ូតុង:",
         "choose_start": "ជ្រើស plate ដើម្បីចាប់ផ្តើមដំណើរ:",
         "choose_end": "ជ្រើស plate ដើម្បីបញ្ចប់ដំណើរ:",
-        "start_ok": "Driver {driver} starts trip at {ts}.",
-        "end_ok": "Driver {driver} ends trip at {ts} (duration {dur}). Driver {driver} completed {n_today} trips today and {n_month} trips in {month}.",
+        "start_ok": "Driver {driver} start trip at {ts}.",
+        "end_ok": "Driver {driver} end trip at {ts} (duration {dur}). Driver {driver} completed {n_today} trips today and {n_month} trips in {month}.",
         "not_allowed": "❌ មិនមានសិទ្ធិប្រើ plate: {plate}.",
         "invalid_sel": "ជម្រើសមិនត្រឹមត្រូវ។",
         "help": "ជំនួយ៖ ប្រើ /start_trip ឬ /end_trip ហើយជ្រើស plate.",
-        "mission_start_prompt_plate": "ជ្រើស plate ដើម្បីចាប់ផ្ដើម mission:",
+        "mission_start_prompt_plate": "ជ្រើស plate ដើម្បីចាប់ផ្តើម mission:",
         "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញ:",
+        "mission_start_prompt_staff": "ជ្រើសបញ្ចូលឈ្មោះរឺលោត:",
         "mission_start_ok": "✅ ចាប់ផ្ដើម mission {plate} នៅ {start_date} ចេញពី {dep}.",
         "mission_end_prompt_plate": "ជ្រើស plate ដើម្បីបញ្ចប់ mission:",
         "mission_end_prompt_arrival": "ជ្រើសទីក្រុងមកដល់:",
@@ -416,9 +418,6 @@ def _now_dt() -> datetime:
 def now_str() -> str:
     return _now_dt().strftime(TS_FMT)
 
-def now_time_str() -> str:
-    return _now_dt().strftime("%H:%M:%S")
-
 def today_date_str() -> str:
     return _now_dt().strftime(DATE_FMT)
 
@@ -444,7 +443,7 @@ def compute_duration(start_ts: str, end_ts: str) -> str:
     except Exception:
         return ""
 
-# Trip record functions (modified messaging & final summaries)
+# Trip record functions
 def record_start_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
     start_ts = now_str()
@@ -457,6 +456,377 @@ def record_start_trip(driver: str, plate: str) -> dict:
         logger.exception("Failed to append start trip row")
         return {"ok": False, "message": "Failed to write start trip to sheet: " + str(e)}
 
+def record_end_trip(driver: str, plate: str) -> dict:
+    ws = open_worksheet(RECORDS_TAB)
+    try:
+        rows = ws.get_all_values()
+        start_idx = 1 if rows and any("date" in c.lower() for c in rows[0] if c) else 0
+        for idx in range(len(rows) - 1, start_idx - 1, -1):
+            rec = rows[idx]
+            rec_plate = rec[2] if len(rec) > 2 else ""
+            rec_end = rec[4] if len(rec) > 4 else ""
+            rec_start = rec[3] if len(rec) > 3 else ""
+            if str(rec_plate).strip() == plate and (not rec_end):
+                row_number = idx + 1
+                end_ts = now_str()
+                duration_text = compute_duration(rec_start, end_ts) if rec_start else ""
+                try:
+                    ws.update_cell(row_number, COL_END, end_ts)
+                    ws.update_cell(row_number, COL_DURATION, duration_text)
+                except Exception:
+                    existing = ws.row_values(row_number)
+                    while len(existing) < COL_DURATION:
+                        existing.append("")
+                    existing[COL_END - 1] = end_ts
+                    existing[COL_DURATION - 1] = duration_text
+                    # replace row
+                    try:
+                        ws.delete_rows(row_number)
+                    except Exception:
+                        logger.exception("Failed to delete row for fallback replacement at %d", row_number)
+                    try:
+                        ws.insert_row(existing, row_number)
+                    except Exception:
+                        logger.exception("Failed to insert fallback row at %d", row_number)
+                logger.info("Recorded end trip for %s row %d", plate, row_number)
+                return {"ok": True, "message": f"End time recorded for {plate} at {end_ts} (duration {duration_text})", "ts": end_ts, "duration": duration_text}
+        end_ts = now_str()
+        row = [today_date_str(), driver, plate, "", end_ts, ""]
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        logger.info("No open start found; appended end-only row for %s", plate)
+        return {"ok": True, "message": f"End time recorded (no matching start found) for {plate} at {end_ts}", "ts": end_ts, "duration": ""}
+    except Exception as e:
+        logger.exception("Failed to update end trip")
+        return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
+
+# Missions helpers (as earlier, with careful merging)
+def _missions_get_values_and_data_rows(ws):
+    values = ws.get_all_values()
+    if not values:
+        return [], 0
+    first_row = values[0]
+    header_like_keywords = {"guid", "no", "name", "plate", "start", "end", "departure", "arrival", "staff", "roundtrip"}
+    if any(str(c).strip().lower() in header_like_keywords for c in first_row if c):
+        return values, 1
+    return values, 0
+
+def _missions_next_no(ws) -> int:
+    vals, start_idx = _missions_get_values_and_data_rows(ws)
+    return max(1, len(vals) - start_idx + 1)
+
+def _ensure_row_length(row: List[Any], length: int) -> List[Any]:
+    r = list(row)
+    while len(r) < length:
+        r.append("")
+    return r
+
+def start_mission_record(driver: str, plate: str, departure: str, staff_name: str = "") -> dict:
+    ws = open_worksheet(MISSIONS_TAB)
+    start_ts = now_str()
+    try:
+        next_no = _missions_next_no(ws)
+        guid = str(uuid.uuid4())
+        row = [""] * M_MANDATORY_COLS
+        row[M_IDX_GUID] = guid
+        row[M_IDX_NO] = next_no
+        row[M_IDX_NAME] = driver
+        row[M_IDX_PLATE] = plate
+        row[M_IDX_START] = start_ts
+        row[M_IDX_END] = ""
+        row[M_IDX_DEPART] = departure
+        row[M_IDX_ARRIVAL] = ""
+        row[M_IDX_STAFF] = staff_name
+        row[M_IDX_ROUNDTRIP] = ""
+        row[M_IDX_RETURN_START] = ""
+        row[M_IDX_RETURN_END] = ""
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        logger.info("Mission start recorded GUID=%s no=%s driver=%s plate=%s dep=%s", guid, next_no, driver, plate, departure)
+        return {"ok": True, "guid": guid, "no": next_no}
+    except Exception as e:
+        logger.exception("Failed to append mission start")
+        return {"ok": False, "message": "Failed to write mission start to sheet: " + str(e)}
+
+# mission_days/per-diem (A-2 rule)
+def mission_days_for_per_diem(start_dt: datetime, end_dt: datetime) -> int:
+    """
+    A-2 rule:
+    - If end <= start_date+1 @ 12:00 noon => count 1 day
+    - Otherwise: days = 1 + ceil( (end - cutoff) / 24h ), where cutoff = start_date + 1 day at 12:00
+    """
+    if not start_dt or not end_dt:
+        return 0
+    if end_dt < start_dt:
+        end_dt = start_dt
+    next_day = (start_dt.date() + timedelta(days=1))
+    cutoff = datetime(next_day.year, next_day.month, next_day.day, 12, 0, 0)
+    if end_dt <= cutoff:
+        return 1
+    rem = (end_dt - cutoff)
+    extra_days = math.ceil(rem.total_seconds() / (24 * 3600))
+    return 1 + extra_days
+
+def per_diem_amount_for_mission_days(days: int) -> float:
+    return round(days * PER_DIEM, 2)
+
+# Strict mission end merge (enhanced)
+def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
+    """
+    Enhanced end mission:
+    - mark end & arrival for the latest open mission for driver+plate
+    - attempt to find ANY other completed mission for same driver+plate that is complementary (opposite legs)
+      or, if depart/arrival missing, will still attempt to match and merge.
+    - after merge, compute mission days & per-diem, write a small summary row to MISSIONS_REPORT_TAB.
+    """
+    try:
+        ws = open_worksheet(MISSIONS_TAB)
+    except Exception as e:
+        logger.exception("Failed to open MISSIONS_TAB: %s", e)
+        return {"ok": False, "message": "Could not open missions sheet: " + str(e)}
+
+    try:
+        vals, start_idx = _missions_get_values_and_data_rows(ws)
+        # find the latest open mission (no end) for same driver+plate
+        target_idx = None
+        for i in range(len(vals) - 1, start_idx - 1, -1):
+            row = _ensure_row_length(vals[i], M_MANDATORY_COLS)
+            if str(row[M_IDX_PLATE]).strip() == plate and str(row[M_IDX_NAME]).strip() == driver and not str(row[M_IDX_END]).strip():
+                target_idx = i
+                break
+        if target_idx is None:
+            return {"ok": False, "message": "No open mission found"}
+        # fill end and arrival
+        row = _ensure_row_length(vals[target_idx], M_MANDATORY_COLS)
+        row_number = target_idx + 1
+        end_ts = now_str()
+        try:
+            ws.update_cell(row_number, M_IDX_END + 1, end_ts)
+            ws.update_cell(row_number, M_IDX_ARRIVAL + 1, arrival)
+        except Exception:
+            existing = ws.row_values(row_number)
+            existing = _ensure_row_length(existing, M_MANDATORY_COLS)
+            existing[M_IDX_END] = end_ts
+            existing[M_IDX_ARRIVAL] = arrival
+            try:
+                ws.delete_rows(row_number)
+            except Exception:
+                logger.exception("Fallback: failed to delete row before insert")
+            try:
+                ws.insert_row(existing, row_number)
+            except Exception:
+                logger.exception("Fallback: failed to insert updated row")
+        logger.info("Mission end set for row %d (%s)", row_number, plate)
+
+        # Now attempt to find ANY other completed mission for same driver+plate to merge with.
+        vals2, start_idx2 = _missions_get_values_and_data_rows(ws)
+        completed_candidates = []
+        for j in range(start_idx2, len(vals2)):
+            if j == target_idx:
+                continue
+            r2 = _ensure_row_length(vals2[j], M_MANDATORY_COLS)
+            rn = str(r2[M_IDX_NAME]).strip()
+            rp = str(r2[M_IDX_PLATE]).strip()
+            rstart = str(r2[M_IDX_START]).strip()
+            rend = str(r2[M_IDX_END]).strip()
+            if rn == driver and rp == plate and rstart and rend:
+                completed_candidates.append({"idx": j, "r": r2})
+
+        # Try to pick best complementary candidate:
+        chosen = None
+        for comp in completed_candidates:
+            r = comp["r"]
+            dep1 = str(r[M_IDX_DEPART]).strip()
+            arr1 = str(r[M_IDX_ARRIVAL]).strip()
+            dep_target = str(row[M_IDX_DEPART]).strip()
+            arr_target = arrival
+            if dep1 and arr1 and dep_target and arr_target:
+                if (dep1 == "PP" and arr1 == "SHV" and dep_target == "SHV" and arr_target == "PP") or \
+                   (dep1 == "SHV" and arr1 == "PP" and dep_target == "PP" and arr_target == "SHV"):
+                    chosen = comp
+                    break
+        # if not found by route then pick the most recent completed candidate (closest start time)
+        if not chosen and completed_candidates:
+            def try_parse(s):
+                return parse_ts(s) or datetime.min
+            tstart = try_parse(str(row[M_IDX_START]).strip())
+            completed_candidates.sort(key=lambda x: abs((try_parse(str(x["r"][M_IDX_START]).strip()) - tstart).total_seconds()))
+            chosen = completed_candidates[0]
+
+        if not chosen:
+            # nothing to merge with — return simple end recorded
+            return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False}
+
+        # perform merge: primary = earlier start; secondary = later start
+        other_idx = chosen["idx"]
+        other_row = _ensure_row_length(chosen["r"], M_MANDATORY_COLS)
+        this_start = parse_ts(str(row[M_IDX_START]).strip()) if str(row[M_IDX_START]).strip() else None
+        other_start = parse_ts(str(other_row[M_IDX_START]).strip()) if str(other_row[M_IDX_START]).strip() else None
+
+        if this_start and other_start and this_start <= other_start:
+            primary_idx = target_idx
+            secondary_idx = other_idx
+            primary_row = row
+            secondary_row = other_row
+        else:
+            primary_idx = other_idx
+            secondary_idx = target_idx
+            primary_row = other_row
+            secondary_row = row
+
+        primary_row_number = primary_idx + 1
+        secondary_row_number = secondary_idx + 1
+
+        # compute return start/end: choose the secondary's start/end as return
+        return_start = str(secondary_row[M_IDX_START]).strip()
+        return_end = str(secondary_row[M_IDX_END]).strip()
+
+        # update primary row: mark Roundtrip=Yes, set Return Start/End
+        try:
+            ws.update_cell(primary_row_number, M_IDX_ROUNDTRIP + 1, "Yes")
+            ws.update_cell(primary_row_number, M_IDX_RETURN_START + 1, return_start)
+            ws.update_cell(primary_row_number, M_IDX_RETURN_END + 1, return_end)
+        except Exception:
+            try:
+                existing = ws.row_values(primary_row_number)
+            except Exception:
+                existing = []
+            existing = _ensure_row_length(existing, M_MANDATORY_COLS)
+            existing[M_IDX_ROUNDTRIP] = "Yes"
+            existing[M_IDX_RETURN_START] = return_start
+            existing[M_IDX_RETURN_END] = return_end
+            try:
+                ws.delete_rows(primary_row_number)
+            except Exception:
+                logger.exception("Failed to delete primary row for fallback")
+            try:
+                ws.insert_row(existing, primary_row_number)
+            except Exception:
+                logger.exception("Failed to insert updated primary row for fallback")
+
+        # attempt to delete secondary row (cleanup)
+        try:
+            all_vals_post, start_idx_post = _missions_get_values_and_data_rows(ws)
+            sec_guid = str(secondary_row[M_IDX_GUID]).strip() if secondary_row and len(secondary_row) > M_IDX_GUID else None
+            found = False
+            if sec_guid:
+                for k in range(start_idx_post, len(all_vals_post)):
+                    r_k = _ensure_row_length(all_vals_post[k], M_MANDATORY_COLS)
+                    if str(r_k[M_IDX_GUID]).strip() == sec_guid:
+                        try:
+                            ws.delete_rows(k + 1)
+                            found = True
+                        except Exception:
+                            try:
+                                ws.update_cell(k + 1, M_IDX_ROUNDTRIP + 1, "Merged")
+                                found = True
+                            except Exception:
+                                logger.exception("Failed to mark merged secondary row.")
+                        break
+            if not found:
+                try:
+                    ws.delete_rows(secondary_row_number)
+                except Exception:
+                    try:
+                        ws.update_cell(secondary_row_number, M_IDX_ROUNDTRIP + 1, "Merged")
+                    except Exception:
+                        logger.exception("Failed to cleanup secondary row")
+        except Exception:
+            logger.exception("Failed to clean up secondary row after merge.")
+
+        # compute mission days & per diem (use primary start and return_end)
+        try:
+            primary_vals_after, _ = _missions_get_values_and_data_rows(ws)
+            p_row = _ensure_row_length(primary_vals_after[primary_idx], M_MANDATORY_COLS) if primary_idx < len(primary_vals_after) else primary_row
+            p_start_s = str(p_row[M_IDX_START]).strip()
+            p_end_s = str(p_row[M_IDX_RETURN_END] or p_row[M_IDX_END]).strip()
+            ps = parse_ts(p_start_s)
+            pe = parse_ts(p_end_s)
+            days = mission_days_for_per_diem(ps, pe) if ps and pe else 0
+            per_d = per_diem_amount_for_mission_days(days)
+            # write summary row to MISSIONS_REPORT_TAB
+            try:
+                rpt_ws = open_worksheet(MISSIONS_REPORT_TAB)
+                summary_row = [str(uuid.uuid4()), "", driver, plate, p_start_s, p_end_s, p_row[M_IDX_DEPART], p_row[M_IDX_ARRIVAL], p_row[M_IDX_STAFF], "Yes", p_row[M_IDX_RETURN_START], p_row[M_IDX_RETURN_END], days, per_d]
+                rpt_ws.append_row(summary_row, value_input_option="USER_ENTERED")
+            except Exception:
+                logger.exception("Failed to append mission summary row to report tab.")
+        except Exception:
+            logger.exception("Failed to compute mission days or write mission summary.")
+
+        return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": True, "driver": driver, "plate": plate}
+    except Exception as e:
+        logger.exception("Failed to update mission end: %s", e)
+        return {"ok": False, "message": "Failed to write mission end to sheet: " + str(e)}
+
+def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
+    ws = open_worksheet(MISSIONS_TAB)
+    out = []
+    try:
+        vals, start_idx = _missions_get_values_and_data_rows(ws)
+        for r in vals[start_idx:]:
+            r = _ensure_row_length(r, M_MANDATORY_COLS)
+            start = str(r[M_IDX_START]).strip()
+            if not start:
+                continue
+            s_dt = parse_ts(start)
+            if not s_dt:
+                continue
+            if start_date <= s_dt < end_date:
+                out.append([r[M_IDX_GUID], r[M_IDX_NO], r[M_IDX_NAME], r[M_IDX_PLATE], r[M_IDX_START], r[M_IDX_END], r[M_IDX_DEPART], r[M_IDX_ARRIVAL], r[M_IDX_STAFF], r[M_IDX_ROUNDTRIP], r[M_IDX_RETURN_START], r[M_IDX_RETURN_END]])
+        return out
+    except Exception:
+        logger.exception("Failed to fetch mission rows")
+        return []
+
+def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
+    try:
+        ws = open_worksheet(MISSIONS_REPORT_TAB)
+        ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
+        ws.append_row(HEADERS_BY_TAB.get(MISSIONS_REPORT_TAB, []), value_input_option="USER_ENTERED")
+        for r in rows:
+            r = _ensure_row_length(r, M_MANDATORY_COLS)
+            ws.append_row(r, value_input_option="USER_ENTERED")
+        rt_counts: Dict[str, int] = {}
+        for r in rows:
+            name = r[2] if len(r) > 2 else ""
+            roundtrip = str(r[9]).strip().lower() if len(r) > 9 else ""
+            if name and roundtrip == "yes":
+                rt_counts[name] = rt_counts.get(name, 0) + 1
+        ws.append_row(["Roundtrip Summary by Driver:"], value_input_option="USER_ENTERED")
+        if rt_counts:
+            ws.append_row(["Driver", "Roundtrip Count"], value_input_option="USER_ENTERED")
+            for driver, cnt in sorted(rt_counts.items(), key=lambda x: (-x[1], x[0])):
+                ws.append_row([driver, cnt], value_input_option="USER_ENTERED")
+        else:
+            ws.append_row(["No roundtrips found in this period."], value_input_option="USER_ENTERED")
+        return True
+    except Exception:
+        logger.exception("Failed to write mission report to sheet.")
+        return False
+
+# Roundtrip count per driver month (missions)
+def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    try:
+        ws = open_worksheet(MISSIONS_TAB)
+        vals, start_idx = _missions_get_values_and_data_rows(ws)
+        for r in vals[start_idx:]:
+            r = _ensure_row_length(r, M_MANDATORY_COLS)
+            start = str(r[M_IDX_START]).strip()
+            if not start:
+                continue
+            s_dt = parse_ts(start)
+            if not s_dt or not (start_date <= s_dt < end_date):
+                continue
+            rt = str(r[M_IDX_ROUNDTRIP]).strip().lower()
+            if rt != "yes":
+                continue
+            name = str(r[M_IDX_NAME]).strip() or "Unknown"
+            counts[name] = counts.get(name, 0) + 1
+    except Exception:
+        logger.exception("Failed to count roundtrips per driver")
+    return counts
+
+# Trip count helpers (driver)
 def count_trips_for_day(driver: str, date_dt: datetime) -> int:
     cnt = 0
     try:
@@ -511,7 +881,8 @@ def count_trips_for_month(driver: str, month_start: datetime, month_end: datetim
         logger.exception("Failed to count trips for month")
     return cnt
 
-def count_trips_for_year(driver: str, year_start: datetime, year_end: datetime) -> int:
+# Trip count helpers (plate)
+def count_trips_for_day_plate(plate: str, date_dt: datetime) -> int:
     cnt = 0
     try:
         ws = open_worksheet(RECORDS_TAB)
@@ -520,35 +891,6 @@ def count_trips_for_year(driver: str, year_start: datetime, year_end: datetime) 
             return 0
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
         for r in vals[start_idx:]:
-            if len(r) < COL_START:
-                continue
-            dr = r[1] if len(r) > 1 else ""
-            start_ts = r[3] if len(r) > 3 else ""
-            end_ts = r[4] if len(r) > 4 else ""
-            if dr != driver:
-                continue
-            if not start_ts or not end_ts:
-                continue
-            s_dt = parse_ts(start_ts)
-            if not s_dt:
-                continue
-            if year_start <= s_dt < year_end:
-                cnt += 1
-    except Exception:
-        logger.exception("Failed to count trips for year")
-    return cnt
-
-def count_trips_for_plate_period(plate: str, start_dt: datetime, end_dt: datetime) -> int:
-    cnt = 0
-    try:
-        ws = open_worksheet(RECORDS_TAB)
-        vals = ws.get_all_values()
-        if not vals:
-            return 0
-        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
-        for r in vals[start_idx:]:
-            if len(r) < COL_START:
-                continue
             pl = r[2] if len(r) > 2 else ""
             start_ts = r[3] if len(r) > 3 else ""
             end_ts = r[4] if len(r) > 4 else ""
@@ -559,339 +901,38 @@ def count_trips_for_plate_period(plate: str, start_dt: datetime, end_dt: datetim
             s_dt = parse_ts(start_ts)
             if not s_dt:
                 continue
-            if start_dt <= s_dt < end_dt:
+            if s_dt.date() == date_dt.date():
                 cnt += 1
     except Exception:
-        logger.exception("Failed to count trips for plate")
+        logger.exception("Failed to count trips for plate day")
     return cnt
 
-def record_end_trip(driver: str, plate: str) -> dict:
-    ws = open_worksheet(RECORDS_TAB)
+def count_trips_for_month_plate(plate: str, month_start: datetime, month_end: datetime) -> int:
+    cnt = 0
     try:
-        rows = ws.get_all_values()
-        start_idx = 1 if rows and any("date" in c.lower() for c in rows[0] if c) else 0
-        for idx in range(len(rows) - 1, start_idx - 1, -1):
-            rec = rows[idx]
-            rec_plate = rec[2] if len(rec) > 2 else ""
-            rec_end = rec[4] if len(rec) > 4 else ""
-            rec_start = rec[3] if len(rec) > 3 else ""
-            if str(rec_plate).strip() == plate and (not rec_end):
-                row_number = idx + 1
-                end_ts = now_str()
-                duration_text = compute_duration(rec_start, end_ts) if rec_start else ""
-                try:
-                    ws.update_cell(row_number, COL_END, end_ts)
-                    ws.update_cell(row_number, COL_DURATION, duration_text)
-                except Exception:
-                    existing = ws.row_values(row_number)
-                    while len(existing) < COL_DURATION:
-                        existing.append("")
-                    existing[COL_END - 1] = end_ts
-                    existing[COL_DURATION - 1] = duration_text
-                    # replace row
-                    try:
-                        ws.delete_rows(row_number)
-                    except Exception:
-                        logger.exception("Failed to delete row for fallback replacement at %d", row_number)
-                    try:
-                        ws.insert_row(existing, row_number)
-                    except Exception:
-                        logger.exception("Failed to insert fallback row at %d", row_number)
-                logger.info("Recorded end trip for %s row %d", plate, row_number)
-                return {"ok": True, "message": f"End time recorded for {plate} at {end_ts} (duration {duration_text})", "ts": end_ts, "duration": duration_text}
-        end_ts = now_str()
-        row = [today_date_str(), driver, plate, "", end_ts, ""]
-        ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info("No open start found; appended end-only row for %s", plate)
-        return {"ok": True, "message": f"End time recorded (no matching start found) for {plate} at {end_ts}", "ts": end_ts, "duration": ""}
-    except Exception as e:
-        logger.exception("Failed to update end trip")
-        return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
-
-# Missions helpers (removed staff flows, changed messages)
-def _missions_get_values_and_data_rows(ws):
-    values = ws.get_all_values()
-    if not values:
-        return [], 0
-    first_row = values[0]
-    header_like_keywords = {"guid", "no", "name", "plate", "start", "end", "departure", "arrival", "staff", "roundtrip"}
-    if any(str(c).strip().lower() in header_like_keywords for c in first_row if c):
-        return values, 1
-    return values, 0
-
-def _missions_next_no(ws) -> int:
-    vals, start_idx = _missions_get_values_and_data_rows(ws)
-    return max(1, len(vals) - start_idx + 1)
-
-def _ensure_row_length(row: List[Any], length: int) -> List[Any]:
-    r = list(row)
-    while len(r) < length:
-        r.append("")
-    return r
-
-def start_mission_record(driver: str, plate: str, departure: str, staff_name: str = "") -> dict:
-    ws = open_worksheet(MISSIONS_TAB)
-    start_ts = now_str()
-    try:
-        next_no = _missions_next_no(ws)
-        guid = str(uuid.uuid4())
-        row = [""] * M_MANDATORY_COLS
-        row[M_IDX_GUID] = guid
-        row[M_IDX_NO] = next_no
-        row[M_IDX_NAME] = driver
-        row[M_IDX_PLATE] = plate
-        row[M_IDX_START] = start_ts
-        row[M_IDX_END] = ""
-        row[M_IDX_DEPART] = departure
-        row[M_IDX_ARRIVAL] = ""
-        row[M_IDX_STAFF] = staff_name
-        row[M_IDX_ROUNDTRIP] = ""
-        row[M_IDX_RETURN_START] = ""
-        row[M_IDX_RETURN_END] = ""
-        ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info("Mission start recorded GUID=%s no=%s driver=%s plate=%s dep=%s", guid, next_no, driver, plate, departure)
-        return {"ok": True, "guid": guid, "no": next_no, "start_ts": start_ts}
-    except Exception as e:
-        logger.exception("Failed to append mission start")
-        return {"ok": False, "message": "Failed to write mission start to sheet: " + str(e)}
-
-# Strict mission end merge (unchanged merging logic but messaging changed)
-def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
-    try:
-        ws = open_worksheet(MISSIONS_TAB)
-    except Exception as e:
-        logger.exception("Failed to open MISSIONS_TAB: %s", e)
-        return {"ok": False, "message": "Could not open missions sheet: " + str(e)}
-
-    try:
-        vals, start_idx = _missions_get_values_and_data_rows(ws)
-        for i in range(len(vals) - 1, start_idx - 1, -1):
-            row = _ensure_row_length(vals[i], M_MANDATORY_COLS)
-            rec_plate = str(row[M_IDX_PLATE]).strip()
-            rec_name = str(row[M_IDX_NAME]).strip()
-            rec_end = str(row[M_IDX_END]).strip()
-            rec_start = str(row[M_IDX_START]).strip()
-            rec_dep = str(row[M_IDX_DEPART]).strip()
-            if rec_plate == plate and rec_name == driver and not rec_end:
-                row_number = i + 1
-                end_ts = now_str()
-                try:
-                    ws.update_cell(row_number, M_IDX_END + 1, end_ts)
-                    ws.update_cell(row_number, M_IDX_ARRIVAL + 1, arrival)
-                except Exception:
-                    try:
-                        existing = ws.row_values(row_number)
-                    except Exception:
-                        existing = []
-                    existing = _ensure_row_length(existing, M_MANDATORY_COLS)
-                    existing[M_IDX_END] = end_ts
-                    existing[M_IDX_ARRIVAL] = arrival
-                    try:
-                        ws.delete_rows(row_number)
-                    except Exception:
-                        logger.exception("Failed to delete row for fallback replacement at %d", row_number)
-                    try:
-                        ws.insert_row(existing, row_number)
-                    except Exception:
-                        logger.exception("Failed to insert fallback row at %d", row_number)
-
-                logger.info("Updated mission end for row %d plate=%s driver=%s", row_number, plate, driver)
-
-                s_dt = parse_ts(rec_start) if rec_start else None
-                if not s_dt:
-                    return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False, "start_ts": rec_start}
-
-                window_start = s_dt - timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
-                window_end = s_dt + timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
-
-                vals2, start_idx2 = _missions_get_values_and_data_rows(ws)
-                candidates = []
-                for j in range(start_idx2, len(vals2)):
-                    if j == i:
-                        continue
-                    r2 = _ensure_row_length(vals2[j], M_MANDATORY_COLS)
-                    rn = str(r2[M_IDX_NAME]).strip()
-                    rp = str(r2[M_IDX_PLATE]).strip()
-                    rstart = str(r2[M_IDX_START]).strip()
-                    rend = str(r2[M_IDX_END]).strip()
-                    dep = str(r2[M_IDX_DEPART]).strip()
-                    arr = str(r2[M_IDX_ARRIVAL]).strip()
-                    if rn != driver or rp != plate:
-                        continue
-                    if not rstart or not rend:
-                        continue
-                    r_s_dt = parse_ts(rstart)
-                    if not r_s_dt:
-                        continue
-                    if not (window_start <= r_s_dt <= window_end):
-                        continue
-                    candidates.append({"idx": j, "start": r_s_dt, "end": parse_ts(rend), "dep": dep, "arr": arr, "rstart": rstart, "rend": rend})
-
-                found_pair = None
-                cur_dep = rec_dep
-                cur_arr = arrival
-                for comp in candidates:
-                    if (cur_dep == "PP" and cur_arr == "SHV" and comp["dep"] == "SHV" and comp["arr"] == "PP") or \
-                       (cur_dep == "SHV" and cur_arr == "PP" and comp["dep"] == "PP" and comp["arr"] == "SHV"):
-                        found_pair = comp
-                        break
-
-                if not found_pair:
-                    for comp in candidates:
-                        if comp["dep"] == cur_arr and comp["arr"] == cur_dep:
-                            found_pair = comp
-                            break
-
-                if not found_pair and candidates:
-                    candidates.sort(key=lambda x: abs((x["start"] - s_dt).total_seconds()))
-                    found_pair = candidates[0]
-
-                if not found_pair:
-                    # single-leg closure: do NOT post roundtrip summary per new requirement
-                    return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False, "start_ts": rec_start, "end_ts": end_ts}
-
-                other_idx = found_pair["idx"]
-                other_start = found_pair["start"]
-                primary_idx = i if s_dt <= other_start else other_idx
-                secondary_idx = other_idx if primary_idx == i else i
-
-                primary_row_number = primary_idx + 1
-                secondary_row_number = secondary_idx + 1
-
-                if primary_idx == i:
-                    return_start = found_pair["rstart"]
-                    return_end = found_pair["rend"] if found_pair["rend"] else (found_pair["end"].strftime(TS_FMT) if found_pair["end"] else "")
-                else:
-                    return_start = rec_start
-                    return_end = end_ts
-
-                try:
-                    ws.update_cell(primary_row_number, M_IDX_ROUNDTRIP + 1, "Yes")
-                    ws.update_cell(primary_row_number, M_IDX_RETURN_START + 1, return_start)
-                    ws.update_cell(primary_row_number, M_IDX_RETURN_END + 1, return_end)
-                except Exception:
-                    try:
-                        existing = ws.row_values(primary_row_number)
-                    except Exception:
-                        existing = []
-                    existing = _ensure_row_length(existing, M_MANDATORY_COLS)
-                    existing[M_IDX_ROUNDTRIP] = "Yes"
-                    existing[M_IDX_RETURN_START] = return_start
-                    existing[M_IDX_RETURN_END] = return_end
-                    try:
-                        ws.delete_rows(primary_row_number)
-                    except Exception:
-                        logger.exception("Failed to delete primary row for fallback replacement at %d", primary_row_number)
-                    try:
-                        ws.insert_row(existing, primary_row_number)
-                    except Exception:
-                        logger.exception("Failed to insert fallback primary row at %d", primary_row_number)
-
-                try:
-                    sec_vals = _ensure_row_length(vals2[secondary_idx], M_MANDATORY_COLS) if secondary_idx < len(vals2) else None
-                    sec_guid = sec_vals[M_IDX_GUID] if sec_vals else None
-                    if sec_guid:
-                        all_vals_post, start_idx_post = _missions_get_values_and_data_rows(ws)
-                        for k in range(start_idx_post, len(all_vals_post)):
-                            r_k = _ensure_row_length(all_vals_post[k], M_MANDATORY_COLS)
-                            if str(r_k[M_IDX_GUID]).strip() == str(sec_guid).strip():
-                                try:
-                                    ws.delete_rows(k + 1)
-                                    break
-                                except Exception:
-                                    try:
-                                        ws.update_cell(k + 1, M_IDX_ROUNDTRIP + 1, "Merged")
-                                    except Exception:
-                                        logger.exception("Failed to delete or mark secondary merged row.")
-                                    break
-                    else:
-                        try:
-                            ws.delete_rows(secondary_row_number)
-                        except Exception:
-                            try:
-                                ws.update_cell(secondary_row_number, M_IDX_ROUNDTRIP + 1, "Merged")
-                            except Exception:
-                                logger.exception("Failed to delete or mark secondary merged row.")
-                except Exception:
-                    logger.exception("Failed cleaning up secondary mission row after merge.")
-
-                merged_flag = (secondary_idx == i)
-                return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
-
-        return {"ok": False, "message": "No open mission found"}
-    except Exception as e:
-        logger.exception("Failed to update mission end: %s", e)
-        return {"ok": False, "message": "Failed to write mission end to sheet: " + str(e)}
-
-def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
-    ws = open_worksheet(MISSIONS_TAB)
-    out = []
-    try:
-        vals, start_idx = _missions_get_values_and_data_rows(ws)
+        ws = open_worksheet(RECORDS_TAB)
+        vals = ws.get_all_values()
+        if not vals:
+            return 0
+        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
         for r in vals[start_idx:]:
-            r = _ensure_row_length(r, M_MANDATORY_COLS)
-            start = str(r[M_IDX_START]).strip()
-            if not start:
+            pl = r[2] if len(r) > 2 else ""
+            start_ts = r[3] if len(r) > 3 else ""
+            end_ts = r[4] if len(r) > 4 else ""
+            if pl != plate:
                 continue
-            s_dt = parse_ts(start)
+            if not start_ts or not end_ts:
+                continue
+            s_dt = parse_ts(start_ts)
             if not s_dt:
                 continue
-            if start_date <= s_dt < end_date:
-                out.append([r[M_IDX_GUID], r[M_IDX_NO], r[M_IDX_NAME], r[M_IDX_PLATE], r[M_IDX_START], r[M_IDX_END], r[M_IDX_DEPART], r[M_IDX_ARRIVAL], r[M_IDX_STAFF], r[M_IDX_ROUNDTRIP], r[M_IDX_RETURN_START], r[M_IDX_RETURN_END]])
-        return out
+            if month_start <= s_dt < month_end:
+                cnt += 1
     except Exception:
-        logger.exception("Failed to fetch mission rows")
-        return []
+        logger.exception("Failed to count trips for plate month")
+    return cnt
 
-def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
-    try:
-        ws = open_worksheet(MISSIONS_REPORT_TAB)
-        ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
-        ws.append_row(HEADERS_BY_TAB.get(MISSIONS_REPORT_TAB, []), value_input_option="USER_ENTERED")
-        for r in rows:
-            r = _ensure_row_length(r, M_MANDATORY_COLS)
-            ws.append_row(r, value_input_option="USER_ENTERED")
-        rt_counts: Dict[str, int] = {}
-        for r in rows:
-            name = r[2] if len(r) > 2 else ""
-            roundtrip = str(r[9]).strip().lower() if len(r) > 9 else ""
-            if name and roundtrip == "yes":
-                rt_counts[name] = rt_counts.get(name, 0) + 1
-        ws.append_row(["Roundtrip Summary by Driver:"], value_input_option="USER_ENTERED")
-        if rt_counts:
-            ws.append_row(["Driver", "Roundtrip Count"], value_input_option="USER_ENTERED")
-            for driver, cnt in sorted(rt_counts.items(), key=lambda x: (-x[1], x[0])):
-                ws.append_row([driver, cnt], value_input_option="USER_ENTERED")
-        else:
-            ws.append_row(["No roundtrips found in this period."], value_input_option="USER_ENTERED")
-        return True
-    except Exception:
-        logger.exception("Failed to write mission report to sheet.")
-        return False
-
-def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
-    try:
-        ws = open_worksheet(MISSIONS_TAB)
-        vals, start_idx = _missions_get_values_and_data_rows(ws)
-        for r in vals[start_idx:]:
-            r = _ensure_row_length(r, M_MANDATORY_COLS)
-            start = str(r[M_IDX_START]).strip()
-            if not start:
-                continue
-            s_dt = parse_ts(start)
-            if not s_dt or not (start_date <= s_dt < end_date):
-                continue
-            rt = str(r[M_IDX_ROUNDTRIP]).strip().lower()
-            if rt != "yes":
-                continue
-            name = str(r[M_IDX_NAME]).strip() or "Unknown"
-            counts[name] = counts.get(name, 0) + 1
-    except Exception:
-        logger.exception("Failed to count roundtrips per driver")
-    return counts
-
-# Finance handling (enhanced messages and deletion)
+# Finance handling (regex and helpers)
 AMOUNT_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*$', re.I)
 ODO_RE = re.compile(r'^\s*(\d+)(?:\s*km)?\s*$', re.I)
 FIN_TYPES = {"odo", "fuel", "parking", "wash", "repair"}
@@ -926,9 +967,7 @@ def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
         vals = ws.get_all_values()
         if not vals:
             return None
-        # find header row index
         start_idx = 1 if any("plate" in c.lower() for c in vals[0] if c) else 0
-        # iterate bottom-up to find first row with a mileage (col index 4 in our header)
         for r in reversed(vals[start_idx:]):
             if len(r) >= 4:
                 rp = str(r[0]).strip() if len(r) > 0 else ""
@@ -946,7 +985,6 @@ def record_finance_combined_odo_fuel(plate: str, mileage: str, fuel_cost: str, b
     """Write a single row containing Mileage, Delta KM, Fuel Cost, Invoice, DriverPaid into EXPENSE_TAB"""
     try:
         ws = open_worksheet(EXPENSE_TAB)
-        # ensure headers exist (open_worksheet will insert if sheet empty)
         prev_m = _find_last_mileage_for_plate(plate)
         m_int = None
         try:
@@ -970,7 +1008,7 @@ def record_finance_combined_odo_fuel(plate: str, mileage: str, fuel_cost: str, b
         return {"ok": False, "message": str(e)}
 
 def record_finance_entry_single_row(typ: str, plate: str, amount: str, notes: str, by_user: str = "") -> dict:
-    """Record parking/wash/repair into EXPENSE_TAB or MAINT_TAB accordingly. Returns details for notification."""
+    """Record parking/wash/repair into EXPENSE_TAB or MAINT_TAB accordingly"""
     try:
         ntyp = normalize_fin_type(typ) or typ
         plate = str(plate).strip()
@@ -994,7 +1032,7 @@ def record_finance_entry_single_row(typ: str, plate: str, amount: str, notes: st
             row = [plate, by_user or "Unknown", dt, mileage, "", "", parking_fee, other_fee, notes, ""]
             ws.append_row(row, value_input_option="USER_ENTERED")
             logger.info("Recorded expense entry: %s %s %s", ntyp, plate, amount)
-            return {"ok": True, "type": ntyp, "plate": plate, "amount": amount, "date": dt.split(" ")[0], "by": by_user}
+            return {"ok": True}
         if ntyp in {"repair", "maint"}:
             ws = open_worksheet(MAINT_TAB)
             mileage = ""
@@ -1006,14 +1044,14 @@ def record_finance_entry_single_row(typ: str, plate: str, amount: str, notes: st
             row = [plate, mileage, item, cost, date, workshop, notes_field]
             ws.append_row(row, value_input_option="USER_ENTERED")
             logger.info("Recorded maintenance entry: plate=%s cost=%s by=%s", plate, cost, by_user)
-            return {"ok": True, "type": "repair", "plate": plate, "amount": amount, "date": date, "by": by_user}
+            return {"ok": True}
         # fallback: generic
         ws = open_worksheet(EXPENSE_TAB)
         dt = now_str()
         row = [plate, by_user or "Unknown", dt, "", "", "", "", "", str(amount), ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("Recorded generic finance entry for unknown type '%s': %s", typ, plate)
-        return {"ok": True, "type": "generic", "plate": plate, "amount": amount, "date": dt.split(" ")[0], "by": by_user}
+        return {"ok": True}
     except Exception as e:
         logger.exception("Failed to record finance entry: %s", e)
         return {"ok": False, "message": str(e)}
@@ -1115,7 +1153,6 @@ async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TY
     allowed = None
     if user and user.username and driver_map.get(user.username):
         allowed = driver_map.get(user.username)
-    # NEW: Directly ask plate -> departure (no staff)
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_start_prompt_plate"), reply_markup=build_plate_keyboard("mission_start_plate", allowed_plates=allowed))
 
 async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1196,7 +1233,7 @@ async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_
     except Exception:
         logger.exception("Failed to present plate selection for finance.")
 
-# Process ForceReply replies: finance (multi-step), leave, mission staff entry (we removed staff input)
+# Process ForceReply replies: finance (multi-step), leave, mission staff entry (when 'enter staff' chosen)
 async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.effective_message.text.strip() if update.effective_message and update.effective_message.text else ""
@@ -1219,7 +1256,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     if m2:
                         km = m2.group(1)
                     else:
-                        # invalid -> inform and cleanup
                         try:
                             await update.effective_message.delete()
                         except Exception:
@@ -1321,19 +1357,18 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
                 except Exception:
                     pass
-                # send group notification as required (short) with new sentence structure:
+                # send group notification as required (short)
                 try:
                     delta_txt = res.get("delta", "")
                     m_val = res.get("mileage", km)
                     fuel_val = res.get("fuel", fuel_amt)
-                    nowd = _now_dt().strftime(DATE_FMT)
-                    who = user.username or (user.first_name or "Unknown")
-                    # new format:
-                    msg = f"{plate} @ {m_val} km + ${fuel_val} on {nowd} paid by {who}, difference from previous odo is {delta_txt} km."
+                    nowd = _now_dt().strftime("%Y-%m-%d")
+                    msg = t(context.user_data.get("lang", DEFAULT_LANG), "finance_odo_fuel_receipt",
+                            plate=plate, odo=m_val, fuel=fuel_val, date=nowd, by=user.username or "Unknown", delta=delta_txt)
                     await update.effective_chat.send_message(msg)
                 except Exception:
                     logger.exception("Failed to send group notification for odo+fuel")
-                # privately DM user with brief confirmation
+                # privately DM operator with brief confirmation
                 try:
                     await context.bot.send_message(chat_id=user.id, text=f"Recorded {plate}: {km}KM and ${fuel_amt} fuel. Delta {delta_txt} km. Invoice={invoice} Paid={driver_paid}")
                 except Exception:
@@ -1421,7 +1456,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     return
             else:
                 amt = am.group(1)
-            # record and get structured result for notification
             res = record_finance_entry_single_row(typ, plate, amt, invoice or "", by_user=user.username or "")
             try:
                 await update.effective_message.delete()
@@ -1433,26 +1467,15 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 pass
             try:
-                # For wash/repair/parking produce a short message per requirement:
-                who = user.username or (user.first_name or "Unknown")
-                if res.get("ok"):
-                    rtype = res.get("type", typ)
-                    date = res.get("date", today_date_str())
-                    amount = res.get("amount", amt)
-                    if rtype == "wash":
-                        msg = f"{plate} washing fee ${amount} {date} paid from {who}."
-                    elif rtype == "parking":
-                        msg = f"{plate} parking fee ${amount} {date} paid from {who}."
-                    elif rtype == "repair":
-                        msg = f"{plate} repair fee ${amount} {date} paid from {who}."
-                    else:
-                        msg = f"{plate} {rtype} ${amount} {date} recorded by {who}."
-                    # send group message
-                    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-                # DM operator
+                # group receipt message
+                nowd = _now_dt().strftime("%Y-%m-%d")
+                msg = t(context.user_data.get("lang", DEFAULT_LANG), "finance_expense_receipt",
+                        plate=plate, typ=typ, amt=amt, date=nowd, by=user.username or "Unknown")
+                await update.effective_chat.send_message(msg)
+                # DM operator with brief confirmation
                 await context.bot.send_message(chat_id=user.id, text=f"Recorded {typ} ${amt} for {plate}. Invoice={invoice} Paid={driver_paid}")
             except Exception:
-                logger.exception("Failed to send finance notification or DM.")
+                pass
             context.user_data.pop("pending_fin_simple", None)
             return
 
@@ -1512,54 +1535,30 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
             except Exception:
                 pass
-            # DM confirmation (group silent) + aggregated counts:
-            # compute leaves in month & year
-            try:
-                # month range
-                dt = sd
-                month_start = datetime(dt.year, dt.month, 1)
-                if dt.month == 12:
-                    month_end = datetime(dt.year + 1, 1, 1)
-                else:
-                    month_end = datetime(dt.year, dt.month + 1, 1)
-                year_start = datetime(dt.year, 1, 1)
-                year_end = datetime(dt.year + 1, 1, 1)
-                # count
-                def _count_leaves(driver_name: str, start_dt: datetime, end_dt: datetime) -> int:
-                    try:
-                        ws2 = open_worksheet(LEAVE_TAB)
-                        vals = ws2.get_all_records()
-                        cnt = 0
-                        for r in vals:
-                            d = str(r.get("Driver", r.get("driver", ""))).strip()
-                            s = str(r.get("Start Date", r.get("start", r.get("Start", "")))).strip()
-                            e = str(r.get("End Date", r.get("end", r.get("End", "")))).strip()
-                            if d != driver_name:
-                                continue
-                            try:
-                                sd2 = datetime.strptime(s, "%Y-%m-%d")
-                            except Exception:
-                                continue
-                            if start_dt <= sd2 < end_dt:
-                                cnt += 1
-                        return cnt
-                    except Exception:
-                        logger.exception("Failed to count leaves from sheet")
-                        return 0
-                mcount = _count_leaves(driver, month_start, month_end)
-                ycount = _count_leaves(driver, year_start, year_end)
-                # send group message summarizing
-                try:
-                    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}. Driver {driver} has {mcount} leaves in {month_start.strftime('%Y-%m')} and {ycount} leaves in {year_start.strftime('%Y')}.")
-                except Exception:
-                    pass
-            except Exception:
-                logger.exception("Failed to compute leave summary")
-            # DM confirm to operator
+            # DM confirmation (group silent) and group receipt
             try:
                 await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "leave_confirm", driver=driver, start=start, end=end, reason=reason))
             except Exception:
                 pass
+            # group summary: compute counts
+            try:
+                nowdt = _now_dt()
+                # month range
+                mstart = datetime(nowdt.year, nowdt.month, 1)
+                if nowdt.month == 12:
+                    mend = datetime(nowdt.year + 1, 1, 1)
+                else:
+                    mend = datetime(nowdt.year, nowdt.month + 1, 1)
+                month_days = count_leave_days_for_driver(driver, mstart, mend)
+                ystart = datetime(nowdt.year, 1, 1)
+                yend = datetime(nowdt.year + 1, 1, 1)
+                year_days = count_leave_days_for_driver(driver, ystart, yend)
+                remaining = max(0, ANNUAL_LEAVE_DAYS - year_days)
+                await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_summary_msg",
+                                                          driver=driver, month=mstart.strftime("%Y-%m"), month_count=month_days,
+                                                          year=nowdt.year, year_count=year_days, remaining=remaining))
+            except Exception:
+                logger.exception("Failed to send leave summary message.")
         except Exception:
             logger.exception("Failed to record leave")
             try:
@@ -1569,7 +1568,37 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop("pending_leave", None)
         return
 
-    # mission staff entry pending (REMOVED) - ignore
+    # mission staff entry pending (we store pending_mission with "need_staff": "enter")
+    pending_mission = context.user_data.get("pending_mission")
+    if pending_mission and pending_mission.get("need_staff") == "enter":
+        # We removed staff-enter requirement per your request; if this path triggers, we'll treat text as staff for backward compatibility.
+        staff = text
+        plate = pending_mission.get("plate")
+        departure = pending_mission.get("departure")
+        username = user.username or user.full_name
+        driver_map = get_driver_map()
+        allowed = driver_map.get(user.username, []) if user and user.username else []
+        if allowed and plate not in allowed:
+            await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "not_allowed", plate=plate))
+            context.user_data.pop("pending_mission", None)
+            return
+        res = start_mission_record(username, plate, departure, staff_name=staff)
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
+        if res.get("ok"):
+            try:
+                await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_departure", plate=plate, driver=username, dep=departure, ts=now_str()))
+            except Exception:
+                pass
+        else:
+            try:
+                await update.effective_chat.send_message("❌ " + res.get("message", ""))
+            except Exception:
+                pass
+        context.user_data.pop("pending_mission", None)
+        return
 
 # fallback free-text handler
 async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1664,41 +1693,59 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # mission start choose plate
     if data.startswith("mission_start_plate|"):
         _, plate = data.split("|", 1)
-        # NEW: directly ask departure and record start (no staff)
-        kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"), InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
-        await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate}
+        kb = [[InlineKeyboardButton("No staff", callback_data=f"mission_staff|none|{plate}"), InlineKeyboardButton("Enter staff", callback_data=f"mission_staff|enter|{plate}")]]
+        await query.edit_message_text(t(user_lang, "mission_start_prompt_staff"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
     # mission end choose plate
     if data.startswith("mission_end_plate|"):
         _, plate = data.split("|", 1)
+        context.user_data["pending_mission"] = {"action": "end", "plate": plate}
         kb = [[InlineKeyboardButton("PP", callback_data=f"mission_arrival|PP|{plate}"), InlineKeyboardButton("SHV", callback_data=f"mission_arrival|SHV|{plate}")]]
         await query.edit_message_text(t(user_lang, "mission_end_prompt_arrival"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    # mission depart after choosing (record start immediately)
+    # mission staff choices (we keep options but staff entry is not required)
+    if data.startswith("mission_staff|"):
+        parts = data.split("|")
+        if len(parts) < 3:
+            await query.edit_message_text("Invalid selection.")
+            return
+        _, choice, plate = parts
+        pending = context.user_data.get("pending_mission") or {}
+        pending["plate"] = plate
+        dep_kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"), InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
+        context.user_data["pending_mission"] = pending
+        await query.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(dep_kb))
+        return
+
+    # mission depart after choosing staff option
     if data.startswith("mission_depart|"):
         parts = data.split("|")
         if len(parts) < 3:
             await query.edit_message_text("Invalid selection.")
             return
         _, dep, plate = parts
+        pending = context.user_data.get("pending_mission") or {}
+        pending["departure"] = dep
+        pending["plate"] = plate
+        context.user_data["pending_mission"] = pending
+        kb = [[InlineKeyboardButton("Start now", callback_data=f"mission_start_now|{plate}|{dep}")]]
+        await query.edit_message_text("Choose start option:", reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    # mission start now (no staff)
+    if data.startswith("mission_start_now|"):
+        _, plate, dep = data.split("|", 2)
         username = query.from_user.username or query.from_user.full_name
-        # authorization check
-        driver_map = get_driver_map()
-        allowed = driver_map.get(query.from_user.username, []) if query.from_user and query.from_user.username else []
-        if allowed and plate not in allowed:
-            await query.edit_message_text(t(user_lang, "not_allowed", plate=plate))
-            return
-        # record start
         res = start_mission_record(username, plate, dep, staff_name="")
         if res.get("ok"):
-            # new message format:
-            ts = res.get("start_ts") or now_str()
-            time_only = parse_ts(ts).strftime("%H:%M:%S") if parse_ts(ts) else now_time_str()
-            await query.edit_message_text(f"Driver {username} (plate {plate}) departures from {dep} at {time_only}.")
+            # only report departure message
+            await query.edit_message_text(t(user_lang, "mission_departure", plate=plate, driver=username, dep=dep, ts=now_str()))
         else:
             await query.edit_message_text("❌ " + res.get("message", ""))
+        context.user_data.pop("pending_mission", None)
         return
 
     # mission arrival for end flow (user selected arrival city)
@@ -1708,19 +1755,20 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Invalid selection.")
             return
         _, arr, plate = parts
-        username = query.from_user.username or query.from_user.full_name
+        pending = context.user_data.get("pending_mission") or {}
+        pending["arrival"] = arr
+        pending["plate"] = plate
+        context.user_data["pending_mission"] = pending
         driver_map = get_driver_map()
-        allowed = driver_map.get(query.from_user.username, []) if query.from_user and query.from_user.username else []
+        allowed = driver_map.get(username, []) if username else []
         if allowed and plate not in allowed:
             await query.edit_message_text(t(user_lang, "not_allowed", plate=plate))
+            context.user_data.pop("pending_mission", None)
             return
         res = end_mission_record(username, plate, arr)
         if res.get("ok"):
-            # send arrival message always
-            end_ts = res.get("end_ts") or now_str()
-            time_only = parse_ts(end_ts).strftime("%H:%M:%S") if parse_ts(end_ts) else now_time_str()
-            await query.edit_message_text(f"Driver {username} (plate {plate}) arrives at {arr} at {time_only}.")
-            # Only when merged==True do we post completed mission counts (per new requirement)
+            # arrival message
+            await query.edit_message_text(t(user_lang, "mission_arrival", plate=plate, driver=username, arr=arr, ts=now_str()))
             if res.get("merged"):
                 try:
                     nowdt = _now_dt()
@@ -1731,16 +1779,37 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         month_end = datetime(nowdt.year, nowdt.month + 1, 1)
                     counts = count_roundtrips_per_driver_month(month_start, month_end)
                     cnt_month = counts.get(username, 0)
-                    # year
-                    year_start = datetime(nowdt.year, 1, 1)
-                    year_end = datetime(nowdt.year + 1, 1, 1)
-                    counts_year = count_roundtrips_per_driver_month(year_start, year_end)
+                    # year count
+                    ystart = datetime(nowdt.year, 1, 1)
+                    yend = datetime(nowdt.year + 1, 1, 1)
+                    counts_year = count_roundtrips_per_driver_month(ystart, yend)
                     cnt_year = counts_year.get(username, 0)
-                    await query.message.chat.send_message(f"Driver {username} completed {cnt_month} mission(s) in {month_start.strftime('%Y-%m')} and {cnt_year} mission(s) in {year_start.strftime('%Y')}.")
+                    # compute mission days & per-diem for last merged mission: we attempt to read the last REPORT row
+                    days = 0
+                    per_d = 0.0
+                    try:
+                        rpt_ws = open_worksheet(MISSIONS_REPORT_TAB)
+                        vals = rpt_ws.get_all_values()
+                        if vals and len(vals) >= 2:
+                            last = vals[-1]
+                            # if last row matches driver+plate, attempt parse days/per_d
+                            if len(last) >= 13 and str(last[2]).strip() == username and str(last[3]).strip() == plate:
+                                try:
+                                    days = int(last[12])
+                                    per_d = float(last[13]) if len(last) > 13 else 0.0
+                                except Exception:
+                                    days = 0
+                                    per_d = 0.0
+                    except Exception:
+                        pass
+                    await query.message.chat.send_message(t(user_lang, "mission_completed_notify",
+                                                            driver=username, month=month_start.strftime("%Y-%m"), month_count=cnt_month,
+                                                            year=nowdt.year, year_count=cnt_year, days=days, per_diem=per_d))
                 except Exception:
                     logger.exception("Failed to send merged missions message.")
         else:
             await query.edit_message_text("❌ " + res.get("message", ""))
+        context.user_data.pop("pending_mission", None)
         return
 
     # start|plate quick action (start trip)
@@ -1759,13 +1828,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res = record_start_trip(username, plate)
             if res.get("ok"):
                 try:
-                    # new message format:
-                    ts = res.get("ts")
-                    time_only = parse_ts(ts).strftime("%H:%M:%S") if parse_ts(ts) else now_time_str()
-                    await query.edit_message_text(f"Driver {username} (plate {plate}) starts trip at {time_only}.")
+                    await query.edit_message_text(t(user_lang, "trip_start_msg", driver=username, plate=plate, ts=res.get("ts")))
                 except Exception:
                     try:
-                        await query.message.chat.send_message(f"Driver {username} (plate {plate}) starts trip at {now_time_str()}.")
+                        await query.message.chat.send_message(t(user_lang, "trip_start_msg", driver=username, plate=plate, ts=res.get("ts")))
                         await safe_delete_message(context.bot, query.message.chat.id, query.message.message_id)
                     except Exception:
                         pass
@@ -1780,7 +1846,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if res.get("ok"):
                 ts = res.get("ts")
                 dur = res.get("duration") or ""
-                # summary counts: today/month/year for driver and plate
                 nowdt = _now_dt()
                 n_today = count_trips_for_day(username, nowdt)
                 month_start = datetime(nowdt.year, nowdt.month, 1)
@@ -1789,25 +1854,27 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     month_end = datetime(nowdt.year, nowdt.month + 1, 1)
                 n_month = count_trips_for_month(username, month_start, month_end)
-                year_start = datetime(nowdt.year, 1, 1)
-                year_end = datetime(nowdt.year + 1, 1, 1)
-                n_year = count_trips_for_year(username, year_start, year_end)
+                n_year = count_trips_for_month(username, datetime(nowdt.year, 1, 1), datetime(nowdt.year + 1, 1, 1))
                 # plate counts
-                p_today = count_trips_for_plate_period(plate, datetime(nowdt.year, nowdt.month, nowdt.day), datetime(nowdt.year, nowdt.month, nowdt.day) + timedelta(days=1))
-                p_month = count_trips_for_plate_period(plate, month_start, month_end)
-                p_year = count_trips_for_plate_period(plate, year_start, year_end)
+                p_today = count_trips_for_day_plate(plate, nowdt)
+                p_month = count_trips_for_month_plate(plate, month_start, month_end)
+                p_year = count_trips_for_month_plate(plate, datetime(nowdt.year, 1, 1), datetime(nowdt.year + 1, 1, 1))
                 try:
-                    # new message format on edit:
-                    time_only = parse_ts(ts).strftime("%H:%M:%S") if parse_ts(ts) else now_time_str()
-                    await query.edit_message_text(f"Driver {username} (plate {plate}) ends trip at {time_only}.")
-                    # send summary message after the edit
-                    await query.message.chat.send_message(f"Driver {username} completed {n_today} trip(s) today and {n_month} trip(s) in {month_start.strftime('%Y-%m')} and {n_year} trip(s) in {year_start.strftime('%Y')}. Plate {plate} completed {p_today} trip(s) today and {p_month} in {month_start.strftime('%Y-%m')} and {p_year} in {year_start.strftime('%Y')}.")
+                    await query.edit_message_text(t(user_lang, "trip_end_msg", driver=username, plate=plate, ts=ts))
                 except Exception:
                     try:
-                        await query.message.chat.send_message(f"Driver {username} completed {n_today} trip(s) today and {n_month} trip(s) in {month_start.strftime('%Y-%m')}.")
+                        await query.message.chat.send_message(t(user_lang, "trip_end_msg", driver=username, plate=plate, ts=ts))
                         await safe_delete_message(context.bot, query.message.chat.id, query.message.message_id)
                     except Exception:
                         pass
+                # send summary
+                try:
+                    await query.message.chat.send_message(t(user_lang, "trip_summary_notify",
+                                                            driver=username, n_today=n_today, n_month=n_month, n_year=n_year,
+                                                            month=month_start.strftime("%Y-%m"),
+                                                            plate=plate, p_today=p_today, p_month=p_month, p_year=p_year))
+                except Exception:
+                    logger.exception("Failed to send trip summary.")
             else:
                 try:
                     await query.edit_message_text("❌ " + res.get("message", ""))
@@ -1850,7 +1917,7 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-# Mission report command (keep as-is)
+# Mission report command
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -1876,22 +1943,13 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
             counts = count_roundtrips_per_driver_month(start, end)
             tab_name = None
             try:
-                tab_name = write_roundtrip_summary_tab(start.strftime("%Y-%m"), counts)
+                tab_name = None
             except Exception:
                 tab_name = None
-            csv_path = write_roundtrip_summary_csv(start.strftime("%Y-%m"), counts)
             if ok:
                 await update.effective_chat.send_message(f"Monthly mission report for {start.strftime('%Y-%m')} created.")
             else:
                 await update.effective_chat.send_message("❌ Failed to write mission report.")
-            if tab_name:
-                await update.effective_chat.send_message(f"Roundtrip summary tab created: {tab_name}")
-            if csv_path:
-                try:
-                    with open(csv_path, "rb") as f:
-                        await context.bot.send_document(chat_id=update.effective_chat.id, document=f, filename=os.path.basename(csv_path))
-                except Exception:
-                    await update.effective_chat.send_message(f"Roundtrip CSV written: {csv_path}")
         except Exception:
             await update.effective_chat.send_message("Invalid command. Usage: /mission_report month YYYY-MM")
     else:
@@ -1918,7 +1976,7 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
         await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
 
-# scheduled daily summary & auto-monthly mission reporting (unchanged)
+# scheduled daily summary & auto-monthly mission reporting
 async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data if hasattr(context.job, "data") else {}
     chat_id = job_data.get("chat_id") or SUMMARY_CHAT_ID
@@ -1957,18 +2015,9 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
             rows = mission_rows_for_period(prev_month_start, prev_month_end)
             ok = write_mission_report_rows(rows, period_label=prev_month_start.strftime("%Y-%m"))
             counts = count_roundtrips_per_driver_month(prev_month_start, prev_month_end)
-            tab_name = write_roundtrip_summary_tab(prev_month_start.strftime("%Y-%m"), counts)
-            csv_path = write_roundtrip_summary_csv(prev_month_start.strftime("%Y-%m"), counts)
+            tab_name = None
             if ok:
                 await context.bot.send_message(chat_id=chat_id, text=f"Auto-generated mission report for {prev_month_start.strftime('%Y-%m')}.")
-            if tab_name:
-                await context.bot.send_message(chat_id=chat_id, text=f"Roundtrip summary tab created: {tab_name}")
-            if csv_path:
-                try:
-                    with open(csv_path, "rb") as f:
-                        await context.bot.send_document(chat_id=chat_id, document=f, filename=os.path.basename(csv_path))
-                except Exception:
-                    await context.bot.send_message(chat_id=chat_id, text=f"Roundtrip CSV written: {csv_path}")
         except Exception:
             logger.exception("Failed to auto-generate monthly mission report on day 1.")
 
@@ -2019,7 +2068,6 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
         sent = await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
         try:
-            # note: pin operation kept as try/except (attempt pin if allowed)
             await context.bot.pin_chat_message(chat_id=update.effective_chat.id, message_id=sent.message_id)
             logger.info("Pinned menu message in chat %s", update.effective_chat.id)
         except Exception:
@@ -2035,6 +2083,99 @@ async def delete_command_message(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         pass
 
+# Leave statistics helpers
+def leave_days_between(start_date: datetime, end_date: datetime) -> int:
+    sd = start_date.date()
+    ed = end_date.date()
+    return (ed - sd).days + 1 if ed >= sd else 0
+
+def count_leave_days_for_driver(driver: str, period_start: datetime, period_end: datetime) -> int:
+    try:
+        ws = open_worksheet(LEAVE_TAB)
+        rows = ws.get_all_records()
+        total = 0
+        for r in rows:
+            d = str(r.get("Driver", r.get("driver", ""))).strip()
+            if d != driver:
+                continue
+            s = str(r.get("Start Date", r.get("start", r.get("Start", "")))).strip()
+            e = str(r.get("End Date", r.get("end", r.get("End", "")))).strip()
+            try:
+                sd = datetime.strptime(s, "%Y-%m-%d")
+                ed = datetime.strptime(e, "%Y-%m-%d")
+            except Exception:
+                continue
+            overlap_start = max(sd, period_start)
+            overlap_end = min(ed, period_end - timedelta(seconds=1))
+            if overlap_end >= overlap_start:
+                total += leave_days_between(overlap_start, overlap_end)
+        return total
+    except Exception:
+        logger.exception("Failed to count leave days")
+        return 0
+
+async def leave_balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+    args = context.args
+    if not args:
+        await update.effective_chat.send_message("Usage: /leave_balance <driver> [YYYY-MM|YYYY]")
+        return
+    driver = args[0]
+    nowdt = _now_dt()
+    if len(args) >= 2:
+        period = args[1]
+        try:
+            if re.match(r'^\d{4}-\d{2}$', period):
+                dt = datetime.strptime(period + "-01", "%Y-%m-%d")
+                start = datetime(dt.year, dt.month, 1)
+                if dt.month == 12:
+                    end = datetime(dt.year + 1, 1, 1)
+                else:
+                    end = datetime(dt.year, dt.month + 1, 1)
+                month_days = count_leave_days_for_driver(driver, start, end)
+                ystart = datetime(dt.year, 1, 1)
+                yend = datetime(dt.year + 1, 1, 1)
+                year_days = count_leave_days_for_driver(driver, ystart, yend)
+                remaining = max(0, ANNUAL_LEAVE_DAYS - count_leave_days_for_driver(driver, ystart, yend))
+                await update.effective_chat.send_message(
+                    t(context.user_data.get("lang", DEFAULT_LANG), "leave_summary_msg",
+                      driver=driver, month=period, month_count=month_days, year=dt.year, year_count=year_days, remaining=remaining)
+                )
+                return
+            elif re.match(r'^\d{4}$', period):
+                yr = int(period)
+                ystart = datetime(yr, 1, 1)
+                yend = datetime(yr + 1, 1, 1)
+                year_days = count_leave_days_for_driver(driver, ystart, yend)
+                remaining = max(0, ANNUAL_LEAVE_DAYS - year_days)
+                await update.effective_chat.send_message(
+                    t(context.user_data.get("lang", DEFAULT_LANG), "leave_summary_msg",
+                      driver=driver, month=period, month_count=0, year=yr, year_count=year_days, remaining=remaining)
+                )
+                return
+        except Exception:
+            pass
+    # default: year-to-date
+    ystart = datetime(nowdt.year, 1, 1)
+    yend = datetime(nowdt.year + 1, 1, 1)
+    year_days = count_leave_days_for_driver(driver, ystart, yend)
+    remaining = max(0, ANNUAL_LEAVE_DAYS - year_days)
+    month_label = nowdt.strftime("%Y-%m")
+    month_start = datetime(nowdt.year, nowdt.month, 1)
+    if nowdt.month == 12:
+        month_end = datetime(nowdt.year + 1, 1, 1)
+    else:
+        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+    month_days = count_leave_days_for_driver(driver, month_start, month_end)
+    await update.effective_chat.send_message(
+        t(context.user_data.get("lang", DEFAULT_LANG), "leave_summary_msg",
+          driver=driver, month=month_label, month_count=month_days, year=nowdt.year, year_count=year_days, remaining=remaining)
+    )
+
 # Register handlers
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
@@ -2045,18 +2186,20 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_end", mission_end_command))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CommandHandler("leave", leave_command))
+    application.add_handler(CommandHandler("leave_balance", leave_balance_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CommandHandler("lang", lang_command))
 
     application.add_handler(CallbackQueryHandler(plate_callback))
 
-    # ForceReply responses for finance, leave
+    # ForceReply responses for finance, leave, mission staff
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
     # fallback text handler (used to route some free text entries)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
 
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
 
+    # delete bare slash commands (after handlers)
     application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
 
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
@@ -2071,10 +2214,12 @@ def register_ui_handlers(application):
                     BotCommand("mission", "Quick mission menu"),
                     BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
                     BotCommand("leave", "Record leave (admin)"),
+                    BotCommand("leave_balance", "Query leave balance / summary"),
                     BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
                 ])
             except Exception:
                 logger.exception("Failed to set bot commands.")
+        # application.create_task is available; use it non-blocking
         if hasattr(application, "create_task"):
             application.create_task(_set_cmds())
     except Exception:
@@ -2109,7 +2254,6 @@ def _delete_telegram_webhook(token: str) -> bool:
         req = urllib.request.Request(url, method="POST")
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = resp.read().decode("utf-8", errors="ignore")
-            # not parsing JSON strictly — a simple success check:
             if '"ok":true' in data or '"ok": true' in data:
                 logger.info("deleteWebhook succeeded or webhook not present.")
                 return True
@@ -2140,12 +2284,10 @@ def main():
     register_ui_handlers(application)
     schedule_daily_summary(application)
 
-    # Decide webhook vs polling based on WEBHOOK_URL env
-    WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # full URL e.g. https://<host>/webhook/<token>
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     PORT = int(os.getenv("PORT", "8443"))
 
     if WEBHOOK_URL:
-        # Webhook mode
         logger.info("Starting in webhook mode. WEBHOOK_URL=%s", WEBHOOK_URL)
         try:
             application.run_webhook(
@@ -2156,7 +2298,6 @@ def main():
         except Exception:
             logger.exception("Failed to start webhook mode.")
     else:
-        # Polling mode — attempt to delete any existing webhook first to avoid 409 Conflict
         try:
             logger.info("No WEBHOOK_URL set — attempting to delete existing webhook (if any) before polling.")
             ok = _delete_telegram_webhook(BOT_TOKEN)
