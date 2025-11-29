@@ -1842,11 +1842,29 @@ def register_ui_handlers(application):
             ])
         except Exception:
             logger.exception("Failed to set bot commands.")
+
+    # Schedule _set_cmds safely using the running event loop if available.
     try:
-        if hasattr(application, "create_task"):
-            application.create_task(_set_cmds())
+        import asyncio
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except Exception:
+            try:
+                loop = asyncio.get_event_loop()
+            except Exception:
+                loop = None
+        if loop and hasattr(loop, "create_task"):
+            loop.create_task(_set_cmds())
+        else:
+            # Fallback: try to call application.create_task if provided by library
+            try:
+                if hasattr(application, "create_task"):
+                    application.create_task(_set_cmds())
+            except Exception:
+                logger.exception("Could not schedule set_my_commands.")
     except Exception:
-        logger.debug("Could not schedule set_my_commands.")
+        logger.exception("Could not schedule set_my_commands.")
 
 def ensure_env():
     if not BOT_TOKEN:
