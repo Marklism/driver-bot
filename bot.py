@@ -633,9 +633,8 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 except Exception:
                     logger.exception("Failed cleaning up secondary mission row after merge.")
 
-                merged_flag = True
-                merged_secondary = (secondary_idx == i)
-                return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "merged_secondary": merged_secondary, "driver": driver, "plate": plate, "end_ts": end_ts}
+                merged_flag = (secondary_idx == i)
+                return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
     except Exception as e:
         logger.exception("Failed to update mission end: %s", e)
@@ -904,7 +903,8 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("End trip (select plate)", callback_data="show_end")],
         [InlineKeyboardButton("Mission start", callback_data="show_mission_start"),
          InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
-        [InlineKeyboardButton("Admin Finance", callback_data="admin_finance")],
+        [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"),
+         InlineKeyboardButton("Leave", callback_data="leave_menu")],
     ]
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
