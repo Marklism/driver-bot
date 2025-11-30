@@ -1811,16 +1811,40 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     plate_counts_year = 0
                     try:
                         vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                        # normalize the plate we compare against
+                        target_plate = str(plate).strip()
+                        # compute explicit month_end and year_end (reuse month_start, year_start defined earlier)
+                        try:
+                            # month_end already computed above in surrounding code; guard if missing
+                            month_end = month_end
+                        except Exception:
+                            if nowdt.month == 12:
+                                month_end = datetime(nowdt.year + 1, 1, 1)
+                            else:
+                                month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+                        year_end = datetime(nowdt.year + 1, 1, 1)
+
                         for r in vals_all[sidx:]:
-                            rpl = r[M_IDX_PLATE] if len(r) > M_IDX_PLATE else ""
+                            # Defensive: ensure row length and normalize values
+                            r = _ensure_row_length(r, M_MANDATORY_COLS)
+                            rpl = str(r[M_IDX_PLATE]).strip() if len(r) > M_IDX_PLATE else ""
                             rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
-                            rstart = r[M_IDX_START] if len(r) > M_IDX_START else ""
-                            if rpl == plate and rrt == "yes":
-                                sdt = parse_ts(rstart)
-                                if sdt and month_start <= sdt < month_end:
-                                    plate_counts_month += 1
-                                if sdt and year_start <= sdt < datetime(nowdt.year + 1, 1, 1):
-                                    plate_counts_year += 1
+                            rstart = str(r[M_IDX_START]).strip() if len(r) > M_IDX_START else ""
+                            # Compare normalized plates (case-insensitive if you prefer: .upper())
+                            if not rpl:
+                                continue
+                            if rpl != target_plate:
+                                continue
+                            if rrt != "yes":
+                                continue
+                            # parse and count within ranges
+                            sdt = parse_ts(rstart)
+                            if not sdt:
+                                continue
+                            if month_start <= sdt < month_end:
+                                plate_counts_month += 1
+                            if year_start <= sdt < year_end:
+                                plate_counts_year += 1
                     except Exception:
                         logger.exception("Failed to compute plate roundtrip counts for merged notify")
 
