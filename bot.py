@@ -547,7 +547,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     candidates.append({"idx": j, "start": r_s_dt, "end": parse_ts(rend), "dep": dep, "arr": arr, "rstart": rstart, "rend": rend})
 
                 found_pair = None
-                merge_happened = False
                 cur_dep = rec_dep
                 cur_arr = arrival
                 for comp in candidates:
@@ -569,7 +568,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 if not found_pair:
                     return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False, "end_ts": end_ts}
 
-                merge_happened = True
                 other_idx = found_pair["idx"]
                 other_start = found_pair["start"]
                 primary_idx = i if s_dt <= other_start else other_idx
@@ -1466,23 +1464,16 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if data == "leave_menu":
+        # Mark leave pending and edit the callback message to a short prompt (avoid duplicate long messages)
         try:
-            # Edit the callback message to show the leave prompt and mark pending on that message
-            try:
-                await q.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
-            except Exception:
-                # fallback to editing with plain text if localization failed
-                await q.edit_message_text("Pending leave entry — reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
             context.user_data["pending_leave"] = {"prompt_chat": q.message.chat.id, "prompt_msg_id": q.message.message_id, "origin": {"chat": q.message.chat.id, "msg_id": q.message.message_id}}
-        except Exception:
-            logger.exception("Failed to prompt leave.")
             try:
-                m = await context.bot.send_message(chat_id=q.message.chat.id, text="Pending leave entry — reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
-                context.user_data["pending_leave"] = {"prompt_chat": m.chat_id, "prompt_msg_id": m.message_id, "origin": {"chat": m.chat_id, "msg_id": m.message_id}}
+                await q.edit_message_text("Leave entry pending. Please reply in chat with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
             except Exception:
                 pass
+        except Exception:
+            logger.exception("Failed to prompt leave.")
         return
-
 
     # ---------- mission-related handlers ----------
     if data.startswith("mission_start_plate|"):
@@ -1585,95 +1576,86 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
                 try:
-                    # only send merged summary when there are no remaining open missions for this driver+plate
+                    # 简单去重：同一 driver|plate 在短时间内只发送一次合并提醒
+                    chat_data = context.chat_data
+                    if "last_merge_sent" not in chat_data:
+                        chat_data["last_merge_sent"] = {}
+                    last_map = chat_data["last_merge_sent"]
+
+                    nowdt = _now_dt()
+                    key = f"{username}|{plate}"
+                    last_time = last_map.get(key)
+
+                    # 若上次发送在 60 秒内，则视为重复触发，跳过此次发送
+                    skip_seconds = 60
+                    if last_time:
+                        try:
+                            # last_time 存为 ISO 字符串时也能兼容
+                            if isinstance(last_time, str):
+                                lt = datetime.fromisoformat(last_time)
+                            else:
+                                lt = last_time
+                            if (nowdt - lt).total_seconds() < skip_seconds:
+                                logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
+                                # 清理 pending_mission 并返回
+                                context.user_data.pop("pending_mission", None)
+                                return
+                        except Exception:
+                            # 如果解析失败，继续发送并覆盖 last_time
+                            pass
+
+                    month_start = datetime(nowdt.year, nowdt.month, 1)
+                    if nowdt.month == 12:
+                        month_end = datetime(nowdt.year + 1, 1, 1)
+                    else:
+                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+
+                    counts = count_roundtrips_per_driver_month(month_start, month_end)
+                    d_month = counts.get(username, 0)
+                    year_start = datetime(nowdt.year, 1, 1)
+                    counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
+                    d_year = counts_year.get(username, 0)
+
+                    plate_counts_month = 0
+                    plate_counts_year = 0
                     try:
-                        ws_check = open_worksheet(MISSIONS_TAB)
-                        vals_check, sidx_check = _missions_get_values_and_data_rows(ws_check)
-                        has_open = False
-                        for rr in vals_check[sidx_check:]:
-                            rrr = _ensure_row_length(rr, M_MANDATORY_COLS)
-                            if str(rrr[M_IDX_NAME]).strip() == username and str(rrr[M_IDX_PLATE]).strip() == plate and not str(rrr[M_IDX_END]).strip():
-                                has_open = True
-                                break
+                        vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                        for r in vals_all[sidx:]:
+                            rpl = r[M_IDX_PLATE] if len(r) > M_IDX_PLATE else ""
+                            rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
+                            rstart = r[M_IDX_START] if len(r) > M_IDX_START else ""
+                            if rpl == plate and rrt == "yes":
+                                sdt = parse_ts(rstart)
+                                if sdt and month_start <= sdt < month_end:
+                                    plate_counts_month += 1
+                                if sdt and year_start <= sdt < datetime(nowdt.year + 1, 1, 1):
+                                    plate_counts_year += 1
                     except Exception:
-                        has_open = False
+                        logger.exception("Failed to compute plate roundtrip counts for merged notify")
 
-                    if not has_open:
-                        # 简单去重：同一 driver|plate 在短时间内只发送一次合并提醒
-                        chat_data = context.chat_data
-                        if "last_merge_sent" not in chat_data:
-                            chat_data["last_merge_sent"] = {}
-                        last_map = chat_data["last_merge_sent"]
-
-                        nowdt = _now_dt()
-                        key = f"{username}|{plate}"
-                        last_time = last_map.get(key)
-
-                        # 若上次发送在 60 秒内，则视为重复触发，跳过此次发送
-                        skip_seconds = 60
-                        if last_time:
-                            try:
-                                # last_time 存为 ISO 字符串时也能兼容
-                                if isinstance(last_time, str):
-                                    lt = datetime.fromisoformat(last_time)
-                                else:
-                                    lt = last_time
-                                if (nowdt - lt).total_seconds() < skip_seconds:
-                                    logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
-                                    # 清理 pending_mission 并返回
-                                    context.user_data.pop("pending_mission", None)
-                                    return
-                            except Exception:
-                                # 如果解析失败，继续发送并覆盖 last_time
-                                pass
-
-                        month_start = datetime(nowdt.year, nowdt.month, 1)
-                        if nowdt.month == 12:
-                            month_end = datetime(nowdt.year + 1, 1, 1)
-                        else:
-                            month_end = datetime(nowdt.year, nowdt.month + 1, 1)
-
-                        counts = count_roundtrips_per_driver_month(month_start, month_end)
-                        d_month = counts.get(username, 0)
-                        year_start = datetime(nowdt.year, 1, 1)
-                        counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
-                        d_year = counts_year.get(username, 0)
-
-                        plate_counts_month = 0
-                        plate_counts_year = 0
+                    month_label = month_start.strftime("%Y-%m")
+                    msg = t(user_lang, "roundtrip_merged_notify",
+                            driver=username, d_month=d_month, month=month_label,
+                            d_year=d_year, year=nowdt.year,
+                            plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                    try:
+                        await q.message.chat.send_message(msg)
+                        # 记录发送时间（以 ISO 字符串保存，跨重启也能被 pickle）
                         try:
-                            vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
-                            for r in vals_all[sidx:]:
-                                rpl = r[M_IDX_PLATE] if len(r) > M_IDX_PLATE else ""
-                                rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
-                                rstart = r[M_IDX_START] if len(r) > M_IDX_START else ""
-                                if rpl == plate and rrt == "yes":
-                                    sdt = parse_ts(rstart)
-                                    if sdt and month_start <= sdt < month_end:
-                                        plate_counts_month += 1
-                                    if sdt and year_start <= sdt < datetime(nowdt.year + 1, 1, 1):
-                                        plate_counts_year += 1
+                            last_map[key] = nowdt.isoformat()
+                            chat_data["last_merge_sent"] = last_map
                         except Exception:
-                            logger.exception("Failed to compute plate roundtrip counts for merged notify")
-
-                        month_label = month_start.strftime("%Y-%m")
-                        msg = t(user_lang, "roundtrip_merged_notify",
-                                driver=username, d_month=d_month, month=month_label,
-                                d_year=d_year, year=nowdt.year,
-                                plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
-                        try:
-                            await q.message.chat.send_message(msg)
-                            # 记录发送时间（以 ISO 字符串保存，跨重启也能被 pickle）
-                            try:
-                                last_map[key] = nowdt.isoformat()
-                                chat_data["last_merge_sent"] = last_map
-                            except Exception:
-                                logger.exception("Failed to persist last_merge_sent timestamp")
-                        except Exception:
-                            logger.exception("Failed to send merged roundtrip summary.")
+                            logger.exception("Failed to persist last_merge_sent timestamp")
+                    except Exception:
+                        logger.exception("Failed to send merged roundtrip summary.")
                 except Exception:
                     logger.exception("Failed preparing merged roundtrip summary.")
-context.user_data.pop("pending_mission", None)
+
+        except Exception:
+            logger.exception("Failed mission end flow")
+            await q.edit_message_text("❌ Internal error during mission end.")
+
+        context.user_data.pop("pending_mission", None)
         return
     # ---------- end mission-related handlers ----------
 
