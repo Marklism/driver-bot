@@ -10,23 +10,6 @@ from typing import Optional, Dict, List, Any
 import urllib.request
 
 import gspread
-
-# === LOCAL READ CACHE TO REDUCE GOOGLE SHEETS 429 ===
-_gs_cache = {}
-_GS_TTL = 2  # seconds
-
-def cached_get_all_values(ws):
-    key = ws.id
-    now = time.time()
-    if key in _gs_cache:
-        ts, data = _gs_cache[key]
-        if now - ts < _GS_TTL:
-            return data
-    data = cached_get_all_values(ws)
-    _gs_cache[key] = (now, data)
-    return data
-# === END CACHE ===
-
 from oauth2client.service_account import ServiceAccountCredentials
 
 try:
@@ -127,6 +110,174 @@ TS_FMT = "%Y-%m-%d %H:%M:%S"
 DATE_FMT = "%Y-%m-%d"
 
 ROUNDTRIP_WINDOW_HOURS = int(os.getenv("ROUNDTRIP_WINDOW_HOURS", "24"))
+
+
+# --- BEGIN: Google Sheets API queue, caching and Worksheet proxy helpers ---
+import threading
+import queue
+import time
+from typing import Callable, Any, Optional, Dict, Tuple
+
+# Simple thread-based serial executor to avoid 429s.
+class GoogleApiQueue:
+    def __init__(self, min_interval_sec: float = 1.0, max_retries: int = 5, backoff_factor: float = 1.5):
+        self._q: "queue.Queue[Tuple[Callable, tuple, dict, queue.Queue]]" = queue.Queue()
+        self._min_interval = min_interval_sec
+        self._last_time = 0.0
+        self._thread = threading.Thread(target=self._worker, daemon=True)
+        self._stop = threading.Event()
+        self._max_retries = max_retries
+        self._backoff = backoff_factor
+        self._thread.start()
+
+    def _worker(self):
+        while not self._stop.is_set():
+            try:
+                func, args, kwargs, resp_q = self._q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            # Ensure minimum interval between requests
+            now = time.time()
+            since = now - self._last_time
+            if since < self._min_interval:
+                time.sleep(self._min_interval - since)
+            attempt = 0
+            while True:
+                try:
+                    result = func(*args, **kwargs)
+                    self._last_time = time.time()
+                    resp_q.put((True, result))
+                    break
+                except Exception as e:
+                    attempt += 1
+                    # If likely a rate-limit / transient error, retry with backoff up to max_retries;
+                    # otherwise return error after retries.
+                    if attempt > self._max_retries:
+                        resp_q.put((False, e))
+                        break
+                    # backoff sleep
+                    time.sleep(self._backoff * attempt)
+            self._q.task_done()
+
+    def submit(self, func: Callable, *args, **kwargs) -> Tuple[bool, Any]:
+        resp_q: "queue.Queue" = queue.Queue()
+        self._q.put((func, args, kwargs, resp_q))
+        ok, res = resp_q.get()
+        return ok, res
+
+    def stop(self):
+        self._stop.set()
+        try:
+            self._thread.join(timeout=1.0)
+        except Exception:
+            pass
+
+# Singleton queue instance (used by WorksheetProxy)
+_api_queue = GoogleApiQueue(min_interval_sec=1.0, max_retries=6, backoff_factor=1.2)
+
+# Aggressive in-memory read cache for sheet values (per worksheet title)
+_sheets_read_cache: Dict[str, Tuple[float, Any]] = {}
+_READ_CACHE_TTL = 10.0  # seconds (aggressive caching)
+
+class WorksheetProxy:
+    """
+    Wraps a gspread Worksheet object and routes calls through the _api_queue.
+    Also provides a read cache for get_all_values/get_all_records to reduce read QPS.
+    """
+    def __init__(self, ws):
+        self._ws = ws
+        # use title as cache key when available
+        self._key = getattr(ws, "title", None) or str(id(ws))
+
+    # Helper to submit to the queue and propagate exceptions
+    def _submit(self, fn_name: str, *args, **kwargs):
+        func = getattr(self._ws, fn_name)
+        ok, res = _api_queue.submit(func, *args, **kwargs)
+        if not ok:
+            # raise original exception
+            raise res
+        return res
+
+    def get_all_values(self, *args, **kwargs):
+        now = time.time()
+        cache = _sheets_read_cache.get(self._key)
+        if cache and (now - cache[0]) < _READ_CACHE_TTL:
+            return cache[1]
+        # call
+        vals = self._submit("get_all_values", *args, **kwargs)
+        _sheets_read_cache[self._key] = (time.time(), vals)
+        return vals
+
+    def get_all_records(self, *args, **kwargs):
+        # gspread internally calls get_all_values so use cache by asking for values then convert.
+        vals = self.get_all_values(*args, **kwargs)
+        # Attempt to emulate gspread.Worksheet.get_all_records behavior
+        if not vals:
+            return []
+        headers = vals[0]
+        out = []
+        for row in vals[1:]:
+            obj = {}
+            for i, h in enumerate(headers):
+                obj[h] = row[i] if i < len(row) else ""
+            out.append(obj)
+        return out
+
+    def row_values(self, *args, **kwargs):
+        return self._submit("row_values", *args, **kwargs)
+
+    def append_row(self, *args, **kwargs):
+        # Invalidate read cache on writes
+        res = self._submit("append_row", *args, **kwargs)
+        _sheets_read_cache.pop(self._key, None)
+        return res
+
+    def update_cell(self, *args, **kwargs):
+        res = self._submit("update_cell", *args, **kwargs)
+        _sheets_read_cache.pop(self._key, None)
+        return res
+
+    def update(self, *args, **kwargs):
+        res = self._submit("update", *args, **kwargs)
+        _sheets_read_cache.pop(self._key, None)
+        return res
+
+    def delete_rows(self, *args, **kwargs):
+        # gspread newer method name; support both delete_rows and delete_row
+        if hasattr(self._ws, "delete_rows"):
+            res = self._submit("delete_rows", *args, **kwargs)
+        else:
+            res = self._submit("delete_row", *args, **kwargs)
+        _sheets_read_cache.pop(self._key, None)
+        return res
+
+    def delete_row(self, *args, **kwargs):
+        return self.delete_rows(*args, **kwargs)
+
+    def insert_row(self, *args, **kwargs):
+        res = self._submit("insert_row", *args, **kwargs)
+        _sheets_read_cache.pop(self._key, None)
+        return res
+
+    def worksheet(self, *args, **kwargs):
+        # Delegate to internal spreadsheet if called
+        return getattr(self._ws, "worksheet")(*args, **kwargs)
+
+    def __getattr__(self, name):
+        # Fallback for other attributes/methods: call directly but queued
+        if hasattr(self._ws, name) and callable(getattr(self._ws, name)):
+            def _callable(*a, **k):
+                ok, res = _api_queue.submit(getattr(self._ws, name), *a, **k)
+                if not ok:
+                    raise res
+                # Invalidate cache on any write-like operations heuristically
+                if name.startswith(("append", "update", "delete", "insert")):
+                    _sheets_read_cache.pop(self._key, None)
+                return res
+            return _callable
+        return getattr(self._ws, name)
+# --- END: Google Sheets API queue, caching and Worksheet proxy helpers ---
+
 SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
 HEADERS_BY_TAB: Dict[str, List[str]] = {
@@ -214,7 +365,7 @@ def get_gspread_client():
 
 def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
     try:
-        values = cached_get_all_values(ws)
+        values = ws.get_all_values()
         if not values:
             ws.insert_row(headers, index=1)
     except Exception:
@@ -222,7 +373,7 @@ def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
 
 def ensure_sheet_headers_match(ws, headers: List[str]):
     try:
-        values = cached_get_all_values(ws)
+        values = ws.get_all_values()
         if not values:
             ws.insert_row(headers, index=1)
             return
@@ -240,7 +391,7 @@ _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 def _missions_header_fix_if_needed(ws):
     try:
-        values = cached_get_all_values(ws)
+        values = ws.get_all_values()
         if not values:
             return
         first_row = values[0]
@@ -272,6 +423,13 @@ def _missions_header_fix_if_needed(ws):
         logger.exception("Error checking/fixing missions header.")
 
 def open_worksheet(tab: str = ""):
+
+    # Wrap returned worksheet with WorksheetProxy to add queueing/caching.
+    def _wrap_ws(ws):
+        try:
+            return WorksheetProxy(ws)
+        except Exception:
+            return _wrap_ws(ws)
     gc = get_gspread_client()
     sh = gc.open(GOOGLE_SHEET_NAME)
     def _create_tab(name: str, headers: Optional[List[str]] = None):
@@ -407,7 +565,7 @@ def record_start_trip(driver: str, plate: str) -> dict:
 def record_end_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
     try:
-        rows = cached_get_all_values(ws)
+        rows = ws.get_all_values()
         start_idx = 1 if rows and any("date" in c.lower() for c in rows[0] if c) else 0
         for idx in range(len(rows) - 1, start_idx - 1, -1):
             rec = rows[idx]
@@ -447,7 +605,7 @@ def record_end_trip(driver: str, plate: str) -> dict:
         return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
 
 def _missions_get_values_and_data_rows(ws):
-    values = cached_get_all_values(ws)
+    values = ws.get_all_values()
     if not values:
         return [], 0
     first_row = values[0]
@@ -733,7 +891,7 @@ def count_trips_for_day(driver: str, date_dt: datetime) -> int:
     cnt = 0
     try:
         ws = open_worksheet(RECORDS_TAB)
-        vals = cached_get_all_values(ws)
+        vals = ws.get_all_values()
         if not vals:
             return 0
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
@@ -760,7 +918,7 @@ def count_trips_for_month(driver: str, month_start: datetime, month_end: datetim
     cnt = 0
     try:
         ws = open_worksheet(RECORDS_TAB)
-        vals = cached_get_all_values(ws)
+        vals = ws.get_all_values()
         if not vals:
             return 0
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
@@ -814,7 +972,7 @@ def normalize_fin_type(typ: str) -> Optional[str]:
 def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
     try:
         ws = open_worksheet(FUEL_TAB)
-        vals = cached_get_all_values(ws)
+        vals = ws.get_all_values()
         if not vals:
             return None
         start_idx = 1 if any("plate" in c.lower() for c in vals[0] if c) else 0
@@ -1588,10 +1746,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
+
                 try:
                     # TWO-LOOP MISSION LOGIC:
-                    # only send the full merged roundtrip summary after the *second* mission-end
-                    # for the same driver+plate. We track per-chat mission cycles in context.chat_data
+                    # Track mission cycles in context.chat_data per driver+plate.
                     chat_data = context.chat_data
                     if "mission_cycle" not in chat_data:
                         chat_data["mission_cycle"] = {}
@@ -1600,29 +1758,16 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # If this is the first loop (odd number), do NOT send the summary now.
-                    # Persist the last_merge_sent timestamp to avoid duplicates, clear pending and return.
-                    if cur_cycle % 2 == 1:
+                    # Only send the full merged roundtrip summary on the second loop (even-numbered cycle).
+                    if (cur_cycle % 2) != 0:
+                        # First loop finished — do not send summary yet. Clear pending mission and return.
                         try:
-                            if "last_merge_sent" not in chat_data:
-                                chat_data["last_merge_sent"] = {}
-                            last_map = chat_data["last_merge_sent"]
-                            nowdt = _now_dt()
-                            key = f"{username}|{plate}"
-                            last_map[key] = nowdt.isoformat()
-                            chat_data["last_merge_sent"] = last_map
+                            context.user_data.pop("pending_mission", None)
                         except Exception:
-                            logger.exception("Failed to persist last_merge_sent timestamp for first-cycle skip")
-                        # clear pending mission and return without sending summary
-                        context.user_data.pop("pending_mission", None)
+                            pass
                         return
-
-                    # Otherwise (even cycle) continue to prepare and send the merged summary as before.
-                    # (existing code follows)
-                    try:
-
-                    # 简单去重：同一 driver|plate 在短时间内只发送一次合并提醒
-                    chat_data = context.chat_data
+                    # We're on the second loop; proceed to prepare and send summary.
+                    # Simple de-duplication: skip if we've sent one very recently.
                     if "last_merge_sent" not in chat_data:
                         chat_data["last_merge_sent"] = {}
                     last_map = chat_data["last_merge_sent"]
@@ -1631,22 +1776,23 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     key = f"{username}|{plate}"
                     last_time = last_map.get(key)
 
-                    # 若上次发送在 60 秒内，则视为重复触发，跳过此次发送
                     skip_seconds = 60
                     if last_time:
                         try:
-                            # last_time 存为 ISO 字符串时也能兼容
                             if isinstance(last_time, str):
                                 lt = datetime.fromisoformat(last_time)
                             else:
                                 lt = last_time
                             if (nowdt - lt).total_seconds() < skip_seconds:
                                 logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
-                                # 清理 pending_mission 并返回
-                                context.user_data.pop("pending_mission", None)
+                                # Reset cycle so future attempts can run normally.
+                                chat_data["mission_cycle"][key_cycle] = 0
+                                try:
+                                    context.user_data.pop("pending_mission", None)
+                                except Exception:
+                                    pass
                                 return
                         except Exception:
-                            # 如果解析失败，继续发送并覆盖 last_time
                             pass
 
                     month_start = datetime(nowdt.year, nowdt.month, 1)
@@ -1685,14 +1831,18 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
                     try:
                         await q.message.chat.send_message(msg)
-                        # 记录发送时间（以 ISO 字符串保存，跨重启也能被 pickle）
+                        # record sent time and reset the cycle counter
                         try:
                             last_map[key] = nowdt.isoformat()
                             chat_data["last_merge_sent"] = last_map
+                            chat_data["mission_cycle"][key_cycle] = 0
                         except Exception:
-                            logger.exception("Failed to persist last_merge_sent timestamp")
+                            logger.exception("Failed to persist last_merge_sent timestamp or reset cycle")
                     except Exception:
                         logger.exception("Failed to send merged roundtrip summary.")
+                except Exception:
+                    logger.exception("Failed preparing merged roundtrip summary.")
+
                 except Exception:
                     logger.exception("Failed preparing merged roundtrip summary.")
 
@@ -1755,7 +1905,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 p_year = 0
                 try:
                     ws = open_worksheet(RECORDS_TAB)
-                    vals = cached_get_all_values(ws)
+                    vals = ws.get_all_values()
                     if vals:
                         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
                         for r in vals[start_idx:]:
@@ -1933,7 +2083,7 @@ def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]
     totals: Dict[str, int] = {}
     try:
         ws = open_worksheet(RECORDS_TAB)
-        vals = cached_get_all_values(ws)
+        vals = ws.get_all_values()
         if not vals:
             return totals
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
