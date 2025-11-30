@@ -1277,6 +1277,75 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 pass
             try:
+                await context.bot.send_message(chat_id=user.id, text="Invalid leave format. Please send: <driver> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
+            except Exception:
+                pass
+            try:
+                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
+            except Exception:
+                pass
+            context.user_data.pop("pending_leave", None)
+            return
+        driver = parts[0]
+        start = parts[1]
+        end = parts[2]
+        reason = parts[3]
+        notes = " ".join(parts[4:]) if len(parts) > 4 else ""
+        try:
+            sd = datetime.strptime(start, "%Y-%m-%d")
+            ed = datetime.strptime(end, "%Y-%m-%d")
+        except Exception:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
+                await context.bot.send_message(chat_id=user.id, text="Invalid dates. Use YYYY-MM-DD.")
+            except Exception:
+                pass
+            try:
+                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
+            except Exception:
+                pass
+            context.user_data.pop("pending_leave", None)
+            return
+        try:
+            ws = open_worksheet(LEAVE_TAB)
+            row = [driver, start, end, reason, notes]
+            ws.append_row(row, value_input_option="USER_ENTERED")
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
+                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
+            except Exception:
+                pass
+            # Send confirmation plus a short leave summary for this driver (count of leave entries)
+            try:
+                records = ws.get_all_records()
+                cnt = sum(1 for r in records if str(r.get("Driver","")) == driver)
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.\nTotal leave entries for {driver}: {cnt}")
+            except Exception:
+                # fallback: simple confirmation
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
+        except Exception:
+            logger.exception("Failed to record leave")
+            try:
+                await context.bot.send_message(chat_id=user.id, text="Failed to record leave (sheet error).")
+            except Exception:
+                pass
+        context.user_data.pop("pending_leave", None)
+        return
+
+    if pending_leave:
+        parts = text.split()
+        if len(parts) < 4:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
                 await context.bot.send_message(chat_id=user.id, text="Invalid leave format. See prompt.")
             except Exception:
                 pass
