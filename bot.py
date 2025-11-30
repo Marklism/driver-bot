@@ -608,7 +608,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 try:
                     sec_vals = _ensure_row_length(vals2[secondary_idx], M_MANDATORY_COLS) if secondary_idx < len(vals2) else None
                     sec_guid = sec_vals[M_IDX_GUID] if sec_vals else None
-                    deleted_secondary = False
                     if sec_guid:
                         all_vals_post, start_idx_post = _missions_get_values_and_data_rows(ws)
                         for k in range(start_idx_post, len(all_vals_post)):
@@ -616,14 +615,12 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                             if str(r_k[M_IDX_GUID]).strip() == str(sec_guid).strip():
                                 try:
                                     ws.delete_rows(k + 1)
-                                    deleted_secondary = True
                                     break
                                 except Exception:
                                     try:
                                         ws.update_cell(k + 1, M_IDX_ROUNDTRIP + 1, "Merged")
                                     except Exception:
                                         logger.exception("Failed to delete or mark secondary merged row.")
-                                    # deleted_secondary remains False
                                     break
                     else:
                         try:
@@ -636,8 +633,8 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 except Exception:
                     logger.exception("Failed cleaning up secondary mission row after merge.")
 
-                # Only treat as merged (and notify) when we actually deleted the secondary row
-                merged_flag = deleted_secondary
+                merged_flag = (secondary_idx == i)
+                # merged_flag True => the row we just ended was the 'secondary' and got merged/removed.
                 return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
     except Exception as e:
@@ -968,20 +965,23 @@ async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         allowed = driver_map.get(user.username)
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate", allowed_plates=allowed))
 
+# ----------------------
+# change #2: simplified leave prompt to avoid duplicate long "Reply to this message" messages
+# ----------------------
 async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
             await update.effective_message.delete()
     except Exception:
         pass
-    # Prompt user with full leave entry instructions and mark the prompt as pending so replies are processed
+    # Make leave a pending entry but do NOT post the long "Reply to this message" block that caused duplicates.
     try:
-        sent = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
+        sent = await update.effective_chat.send_message("Pending leave entry — reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
         context.user_data["pending_leave"] = {"prompt_chat": sent.chat_id, "prompt_msg_id": sent.message_id, "origin": {"chat": sent.chat_id, "msg_id": sent.message_id}}
     except Exception:
-        logger.exception("Failed to send leave prompt.")
+        logger.exception("Failed to notify pending leave.")
         try:
-            await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
+            await update.effective_chat.send_message("Pending leave entry — please reply with driver, start, end, reason.")
             context.user_data["pending_leave"] = {"prompt_chat": update.effective_chat.id, "prompt_msg_id": None}
         except Exception:
             pass
@@ -1277,75 +1277,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 pass
             try:
-                await context.bot.send_message(chat_id=user.id, text="Invalid leave format. Please send: <driver> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
-            except Exception:
-                pass
-            try:
-                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
-                pass
-            context.user_data.pop("pending_leave", None)
-            return
-        driver = parts[0]
-        start = parts[1]
-        end = parts[2]
-        reason = parts[3]
-        notes = " ".join(parts[4:]) if len(parts) > 4 else ""
-        try:
-            sd = datetime.strptime(start, "%Y-%m-%d")
-            ed = datetime.strptime(end, "%Y-%m-%d")
-        except Exception:
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
-                await context.bot.send_message(chat_id=user.id, text="Invalid dates. Use YYYY-MM-DD.")
-            except Exception:
-                pass
-            try:
-                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
-                pass
-            context.user_data.pop("pending_leave", None)
-            return
-        try:
-            ws = open_worksheet(LEAVE_TAB)
-            row = [driver, start, end, reason, notes]
-            ws.append_row(row, value_input_option="USER_ENTERED")
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
-                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
-                pass
-            # Send confirmation plus a short leave summary for this driver (count of leave entries)
-            try:
-                records = ws.get_all_records()
-                cnt = sum(1 for r in records if str(r.get("Driver","")) == driver)
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.\nTotal leave entries for {driver}: {cnt}")
-            except Exception:
-                # fallback: simple confirmation
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
-        except Exception:
-            logger.exception("Failed to record leave")
-            try:
-                await context.bot.send_message(chat_id=user.id, text="Failed to record leave (sheet error).")
-            except Exception:
-                pass
-        context.user_data.pop("pending_leave", None)
-        return
-
-    if pending_leave:
-        parts = text.split()
-        if len(parts) < 4:
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
                 await context.bot.send_message(chat_id=user.id, text="Invalid leave format. See prompt.")
             except Exception:
                 pass
@@ -1390,6 +1321,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
             except Exception:
                 pass
+            # send a single confirmation message (not duplicated)
             await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
         except Exception:
             logger.exception("Failed to record leave")
@@ -1464,11 +1396,12 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if data == "leave_menu":
-        # Mark leave pending and edit the callback message to a short prompt (avoid duplicate long messages)
+        # Make leave pending without sending the long instruction (minimal prompt)
         try:
-            context.user_data["pending_leave"] = {"prompt_chat": q.message.chat.id, "prompt_msg_id": q.message.message_id, "origin": {"chat": q.message.chat.id, "msg_id": q.message.message_id}}
+            m = await context.bot.send_message(chat_id=q.message.chat.id, text="Pending leave entry — reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
+            context.user_data["pending_leave"] = {"prompt_chat": m.chat_id, "prompt_msg_id": m.message_id, "origin": {"chat": m.chat_id, "msg_id": m.message_id}}
             try:
-                await q.edit_message_text("Leave entry pending. Please reply in chat with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
+                await q.edit_message_text("Leave entry pending. Please reply in chat with the leave details.")
             except Exception:
                 pass
         except Exception:
@@ -1576,7 +1509,28 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
                 try:
-                    # 简单去重：同一 driver|plate 在短时间内只发送一次合并提醒
+                    # 新逻辑：只有在该 driver+plate 没有任何开放 mission（end 为空）时才发送合并提醒
+                    # 这样可以避免中间一次 end 被误触发为“已完成汇总”的情况
+                    ws_check = open_worksheet(MISSIONS_TAB)
+                    vals_all, sidx = _missions_get_values_and_data_rows(ws_check)
+                    still_open_found = False
+                    for r in vals_all[sidx:]:
+                        r = _ensure_row_length(r, M_MANDATORY_COLS)
+                        r_name = str(r[M_IDX_NAME]).strip()
+                        r_plate = str(r[M_IDX_PLATE]).strip()
+                        r_end = str(r[M_IDX_END]).strip()
+                        if r_name == username and r_plate == plate and not r_end:
+                            # 存在未结束的 mission -> 不是最终结束，不发送合并提醒
+                            still_open_found = True
+                            break
+
+                    if still_open_found:
+                        # 清理 pending_mission 并返回，不发送合并通知
+                        context.user_data.pop("pending_mission", None)
+                        logger.info("Skipping merged notification for %s|%s because another open mission exists", username, plate)
+                        return
+
+                    # 没有未结束的 mission，继续准备并发送合并通知
                     chat_data = context.chat_data
                     if "last_merge_sent" not in chat_data:
                         chat_data["last_merge_sent"] = {}
@@ -1597,7 +1551,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 lt = last_time
                             if (nowdt - lt).total_seconds() < skip_seconds:
                                 logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
-                                # 清理 pending_mission 并返回
                                 context.user_data.pop("pending_mission", None)
                                 return
                         except Exception:
@@ -1619,8 +1572,8 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     plate_counts_month = 0
                     plate_counts_year = 0
                     try:
-                        vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
-                        for r in vals_all[sidx:]:
+                        vals_all2, sidx2 = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                        for r in vals_all2[sidx2:]:
                             rpl = r[M_IDX_PLATE] if len(r) > M_IDX_PLATE else ""
                             rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
                             rstart = r[M_IDX_START] if len(r) > M_IDX_START else ""
@@ -1949,7 +1902,6 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
-    application.add_handler(CommandHandler("lang", lang_command))
 
     application.add_handler(CallbackQueryHandler(plate_callback))
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
