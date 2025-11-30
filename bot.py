@@ -1857,11 +1857,7 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"), InlineKeyboardButton("Leave", callback_data="leave_menu")],
         ]
         sent = await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
-        try:
-            await context.bot.pin_chat_message(chat_id=update.effective_chat.id, message_id=sent.message_id)
-            logger.info("Pinned menu message in chat %s", update.effective_chat.id)
-        except Exception:
-            logger.exception("Could not pin menu message.")
+        # pin removed per user request: do not pin the menu message
     except Exception:
         logger.exception("Failed to setup menu.")
 
