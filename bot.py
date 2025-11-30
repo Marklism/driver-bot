@@ -10,6 +10,23 @@ from typing import Optional, Dict, List, Any
 import urllib.request
 
 import gspread
+
+# === LOCAL READ CACHE TO REDUCE GOOGLE SHEETS 429 ===
+_gs_cache = {}
+_GS_TTL = 2  # seconds
+
+def cached_get_all_values(ws):
+    key = ws.id
+    now = time.time()
+    if key in _gs_cache:
+        ts, data = _gs_cache[key]
+        if now - ts < _GS_TTL:
+            return data
+    data = cached_get_all_values(ws)
+    _gs_cache[key] = (now, data)
+    return data
+# === END CACHE ===
+
 from oauth2client.service_account import ServiceAccountCredentials
 
 try:
@@ -197,7 +214,7 @@ def get_gspread_client():
 
 def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
     try:
-        values = ws.get_all_values()
+        values = cached_get_all_values(ws)
         if not values:
             ws.insert_row(headers, index=1)
     except Exception:
@@ -205,7 +222,7 @@ def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
 
 def ensure_sheet_headers_match(ws, headers: List[str]):
     try:
-        values = ws.get_all_values()
+        values = cached_get_all_values(ws)
         if not values:
             ws.insert_row(headers, index=1)
             return
@@ -223,7 +240,7 @@ _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 def _missions_header_fix_if_needed(ws):
     try:
-        values = ws.get_all_values()
+        values = cached_get_all_values(ws)
         if not values:
             return
         first_row = values[0]
@@ -390,7 +407,7 @@ def record_start_trip(driver: str, plate: str) -> dict:
 def record_end_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
     try:
-        rows = ws.get_all_values()
+        rows = cached_get_all_values(ws)
         start_idx = 1 if rows and any("date" in c.lower() for c in rows[0] if c) else 0
         for idx in range(len(rows) - 1, start_idx - 1, -1):
             rec = rows[idx]
@@ -430,7 +447,7 @@ def record_end_trip(driver: str, plate: str) -> dict:
         return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
 
 def _missions_get_values_and_data_rows(ws):
-    values = ws.get_all_values()
+    values = cached_get_all_values(ws)
     if not values:
         return [], 0
     first_row = values[0]
@@ -716,7 +733,7 @@ def count_trips_for_day(driver: str, date_dt: datetime) -> int:
     cnt = 0
     try:
         ws = open_worksheet(RECORDS_TAB)
-        vals = ws.get_all_values()
+        vals = cached_get_all_values(ws)
         if not vals:
             return 0
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
@@ -743,7 +760,7 @@ def count_trips_for_month(driver: str, month_start: datetime, month_end: datetim
     cnt = 0
     try:
         ws = open_worksheet(RECORDS_TAB)
-        vals = ws.get_all_values()
+        vals = cached_get_all_values(ws)
         if not vals:
             return 0
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
@@ -797,7 +814,7 @@ def normalize_fin_type(typ: str) -> Optional[str]:
 def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
     try:
         ws = open_worksheet(FUEL_TAB)
-        vals = ws.get_all_values()
+        vals = cached_get_all_values(ws)
         if not vals:
             return None
         start_idx = 1 if any("plate" in c.lower() for c in vals[0] if c) else 0
@@ -1571,10 +1588,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
-
                 try:
                     # TWO-LOOP MISSION LOGIC:
-                    # Track mission cycles in context.chat_data per driver+plate.
+                    # only send the full merged roundtrip summary after the *second* mission-end
+                    # for the same driver+plate. We track per-chat mission cycles in context.chat_data
                     chat_data = context.chat_data
                     if "mission_cycle" not in chat_data:
                         chat_data["mission_cycle"] = {}
@@ -1583,16 +1600,29 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # Only send the full merged roundtrip summary on the second loop (even-numbered cycle).
-                    if (cur_cycle % 2) != 0:
-                        # First loop finished — do not send summary yet. Clear pending mission and return.
+                    # If this is the first loop (odd number), do NOT send the summary now.
+                    # Persist the last_merge_sent timestamp to avoid duplicates, clear pending and return.
+                    if cur_cycle % 2 == 1:
                         try:
-                            context.user_data.pop("pending_mission", None)
+                            if "last_merge_sent" not in chat_data:
+                                chat_data["last_merge_sent"] = {}
+                            last_map = chat_data["last_merge_sent"]
+                            nowdt = _now_dt()
+                            key = f"{username}|{plate}"
+                            last_map[key] = nowdt.isoformat()
+                            chat_data["last_merge_sent"] = last_map
                         except Exception:
-                            pass
+                            logger.exception("Failed to persist last_merge_sent timestamp for first-cycle skip")
+                        # clear pending mission and return without sending summary
+                        context.user_data.pop("pending_mission", None)
                         return
-                    # We're on the second loop; proceed to prepare and send summary.
-                    # Simple de-duplication: skip if we've sent one very recently.
+
+                    # Otherwise (even cycle) continue to prepare and send the merged summary as before.
+                    # (existing code follows)
+                    try:
+
+                    # 简单去重：同一 driver|plate 在短时间内只发送一次合并提醒
+                    chat_data = context.chat_data
                     if "last_merge_sent" not in chat_data:
                         chat_data["last_merge_sent"] = {}
                     last_map = chat_data["last_merge_sent"]
@@ -1601,23 +1631,22 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     key = f"{username}|{plate}"
                     last_time = last_map.get(key)
 
+                    # 若上次发送在 60 秒内，则视为重复触发，跳过此次发送
                     skip_seconds = 60
                     if last_time:
                         try:
+                            # last_time 存为 ISO 字符串时也能兼容
                             if isinstance(last_time, str):
                                 lt = datetime.fromisoformat(last_time)
                             else:
                                 lt = last_time
                             if (nowdt - lt).total_seconds() < skip_seconds:
                                 logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
-                                # Reset cycle so future attempts can run normally.
-                                chat_data["mission_cycle"][key_cycle] = 0
-                                try:
-                                    context.user_data.pop("pending_mission", None)
-                                except Exception:
-                                    pass
+                                # 清理 pending_mission 并返回
+                                context.user_data.pop("pending_mission", None)
                                 return
                         except Exception:
+                            # 如果解析失败，继续发送并覆盖 last_time
                             pass
 
                     month_start = datetime(nowdt.year, nowdt.month, 1)
@@ -1656,18 +1685,14 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
                     try:
                         await q.message.chat.send_message(msg)
-                        # record sent time and reset the cycle counter
+                        # 记录发送时间（以 ISO 字符串保存，跨重启也能被 pickle）
                         try:
                             last_map[key] = nowdt.isoformat()
                             chat_data["last_merge_sent"] = last_map
-                            chat_data["mission_cycle"][key_cycle] = 0
                         except Exception:
-                            logger.exception("Failed to persist last_merge_sent timestamp or reset cycle")
+                            logger.exception("Failed to persist last_merge_sent timestamp")
                     except Exception:
                         logger.exception("Failed to send merged roundtrip summary.")
-                except Exception:
-                    logger.exception("Failed preparing merged roundtrip summary.")
-
                 except Exception:
                     logger.exception("Failed preparing merged roundtrip summary.")
 
@@ -1730,7 +1755,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 p_year = 0
                 try:
                     ws = open_worksheet(RECORDS_TAB)
-                    vals = ws.get_all_values()
+                    vals = cached_get_all_values(ws)
                     if vals:
                         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
                         for r in vals[start_idx:]:
@@ -1908,7 +1933,7 @@ def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]
     totals: Dict[str, int] = {}
     try:
         ws = open_worksheet(RECORDS_TAB)
-        vals = ws.get_all_values()
+        vals = cached_get_all_values(ws)
         if not vals:
             return totals
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
