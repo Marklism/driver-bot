@@ -633,8 +633,9 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 except Exception:
                     logger.exception("Failed cleaning up secondary mission row after merge.")
 
-                merged_flag = (secondary_idx == i)
-                return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
+                merged_flag = True
+                merged_secondary = (secondary_idx == i)
+                return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "merged_secondary": merged_secondary, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
     except Exception as e:
         logger.exception("Failed to update mission end: %s", e)
@@ -903,8 +904,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("End trip (select plate)", callback_data="show_end")],
         [InlineKeyboardButton("Mission start", callback_data="show_mission_start"),
          InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
-        [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"),
-         InlineKeyboardButton("Leave", callback_data="leave_menu")],
+        [InlineKeyboardButton("Admin Finance", callback_data="admin_finance")],
     ]
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -963,24 +963,6 @@ async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user and user.username and driver_map.get(user.username):
         allowed = driver_map.get(user.username)
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate", allowed_plates=allowed))
-
-async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    # Make leave a pending entry similar to finance: do not show long instruction
-    try:
-        sent = await update.effective_chat.send_message("Pending leave entry — reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
-        context.user_data["pending_leave"] = {"prompt_chat": sent.chat_id, "prompt_msg_id": sent.message_id, "origin": {"chat": sent.chat_id, "msg_id": sent.message_id}}
-    except Exception:
-        logger.exception("Failed to notify pending leave.")
-        try:
-            await update.effective_chat.send_message("Pending leave entry — please reply with driver, start, end, reason.")
-            context.user_data["pending_leave"] = {"prompt_chat": update.effective_chat.id, "prompt_msg_id": None}
-        except Exception:
-            pass
 
 async def admin_finance_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1263,25 +1245,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
             context.user_data.pop("pending_fin_simple", None)
             return
-
-    pending_leave = context.user_data.get("pending_leave")
-    if pending_leave:
-        parts = text.split()
-        if len(parts) < 4:
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
-                await context.bot.send_message(chat_id=user.id, text="Invalid leave format. See prompt.")
-            except Exception:
-                pass
-            try:
-                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
-                pass
-            context.user_data.pop("pending_leave", None)
-            return
         driver = parts[0]
         start = parts[1]
         end = parts[2]
@@ -1389,19 +1352,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 logger.exception("Failed to edit message for pending simple finance entry.")
             return
-
-    if data == "leave_menu":
-        # Make leave pending without sending the long instruction (minimal prompt)
-        try:
-            m = await context.bot.send_message(chat_id=q.message.chat.id, text="Pending leave entry — reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
-            context.user_data["pending_leave"] = {"prompt_chat": m.chat_id, "prompt_msg_id": m.message_id, "origin": {"chat": m.chat_id, "msg_id": m.message_id}}
-            try:
-                await q.edit_message_text("Leave entry pending. Please reply in chat with the leave details.")
-            except Exception:
-                pass
-        except Exception:
-            logger.exception("Failed to prompt leave.")
-        return
 
     # ---------- mission-related handlers ----------
     if data.startswith("mission_start_plate|"):
