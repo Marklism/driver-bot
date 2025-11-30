@@ -1953,6 +1953,25 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(t(user_lang, "invalid_sel"))
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    # TWO-LOOP MISSION LOGIC: only send merged summary on second cycle
+    chat_data = context.chat_data
+    if "mission_cycle" not in chat_data:
+        chat_data["mission_cycle"] = {}
+    key_cycle = f"mission_cycle|{username}|{plate}"
+    cur_cycle = chat_data["mission_cycle"].get(key_cycle, 0) + 1
+    chat_data["mission_cycle"][key_cycle] = cur_cycle
+    logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
+
+    # If it's the first (odd) cycle, skip sending summary now (clear pending and return)
+    if (cur_cycle % 2) != 0:
+        try:
+            context.user_data.pop("pending_mission", None)
+        except Exception:
+            pass
+        return
+
+    # otherwise (even cycle) continue to prepare/send merged summary (existing code follows)
     try:
         if update.effective_message:
             await update.effective_message.delete()
