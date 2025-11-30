@@ -608,6 +608,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 try:
                     sec_vals = _ensure_row_length(vals2[secondary_idx], M_MANDATORY_COLS) if secondary_idx < len(vals2) else None
                     sec_guid = sec_vals[M_IDX_GUID] if sec_vals else None
+                    deleted_secondary = False
                     if sec_guid:
                         all_vals_post, start_idx_post = _missions_get_values_and_data_rows(ws)
                         for k in range(start_idx_post, len(all_vals_post)):
@@ -615,12 +616,14 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                             if str(r_k[M_IDX_GUID]).strip() == str(sec_guid).strip():
                                 try:
                                     ws.delete_rows(k + 1)
+                                    deleted_secondary = True
                                     break
                                 except Exception:
                                     try:
                                         ws.update_cell(k + 1, M_IDX_ROUNDTRIP + 1, "Merged")
                                     except Exception:
                                         logger.exception("Failed to delete or mark secondary merged row.")
+                                    # deleted_secondary remains False
                                     break
                     else:
                         try:
@@ -633,7 +636,8 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 except Exception:
                     logger.exception("Failed cleaning up secondary mission row after merge.")
 
-                merged_flag = (secondary_idx == i)
+                # Only treat as merged (and notify) when we actually deleted the secondary row
+                merged_flag = deleted_secondary
                 return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
     except Exception as e:
@@ -970,12 +974,318 @@ async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.delete()
     except Exception:
         pass
-    # Do NOT send any prompt or pending message here.
-    # Just mark that a leave entry is expected from the user in this chat.
+    # Prompt user with full leave entry instructions and mark the prompt as pending so replies are processed
     try:
-        context.user_data["pending_leave"] = {"origin": {"chat": update.effective_chat.id, "msg_id": None}, "initiator": (update.effective_user.username or "")}
+        sent = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
+        context.user_data["pending_leave"] = {"prompt_chat": sent.chat_id, "prompt_msg_id": sent.message_id, "origin": {"chat": sent.chat_id, "msg_id": sent.message_id}}
     except Exception:
-        logger.exception("Failed to set pending_leave state.")
+        logger.exception("Failed to send leave prompt.")
+        try:
+            await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
+            context.user_data["pending_leave"] = {"prompt_chat": update.effective_chat.id, "prompt_msg_id": None}
+        except Exception:
+            pass
+
+async def admin_finance_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    username = user.username or (user.first_name or "")
+    if username not in BOT_ADMINS:
+        try:
+            await query.edit_message_text("❌ You are not an admin.")
+        except Exception:
+            pass
+        return
+    kb = [
+        [InlineKeyboardButton("ODO+Fuel", callback_data="fin_type|odo_fuel"), InlineKeyboardButton("Fuel (solo)", callback_data="fin_type|fuel")],
+        [InlineKeyboardButton("Parking", callback_data="fin_type|parking"), InlineKeyboardButton("Wash", callback_data="fin_type|wash")],
+        [InlineKeyboardButton("Repair", callback_data="fin_type|repair")],
+    ]
+    try:
+        await query.edit_message_text("Select finance type:", reply_markup=InlineKeyboardMarkup(kb))
+    except Exception:
+        logger.exception("Failed to prompt finance options.")
+        try:
+            await query.edit_message_text("Failed to prompt for finance entry.")
+        except Exception:
+            pass
+
+async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    parts = data.split("|", 1)
+    if len(parts) != 2:
+        try:
+            await query.edit_message_text("Invalid selection.")
+        except Exception:
+            pass
+        return
+    _, typ = parts
+    user = query.from_user
+    username = user.username or (user.first_name or "")
+    if username not in BOT_ADMINS:
+        try:
+            await query.edit_message_text("❌ Not admin.")
+        except Exception:
+            pass
+        return
+    try:
+        await query.edit_message_text("Choose plate:", reply_markup=build_plate_keyboard(f"fin_plate|{typ}"))
+    except Exception:
+        logger.exception("Failed to present plate selection for finance.")
+
+async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    text = update.effective_message.text.strip() if update.effective_message and update.effective_message.text else ""
+    if not text:
+        return
+
+    pending_multi = context.user_data.get("pending_fin_multi")
+    if pending_multi:
+        ptype = pending_multi.get("type")
+        plate = pending_multi.get("plate")
+        step = pending_multi.get("step")
+        origin = pending_multi.get("origin")
+        if ptype == "odo_fuel":
+            if step == "km":
+                m = ODO_RE.match(text)
+                if not m:
+                    m2 = re.search(r'(\d+)', text)
+                    if m2:
+                        km = m2.group(1)
+                    else:
+                        try:
+                            await update.effective_message.delete()
+                        except Exception:
+                            pass
+                        try:
+                            await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
+                        except Exception:
+                            pass
+                        try:
+                            if origin:
+                                await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
+                        except Exception:
+                            pass
+                        context.user_data.pop("pending_fin_multi", None)
+                        return
+                else:
+                    km = m.group(1)
+                # We no longer send an "Enter fuel cost" ForceReply message here.
+                # Just advance the state; the user should next send fuel amount in chat.
+                pending_multi["km"] = km
+                pending_multi["step"] = "fuel"
+                context.user_data["pending_fin_multi"] = pending_multi
+                try:
+                    await update.effective_message.delete()
+                except Exception:
+                    pass
+                # Do NOT send a ForceReply prompt; user will provide fuel amount directly.
+                return
+            elif step == "fuel":
+                raw = text
+                inv_m = INV_RE.search(raw)
+                paid_m = PAID_RE.search(raw)
+                invoice = inv_m.group(1) if inv_m else ""
+                driver_paid = ""
+                if paid_m:
+                    v = paid_m.group(1).lower()
+                    driver_paid = "yes" if v.startswith("y") else "no"
+                am = AMOUNT_RE.match(raw)
+                if not am:
+                    m2 = re.search(r'(\d+(?:\.\d+)?)', raw)
+                    if m2:
+                        fuel_amt = m2.group(1)
+                    else:
+                        try:
+                            await update.effective_message.delete()
+                        except Exception:
+                            pass
+                        try:
+                            await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
+                        except Exception:
+                            pass
+                        try:
+                            if origin:
+                                await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
+                        except Exception:
+                            pass
+                        context.user_data.pop("pending_fin_multi", None)
+                        return
+                else:
+                    fuel_amt = am.group(1)
+                km = pending_multi.get("km", "")
+                try:
+                    res = record_finance_odo_fuel(plate, km, fuel_amt, by_user=user.username or "", invoice=invoice, driver_paid=driver_paid)
+                except Exception:
+                    res = {"ok": False}
+                try:
+                    await update.effective_message.delete()
+                except Exception:
+                    pass
+                try:
+                    pchat = pending_multi.get("prompt_chat")
+                    pmsg = pending_multi.get("prompt_msg_id")
+                    if pchat and pmsg:
+                        await safe_delete_message(context.bot, pchat, pmsg)
+                except Exception:
+                    pass
+                try:
+                    if origin:
+                        await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
+                except Exception:
+                    pass
+                try:
+                    delta_txt = res.get("delta", "")
+                    m_val = res.get("mileage", km)
+                    fuel_val = res.get("fuel", fuel_amt)
+                    nowd = _now_dt().strftime(DATE_FMT)
+                    # 公共群通知固定显示 "paid by Mark"
+                    msg = f"{plate} @ {m_val} km + ${fuel_val} fuel on {nowd} paid by Mark. difference from previous odo is {delta_txt} km."
+                    await update.effective_chat.send_message(msg)
+                except Exception:
+                    logger.exception("Failed to send group notification for odo+fuel")
+                try:
+                    await context.bot.send_message(chat_id=user.id, text=f"Recorded {plate}: {km}KM and ${fuel_amt} fuel. Delta {delta_txt} km. Invoice={invoice} Paid={driver_paid}")
+                except Exception:
+                    pass
+                context.user_data.pop("pending_fin_multi", None)
+                return
+
+    pending_simple = context.user_data.get("pending_fin_simple")
+    if pending_simple:
+        typ = pending_simple.get("type")
+        plate = pending_simple.get("plate")
+        origin = pending_simple.get("origin")
+        raw = text
+        if typ == "odo":
+            m = ODO_RE.match(raw)
+            if not m:
+                m2 = re.search(r'(\d+)', raw)
+                if m2:
+                    km = m2.group(1)
+                else:
+                    try:
+                        await update.effective_message.delete()
+                    except Exception:
+                        pass
+                    try:
+                        await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
+                    except Exception:
+                        pass
+                    try:
+                        if origin:
+                            await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
+                    except Exception:
+                        pass
+                    context.user_data.pop("pending_fin_simple", None)
+                    return
+            else:
+                km = m.group(1)
+            try:
+                # odo simple used record_parking by previous mistake in older code; keep behavior unchanged.
+                res = record_parking(plate, "", by_user=user.username or "")
+            except Exception:
+                res = {"ok": False}
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
+                if origin:
+                    await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
+            except Exception:
+                pass
+            try:
+                await context.bot.send_message(chat_id=user.id, text=f"Recorded ODO {km}KM for {plate}.")
+            except Exception:
+                pass
+            context.user_data.pop("pending_fin_simple", None)
+            return
+        else:
+            inv_m = INV_RE.search(raw)
+            paid_m = PAID_RE.search(raw)
+            invoice = inv_m.group(1) if inv_m else ""
+            driver_paid = ""
+            if paid_m:
+                v = paid_m.group(1).lower()
+                driver_paid = "yes" if v.startswith("y") else "no"
+            am = AMOUNT_RE.match(raw)
+            if not am:
+                m2 = re.search(r'(\d+(?:\.\d+)?)', raw)
+                if m2:
+                    amt = m2.group(1)
+                else:
+                    try:
+                        await update.effective_message.delete()
+                    except Exception:
+                        pass
+                    try:
+                        await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
+                    except Exception:
+                        pass
+                    try:
+                        if origin:
+                            await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
+                    except Exception:
+                        pass
+                    context.user_data.pop("pending_fin_simple", None)
+                    return
+            else:
+                amt = am.group(1)
+            res = {"ok": False}
+            if typ == "parking":
+                res = record_parking(plate, amt, by_user=user.username or "")
+                # 公共群通知固定显示 "paid by Mark"
+                msg_pub = f"{plate} parking fee ${amt} on {today_date_str()} paid by Mark."
+            elif typ == "wash":
+                res = record_wash(plate, amt, by_user=user.username or "")
+                msg_pub = f"{plate} wash fee ${amt} on {today_date_str()} paid by Mark."
+            elif typ == "repair":
+                res = record_repair(plate, amt, by_user=user.username or "")
+                msg_pub = f"{plate} repair fee ${amt} on {today_date_str()} paid by Mark."
+            else:
+                msg_pub = f"{plate} {typ} recorded ${amt}."
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
+                if origin:
+                    await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
+            except Exception:
+                pass
+            try:
+                await update.effective_chat.send_message(msg_pub)
+            except Exception:
+                logger.exception("Failed to publish finance short message.")
+            try:
+                await context.bot.send_message(chat_id=user.id, text=f"Recorded {typ} ${amt} for {plate}. Invoice={invoice} Paid={driver_paid}")
+            except Exception:
+                pass
+            context.user_data.pop("pending_fin_simple", None)
+            return
+
+    pending_leave = context.user_data.get("pending_leave")
+    if pending_leave:
+        parts = text.split()
+        if len(parts) < 4:
+            try:
+                await update.effective_message.delete()
+            except Exception:
+                pass
+            try:
+                await context.bot.send_message(chat_id=user.id, text="Invalid leave format. See prompt.")
+            except Exception:
+                pass
+            try:
+                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
+            except Exception:
+                pass
+            context.user_data.pop("pending_leave", None)
+            return
         driver = parts[0]
         start = parts[1]
         end = parts[2]
@@ -1085,12 +1395,17 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if data == "leave_menu":
-    # User selected leave_menu. Do NOT send prompt message; just mark pending state.
-    try:
-        context.user_data['pending_leave'] = {'origin': {'chat': q.message.chat.id, 'msg_id': None}, 'initiator': (q.from_user.username or '')}
-    except Exception:
-        logger.exception('Failed to set pending_leave from leave_menu callback.')
-    return
+        # Send full leave instruction and mark pending so the next reply will be processed as leave entry
+        try:
+            m = await context.bot.send_message(chat_id=q.message.chat.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
+            context.user_data["pending_leave"] = {"prompt_chat": m.chat_id, "prompt_msg_id": m.message_id, "origin": {"chat": m.chat_id, "msg_id": m.message_id}}
+            try:
+                await q.edit_message_text(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("Failed to prompt leave.")
+        return
 
     # ---------- mission-related handlers ----------
     if data.startswith("mission_start_plate|"):
@@ -1193,28 +1508,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
                 try:
-                    # Verify that the merge actually updated a primary row to have Roundtrip == "Yes"
-                    try:
-                        vals_check, sidx_check = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
-                        merged_marked = False
-                        for rr in vals_check[sidx_check:]:
-                            rr = _ensure_row_length(rr, M_MANDATORY_COLS)
-                            rn = str(rr[M_IDX_NAME]).strip()
-                            rp = str(rr[M_IDX_PLATE]).strip()
-                            rrt = str(rr[M_IDX_ROUNDTRIP]).strip().lower()
-                            if rn == username and rp == plate and rrt == "yes":
-                                merged_marked = True
-                                break
-                    except Exception:
-                        logger.exception("Failed to verify merged flag in sheet; proceeding cautiously.")
-                        merged_marked = False
-
-                    if not merged_marked:
-                        logger.info("Merge flag present in end_mission_record but no primary 'Yes' row found for %s|%s; skipping merged notification.", username, plate)
-                        # cleanup pending and return without sending summary
-                        context.user_data.pop("pending_mission", None)
-                        return
-
                     # 简单去重：同一 driver|plate 在短时间内只发送一次合并提醒
                     chat_data = context.chat_data
                     if "last_merge_sent" not in chat_data:
