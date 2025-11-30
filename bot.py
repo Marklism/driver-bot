@@ -83,7 +83,7 @@ WASH_TAB = os.getenv("WASH_TAB", "Wash")
 REPAIR_TAB = os.getenv("REPAIR_TAB", "Repair")
 ODO_TAB = os.getenv("ODO_TAB", "Odo")
 
-BOT_ADMINS_DEFAULT = "markpeng1"
+BOT_ADMINS_DEFAULT = "markpeng1,kmnyy,ClaireRin777"
 
 M_IDX_GUID = 0
 M_IDX_NO = 1
