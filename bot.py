@@ -904,7 +904,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Mission start", callback_data="show_mission_start"),
          InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
         [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"),
-         InlineKeyboardButton("Leave", callback_data="leave_menu")],
+         InlineKeyboardButton("Leave", callback_data="leave_menu_removed")],
     ]
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -1245,50 +1245,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
             context.user_data.pop("pending_fin_simple", None)
             return
-        driver = parts[0]
-        start = parts[1]
-        end = parts[2]
-        reason = parts[3]
-        notes = " ".join(parts[4:]) if len(parts) > 4 else ""
-        try:
-            sd = datetime.strptime(start, "%Y-%m-%d")
-            ed = datetime.strptime(end, "%Y-%m-%d")
-        except Exception:
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
-                await context.bot.send_message(chat_id=user.id, text="Invalid dates. Use YYYY-MM-DD.")
-            except Exception:
-                pass
-            try:
-                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
-                pass
-            context.user_data.pop("pending_leave", None)
-            return
-        try:
-            ws = open_worksheet(LEAVE_TAB)
-            row = [driver, start, end, reason, notes]
-            ws.append_row(row, value_input_option="USER_ENTERED")
-            try:
-                await update.effective_message.delete()
-            except Exception:
-                pass
-            try:
-                await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
-        except Exception:
-            logger.exception("Failed to record leave")
-            try:
-                await context.bot.send_message(chat_id=user.id, text="Failed to record leave (sheet error).")
-            except Exception:
-                pass
-        context.user_data.pop("pending_leave", None)
-        return
+
+
 
 async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await process_force_reply(update, context)
@@ -1352,6 +1310,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 logger.exception("Failed to edit message for pending simple finance entry.")
             return
+
 
     # ---------- mission-related handlers ----------
     if data.startswith("mission_start_plate|"):
@@ -1804,7 +1763,7 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         keyboard = [
             [InlineKeyboardButton("Start trip", callback_data="show_start"), InlineKeyboardButton("End trip", callback_data="show_end")],
             [InlineKeyboardButton("Mission start", callback_data="show_mission_start"), InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
-            [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"), InlineKeyboardButton("Leave", callback_data="leave_menu")],
+            [InlineKeyboardButton("Admin Finance", callback_data="admin_finance")],
         ]
         sent = await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
         # pin removed per user request: do not pin the menu message
@@ -1825,7 +1784,6 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
-    application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CommandHandler("lang", lang_command))
 
