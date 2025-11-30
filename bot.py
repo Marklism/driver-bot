@@ -1048,7 +1048,7 @@ def record_repair(plate: str, amount: str, by_user: str = "", notes: str = "") -
         return {"ok": False, "message": str(e)}
 
 BOT_ADMINS = set([u.strip() for u in os.getenv("BOT_ADMINS", BOT_ADMINS_DEFAULT).split(",") if u.strip()])
-BOT_ADMINS.add("markpeng1")
+BOT_ADMINS.add("markpeng1,kmnyy,ClaireRin777")
 
 def build_plate_keyboard(prefix: str, allowed_plates: Optional[List[str]] = None):
     buttons = []
