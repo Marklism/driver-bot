@@ -1571,10 +1571,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
+
                 try:
                     # TWO-LOOP MISSION LOGIC:
-                    # only send the full merged roundtrip summary after the *second* mission-end
-                    # for the same driver+plate. We track per-chat mission cycles in context.chat_data
+                    # Track mission cycles in context.chat_data per driver+plate.
                     chat_data = context.chat_data
                     if "mission_cycle" not in chat_data:
                         chat_data["mission_cycle"] = {}
@@ -1583,29 +1583,16 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # If this is the first loop (odd number), do NOT send the summary now.
-                    # Persist the last_merge_sent timestamp to avoid duplicates, clear pending and return.
-                    if cur_cycle % 2 == 1:
+                    # Only send the full merged roundtrip summary on the second loop (even-numbered cycle).
+                    if (cur_cycle % 2) != 0:
+                        # First loop finished — do not send summary yet. Clear pending mission and return.
                         try:
-                            if "last_merge_sent" not in chat_data:
-                                chat_data["last_merge_sent"] = {}
-                            last_map = chat_data["last_merge_sent"]
-                            nowdt = _now_dt()
-                            key = f"{username}|{plate}"
-                            last_map[key] = nowdt.isoformat()
-                            chat_data["last_merge_sent"] = last_map
+                            context.user_data.pop("pending_mission", None)
                         except Exception:
-                            logger.exception("Failed to persist last_merge_sent timestamp for first-cycle skip")
-                        # clear pending mission and return without sending summary
-                        context.user_data.pop("pending_mission", None)
+                            pass
                         return
-
-                    # Otherwise (even cycle) continue to prepare and send the merged summary as before.
-                    # (existing code follows)
-                    try:
-
-                    # 简单去重：同一 driver|plate 在短时间内只发送一次合并提醒
-                    chat_data = context.chat_data
+                    # We're on the second loop; proceed to prepare and send summary.
+                    # Simple de-duplication: skip if we've sent one very recently.
                     if "last_merge_sent" not in chat_data:
                         chat_data["last_merge_sent"] = {}
                     last_map = chat_data["last_merge_sent"]
@@ -1614,22 +1601,23 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     key = f"{username}|{plate}"
                     last_time = last_map.get(key)
 
-                    # 若上次发送在 60 秒内，则视为重复触发，跳过此次发送
                     skip_seconds = 60
                     if last_time:
                         try:
-                            # last_time 存为 ISO 字符串时也能兼容
                             if isinstance(last_time, str):
                                 lt = datetime.fromisoformat(last_time)
                             else:
                                 lt = last_time
                             if (nowdt - lt).total_seconds() < skip_seconds:
                                 logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
-                                # 清理 pending_mission 并返回
-                                context.user_data.pop("pending_mission", None)
+                                # Reset cycle so future attempts can run normally.
+                                chat_data["mission_cycle"][key_cycle] = 0
+                                try:
+                                    context.user_data.pop("pending_mission", None)
+                                except Exception:
+                                    pass
                                 return
                         except Exception:
-                            # 如果解析失败，继续发送并覆盖 last_time
                             pass
 
                     month_start = datetime(nowdt.year, nowdt.month, 1)
@@ -1668,14 +1656,18 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
                     try:
                         await q.message.chat.send_message(msg)
-                        # 记录发送时间（以 ISO 字符串保存，跨重启也能被 pickle）
+                        # record sent time and reset the cycle counter
                         try:
                             last_map[key] = nowdt.isoformat()
                             chat_data["last_merge_sent"] = last_map
+                            chat_data["mission_cycle"][key_cycle] = 0
                         except Exception:
-                            logger.exception("Failed to persist last_merge_sent timestamp")
+                            logger.exception("Failed to persist last_merge_sent timestamp or reset cycle")
                     except Exception:
                         logger.exception("Failed to send merged roundtrip summary.")
+                except Exception:
+                    logger.exception("Failed preparing merged roundtrip summary.")
+
                 except Exception:
                     logger.exception("Failed preparing merged roundtrip summary.")
 
