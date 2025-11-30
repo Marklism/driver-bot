@@ -974,206 +974,17 @@ async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.delete()
     except Exception:
         pass
-    # Prompt user with full leave entry instructions and mark the prompt as pending so replies are processed
+    # 只发送一次 pending 提示（minimal prompt），并记录 pending_leave
     try:
-        sent = await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
+        sent = await update.effective_chat.send_message("Pending leave entry — reply with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
         context.user_data["pending_leave"] = {"prompt_chat": sent.chat_id, "prompt_msg_id": sent.message_id, "origin": {"chat": sent.chat_id, "msg_id": sent.message_id}}
     except Exception:
-        logger.exception("Failed to send leave prompt.")
+        logger.exception("Failed to send pending leave prompt")
         try:
-            await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "leave_prompt"))
+            await update.effective_chat.send_message("Pending leave entry — please reply with driver, start, end, reason.")
             context.user_data["pending_leave"] = {"prompt_chat": update.effective_chat.id, "prompt_msg_id": None}
         except Exception:
             pass
-
-async def admin_finance_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user = query.from_user
-    username = user.username or (user.first_name or "")
-    if username not in BOT_ADMINS:
-        try:
-            await query.edit_message_text("❌ You are not an admin.")
-        except Exception:
-            pass
-        return
-    kb = [
-        [InlineKeyboardButton("ODO+Fuel", callback_data="fin_type|odo_fuel"), InlineKeyboardButton("Fuel (solo)", callback_data="fin_type|fuel")],
-        [InlineKeyboardButton("Parking", callback_data="fin_type|parking"), InlineKeyboardButton("Wash", callback_data="fin_type|wash")],
-        [InlineKeyboardButton("Repair", callback_data="fin_type|repair")],
-    ]
-    try:
-        await query.edit_message_text("Select finance type:", reply_markup=InlineKeyboardMarkup(kb))
-    except Exception:
-        logger.exception("Failed to prompt finance options.")
-        try:
-            await query.edit_message_text("Failed to prompt for finance entry.")
-        except Exception:
-            pass
-
-async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    parts = data.split("|", 1)
-    if len(parts) != 2:
-        try:
-            await query.edit_message_text("Invalid selection.")
-        except Exception:
-            pass
-        return
-    _, typ = parts
-    user = query.from_user
-    username = user.username or (user.first_name or "")
-    if username not in BOT_ADMINS:
-        try:
-            await query.edit_message_text("❌ Not admin.")
-        except Exception:
-            pass
-        return
-    try:
-        await query.edit_message_text("Choose plate:", reply_markup=build_plate_keyboard(f"fin_plate|{typ}"))
-    except Exception:
-        logger.exception("Failed to present plate selection for finance.")
-
-async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    text = update.effective_message.text.strip() if update.effective_message and update.effective_message.text else ""
-    if not text:
-        return
-
-    pending_multi = context.user_data.get("pending_fin_multi")
-    if pending_multi:
-        ptype = pending_multi.get("type")
-        plate = pending_multi.get("plate")
-        step = pending_multi.get("step")
-        origin = pending_multi.get("origin")
-        if ptype == "odo_fuel":
-            if step == "km":
-                m = ODO_RE.match(text)
-                if not m:
-                    m2 = re.search(r'(\d+)', text)
-                    if m2:
-                        km = m2.group(1)
-                    else:
-                        try:
-                            await update.effective_message.delete()
-                        except Exception:
-                            pass
-                        try:
-                            await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
-                        except Exception:
-                            pass
-                        try:
-                            if origin:
-                                await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-                        except Exception:
-                            pass
-                        context.user_data.pop("pending_fin_multi", None)
-                        return
-                else:
-                    km = m.group(1)
-                # We no longer send an "Enter fuel cost" ForceReply message here.
-                # Just advance the state; the user should next send fuel amount in chat.
-                pending_multi["km"] = km
-                pending_multi["step"] = "fuel"
-                context.user_data["pending_fin_multi"] = pending_multi
-                try:
-                    await update.effective_message.delete()
-                except Exception:
-                    pass
-                # Do NOT send a ForceReply prompt; user will provide fuel amount directly.
-                return
-            elif step == "fuel":
-                raw = text
-                inv_m = INV_RE.search(raw)
-                paid_m = PAID_RE.search(raw)
-                invoice = inv_m.group(1) if inv_m else ""
-                driver_paid = ""
-                if paid_m:
-                    v = paid_m.group(1).lower()
-                    driver_paid = "yes" if v.startswith("y") else "no"
-                am = AMOUNT_RE.match(raw)
-                if not am:
-                    m2 = re.search(r'(\d+(?:\.\d+)?)', raw)
-                    if m2:
-                        fuel_amt = m2.group(1)
-                    else:
-                        try:
-                            await update.effective_message.delete()
-                        except Exception:
-                            pass
-                        try:
-                            await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
-                        except Exception:
-                            pass
-                        try:
-                            if origin:
-                                await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-                        except Exception:
-                            pass
-                        context.user_data.pop("pending_fin_multi", None)
-                        return
-                else:
-                    fuel_amt = am.group(1)
-                km = pending_multi.get("km", "")
-                try:
-                    res = record_finance_odo_fuel(plate, km, fuel_amt, by_user=user.username or "", invoice=invoice, driver_paid=driver_paid)
-                except Exception:
-                    res = {"ok": False}
-                try:
-                    await update.effective_message.delete()
-                except Exception:
-                    pass
-                try:
-                    pchat = pending_multi.get("prompt_chat")
-                    pmsg = pending_multi.get("prompt_msg_id")
-                    if pchat and pmsg:
-                        await safe_delete_message(context.bot, pchat, pmsg)
-                except Exception:
-                    pass
-                try:
-                    if origin:
-                        await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-                except Exception:
-                    pass
-                try:
-                    delta_txt = res.get("delta", "")
-                    m_val = res.get("mileage", km)
-                    fuel_val = res.get("fuel", fuel_amt)
-                    nowd = _now_dt().strftime(DATE_FMT)
-                    # 公共群通知固定显示 "paid by Mark"
-                    msg = f"{plate} @ {m_val} km + ${fuel_val} fuel on {nowd} paid by Mark. difference from previous odo is {delta_txt} km."
-                    await update.effective_chat.send_message(msg)
-                except Exception:
-                    logger.exception("Failed to send group notification for odo+fuel")
-                try:
-                    await context.bot.send_message(chat_id=user.id, text=f"Recorded {plate}: {km}KM and ${fuel_amt} fuel. Delta {delta_txt} km. Invoice={invoice} Paid={driver_paid}")
-                except Exception:
-                    pass
-                context.user_data.pop("pending_fin_multi", None)
-                return
-
-    pending_simple = context.user_data.get("pending_fin_simple")
-    if pending_simple:
-        typ = pending_simple.get("type")
-        plate = pending_simple.get("plate")
-        origin = pending_simple.get("origin")
-        raw = text
-        if typ == "odo":
-            m = ODO_RE.match(raw)
-            if not m:
-                m2 = re.search(r'(\d+)', raw)
-                if m2:
-                    km = m2.group(1)
-                else:
-                    try:
-                        await update.effective_message.delete()
-                    except Exception:
-                        pass
-                    try:
-                        await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
-                    except Exception:
                         pass
                     try:
                         if origin:
@@ -1464,91 +1275,16 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if data == "leave_menu":
-        # Mark leave pending and edit the callback message to a short prompt (avoid duplicate long messages)
+        # 只在回调时创建 pending leave 状态，不再发送重复的 prompt
         try:
             context.user_data["pending_leave"] = {"prompt_chat": q.message.chat.id, "prompt_msg_id": q.message.message_id, "origin": {"chat": q.message.chat.id, "msg_id": q.message.message_id}}
             try:
-                await q.edit_message_text("Leave entry pending. Please reply in chat with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
+                await q.edit_message_text("Leave entry pending. Please reply in chat with the leave details.")
             except Exception:
                 pass
         except Exception:
-            logger.exception("Failed to prompt leave.")
+            logger.exception("Failed to set pending leave via leave_menu callback.")
         return
-
-    # ---------- mission-related handlers ----------
-    if data.startswith("mission_start_plate|"):
-        parts = data.split("|", 1)
-        if len(parts) < 2:
-            await q.edit_message_text("Invalid selection.")
-            return
-        _, plate = parts
-        # show departure choices
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": username}
-        kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"),
-               InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
-        await q.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if data.startswith("mission_end_plate|"):
-        parts = data.split("|", 1)
-        if len(parts) < 2:
-            await q.edit_message_text("Invalid selection.")
-            return
-        _, plate = parts
-        context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": username}
-        # allow immediate end (auto arrival) button; callback includes plate for robustness
-        kb = [[InlineKeyboardButton("End mission now (auto arrival)", callback_data=f"mission_end_now|{plate}")]]
-        await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
-        return
-
-    if data.startswith("mission_depart|"):
-        parts = data.split("|")
-        if len(parts) < 3:
-            await q.edit_message_text("Invalid selection.")
-            return
-        _, dep, plate = parts
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
-        res = start_mission_record(username, plate, dep)
-        if res.get("ok"):
-            # mission_start_ok template already adjusted to not show the word "plate"
-            await q.edit_message_text(t(user_lang, "mission_start_ok", driver=username, plate=plate, dep=dep, ts=res.get("start_ts")))
-        else:
-            await q.edit_message_text("❌ " + res.get("message", ""))
-        return
-
-    # support both "mission_end_now|{plate}" and "mission_end_now"
-    if data.startswith("mission_end_now|") or data == "mission_end_now":
-        if data == "mission_end_now":
-            # try to get plate from pending_mission
-            pending = context.user_data.get("pending_mission") or {}
-            plate = pending.get("plate")
-            if not plate:
-                await q.edit_message_text(t(user_lang, "invalid_sel"))
-                return
-        else:
-            _, plate = data.split("|", 1)
-
-        # permission check
-        driver_map = get_driver_map()
-        allowed = driver_map.get(username, []) if username else []
-        if allowed and plate not in allowed:
-            await q.edit_message_text(t(user_lang, "not_allowed", plate=plate))
-            return
-        try:
-            # find last open mission for this driver+plate
-            ws = open_worksheet(MISSIONS_TAB)
-            vals, start_idx = _missions_get_values_and_data_rows(ws)
-            found_idx = None
-            found_dep = None
-            for i in range(len(vals) - 1, start_idx - 1, -1):
-                r = _ensure_row_length(vals[i], M_MANDATORY_COLS)
-                rn = str(r[M_IDX_NAME]).strip()
-                rp = str(r[M_IDX_PLATE]).strip()
-                rend = str(r[M_IDX_END]).strip()
-                dep = str(r[M_IDX_DEPART]).strip()
-                if rn == username and rp == plate and not rend:
-                    found_idx = i
-                    found_dep = dep
                     break
             if found_idx is None:
                 await q.edit_message_text(t(user_lang, "mission_no_open", plate=plate))
@@ -1575,52 +1311,72 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
-                # Only send merged roundtrip summary when there are NO remaining open missions
-                # for this same driver and plate. This ensures the summary is issued after the final end.
                 try:
-                    vals_check, sidx_check = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
-                    remaining_open = False
-                    for rr in vals_check[sidx_check:]:
-                        rrr = _ensure_row_length(rr, M_MANDATORY_COLS)
-                        rname = str(rrr[M_IDX_NAME]).strip()
-                        rplate = str(rrr[M_IDX_PLATE]).strip()
-                        rend = str(rrr[M_IDX_END]).strip()
-                        if rname == username and rplate == plate and not rend:
-                            # found another open mission -> do not send summary now
-                            remaining_open = True
-                            break
-                except Exception:
-                    # If check fails, fall back to sending the summary (safe default)
-                    remaining_open = False
+                    # --- 新逻辑：仅在该 driver+plate 当前**没有其他 open mission** 时才发送合并提醒 ---
+                    try:
+                        ws_check = open_worksheet(MISSIONS_TAB)
+                        vals_check, sidx_check = _missions_get_values_and_data_rows(ws_check)
+                        has_other_open = False
+                        for k in range(sidx_check, len(vals_check)):
+                            r_k = _ensure_row_length(vals_check[k], M_MANDATORY_COLS)
+                            rn_k = str(r_k[M_IDX_NAME]).strip()
+                            rp_k = str(r_k[M_IDX_PLATE]).strip()
+                            rend_k = str(r_k[M_IDX_END]).strip()
+                            if rn_k == username and rp_k == plate and not rend_k:
+                                has_other_open = True
+                                break
+                    except Exception:
+                        logger.exception("Failed to check for other open missions before sending merged notify.")
+                        has_other_open = False
 
-                if remaining_open:
-                    # Leave pending_mission intact and skip sending summary now
-                    logger.info("Skipping merged roundtrip summary because there are remaining open missions for %s %s", username, plate)
-                else:
-
-                    # 简单去重：同一 driver|plate 在短时间内只发送一次合并提醒
-                    chat_data = context.chat_data
-                    if "last_merge_sent" not in chat_data:
-                        chat_data["last_merge_sent"] = {}
-                    last_map = chat_data["last_merge_sent"]
-
-                    nowdt = _now_dt()
-                    key = f"{username}|{plate}"
-                    last_time = last_map.get(key)
-
-                    # 若上次发送在 60 秒内，则视为重复触发，跳过此次发送
-                    skip_seconds = 60
-                    if last_time:
+                    if has_other_open:
+                        logger.info("Skipping merged notify because other open mission exists for %s|%s", username, plate)
+                    else:
                         try:
-                            # last_time 存为 ISO 字符串时也能兼容
-                            if isinstance(last_time, str):
-                                lt = datetime.fromisoformat(last_time)
+                            nowdt = _now_dt()
+                            month_start = datetime(nowdt.year, nowdt.month, 1)
+                            if nowdt.month == 12:
+                                month_end = datetime(nowdt.year + 1, 1, 1)
                             else:
-                                lt = last_time
-                            if (nowdt - lt).total_seconds() < skip_seconds:
-                                logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
-                                # 清理 pending_mission 并返回
-                                context.user_data.pop("pending_mission", None)
+                                month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+
+                            counts = count_roundtrips_per_driver_month(month_start, month_end)
+                            d_month = counts.get(username, 0)
+                            year_start = datetime(nowdt.year, 1, 1)
+                            counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
+                            d_year = counts_year.get(username, 0)
+
+                            plate_counts_month = 0
+                            plate_counts_year = 0
+                            try:
+                                vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                                for r in vals_all[sidx:]:
+                                    rpl = r[M_IDX_PLATE] if len(r) > M_IDX_PLATE else ""
+                                    rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
+                                    rstart = r[M_IDX_START] if len(r) > M_IDX_START else ""
+                                    if rpl == plate and rrt == "yes":
+                                        sdt = parse_ts(rstart)
+                                        if sdt and month_start <= sdt < month_end:
+                                            plate_counts_month += 1
+                                        if sdt and year_start <= sdt < datetime(nowdt.year + 1, 1, 1):
+                                            plate_counts_year += 1
+                            except Exception:
+                                logger.exception("Failed to compute plate roundtrip counts for merged notify")
+
+                            month_label = month_start.strftime("%Y-%m")
+                            msg = t(user_lang, "roundtrip_merged_notify",
+                                    driver=username, d_month=d_month, month=month_label,
+                                    d_year=d_year, year=nowdt.year,
+                                    plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                            try:
+                                await q.message.chat.send_message(msg)
+                            except Exception:
+                                logger.exception("Failed to send merged roundtrip summary.")
+                        except Exception:
+                            logger.exception("Failed preparing merged roundtrip summary.")
+                except Exception:
+                    logger.exception("Failed preparing merged roundtrip summary (outer).")
+        context.user_data.pop("pending_mission", None)
                                 return
                         except Exception:
                             # 如果解析失败，继续发送并覆盖 last_time
