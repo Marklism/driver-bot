@@ -101,7 +101,7 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
     ws = open_worksheet(OT_TAB)
 
     # Ensure headers exist
-    ensure_sheet_headers_match(OT_TAB, OT_HEADERS)
+    ensure_sheet_headers_match(ws, OT_HEADERS)
 
     row = [
         dt.strftime("%Y-%m-%d"),
@@ -131,53 +131,35 @@ def _is_weekend(dt: datetime) -> bool:
     return dt.weekday() >= 5  # 5=Sat,6=Sun
 
 
-
 def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool = False):
-    """Compute OT hours according to rules:
-    - Weekdays (Mon-Fri):
-      * Morning OT: any work time before 07:00 counts as OT (7:00 - actual in).
-      * Evening OT: only count if the off time exceeds 18:30; OT = actual out - 18:00.
-    - Weekend or holiday: full duration (out - in) counts as OT.
-    - Shifts crossing midnight are split at midnight: hours before midnight assigned to the previous day segment,
-      hours after midnight to the following day segment.
-    - Function returns total OT hours (float, rounded 2 decimals) for the shift.
-    """
+    """Return total OT hours for one shift, possibly crossing midnight."""
     if end_dt < start_dt:
-        # assume end past midnight -> attribute to next day accordingly by adding one day
         end_dt = end_dt + timedelta(days=1)
 
     total_ot = 0.0
+
     dt = start_dt
-
     while dt < end_dt:
-        # segment until midnight of 'dt' day or end_dt
-        next_midnight = (dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        segment_end = min(next_midnight, end_dt)
+        next_day = (dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        segment_end = min(next_day, end_dt)
 
-        is_weekend = _is_weekend(dt)
-        seg_is_holiday = is_holiday or (dt.strftime("%Y-%m-%d") in HOLIDAYS)
+        seg_is_weekend = _is_weekend(dt)
+        seg_is_holiday = is_holiday
 
-        if is_weekend or seg_is_holiday:
-            # whole segment counts
-            hours = (segment_end - dt).total_seconds() / 3600.0
-            total_ot += max(hours, 0)
+        if seg_is_weekend or seg_is_holiday:
+            hours = (segment_end - dt).total_seconds() / 3600
+            total_ot += hours
         else:
-            # Weekday logic
-            # Morning OT (before 07:00)
             t7 = dt.replace(hour=7, minute=0, second=0, microsecond=0)
             if dt < t7:
-                morning_end = min(segment_end, t7)
-                ot_morning = (morning_end - dt).total_seconds() / 3600.0
+                ot_morning = (min(segment_end, t7) - dt).total_seconds() / 3600
                 total_ot += max(ot_morning, 0)
 
-            # Evening OT: only count if actual off is after 18:30; OT = actual_off - 18:00 (but only for the portion in this segment)
             t18 = dt.replace(hour=18, minute=0, second=0, microsecond=0)
             t1830 = dt.replace(hour=18, minute=30, second=0, microsecond=0)
 
-            # If segment_end is after 18:30 on this day, count OT from max(dt,18:00) to segment_end
             if segment_end > t1830:
-                evening_start = max(dt, t18)
-                ot_evening = (segment_end - evening_start).total_seconds() / 3600.0
+                ot_evening = (segment_end - t18).total_seconds() / 3600
                 total_ot += max(ot_evening, 0)
 
         dt = segment_end
@@ -363,15 +345,6 @@ SUMMARY_HOUR = int(os.getenv("SUMMARY_HOUR", "20"))
 SUMMARY_TZ = os.getenv("SUMMARY_TZ", LOCAL_TZ or "Asia/Phnom_Penh")
 
 DEFAULT_LANG = os.getenv("LANG", "en").lower()
-
-# --- Added: Holiday list from environment variable ---
-# Format: HOLIDAYS="2025-12-25,2025-12-31"
-try:
-    _raw_holidays = os.getenv("HOLIDAYS", "") or ""
-    HOLIDAYS = {d.strip() for d in _raw_holidays.split(",") if d.strip()}
-except Exception:
-    HOLIDAYS = set()
-
 SUPPORTED_LANGS = ("en", "km")
 
 RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
@@ -598,7 +571,7 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     MISSIONS_REPORT_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
     SUMMARY_TAB: ["Date", "PeriodType", "TotalsJSON", "HumanSummary"],
     DRIVERS_TAB: ["Username", "Plates"],
-    LEAVE_TAB: ["Driver", "Start Date", "End Date", "Leave Days", "Reason", "Notes"],
+    LEAVE_TAB: ["Driver", "Start Date", "End Date", "Reason", "Notes"],
     MAINT_TAB: ["Plate", "Mileage", "Maintenance Item", "Cost", "Date", "Workshop", "Notes"],
     EXPENSE_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Delta KM", "Fuel Cost", "Parking Fee", "Other Fee", "Invoice", "DriverPaid"],
     FUEL_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Delta KM", "Fuel Cost", "Invoice", "DriverPaid"],
@@ -781,76 +754,6 @@ def open_worksheet(tab: str = ""):
             except Exception:
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
         return sh.sheet1
-
-async def process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user):
-    """Helper to append leave row with Leave Days, check duplicates and exclude weekends/holidays."""
-    try:
-        sd_dt = datetime.strptime(start, "%Y-%m-%d")
-        ed_dt = datetime.strptime(end, "%Y-%m-%d")
-    except Exception:
-        sd_dt = None
-        ed_dt = None
-
-    try:
-        records = ws.get_all_records()
-    except Exception:
-        records = []
-
-    # check overlaps
-    if sd_dt and ed_dt:
-        for r in records:
-            try:
-                r_driver = next((r[k] for k in ("Driver","driver","Username","Name") if k in r and str(r.get(k,"")).strip()), "")
-                if r_driver != driver:
-                    continue
-                r_start = next((r[k] for k in ("Start","Start Date","Start DateTime","StartDate") if k in r and str(r.get(k,"")).strip()), None)
-                r_end = next((r[k] for k in ("End","End Date","End DateTime","EndDate") if k in r and str(r.get(k,"")).strip()), None)
-                if not r_start or not r_end:
-                    continue
-                r_s = str(r_start).split()[0]
-                r_e = str(r_end).split()[0]
-                r_sd = datetime.strptime(r_s, "%Y-%m-%d")
-                r_ed = datetime.strptime(r_e, "%Y-%m-%d")
-                if not (ed_dt < r_sd or sd_dt > r_ed):
-                    # overlap
-                    msg = f"This date has already been applied for leave ({r_s} to {r_e}), please choose different dates."
-                    try:
-                        await context.bot.send_message(chat_id=user.id, text=msg)
-                    except Exception:
-                        pass
-                    try:
-                        await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-                    except Exception:
-                        pass
-                    context.user_data.pop("pending_leave", None)
-                    return False
-            except Exception:
-                continue
-
-    # compute leave days excluding weekends and HOLIDAYS
-    leave_days = 0
-    if sd_dt and ed_dt and sd_dt <= ed_dt:
-        cur = sd_dt
-        while cur <= ed_dt:
-            try:
-                is_hol = cur.strftime("%Y-%m-%d") in HOLIDAYS
-            except Exception:
-                is_hol = False
-            if cur.weekday() < 5 and not is_hol:
-                leave_days += 1
-            cur += timedelta(days=1)
-
-    row = [driver, start, end, str(leave_days), reason, notes]
-    try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
-    except Exception:
-        try:
-            ws.append_row(row)
-        except Exception:
-            logger.exception("Failed to append leave row")
-    # success
-    return True
-
 
 def load_driver_map_from_env() -> Dict[str, List[str]]:
     if not DRIVER_PLATE_MAP_JSON:
@@ -1194,11 +1097,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     logger.exception("Failed cleaning up secondary mission row after merge.")
 
                 # Only treat as merged (and notify) when we actually deleted the secondary row
-                                # Only treat as merged (and notify) when we actually deleted the secondary row
-                # and the primary row has return start and return end recorded (i.e. full roundtrip completed).
-                has_return_info = bool(return_start and return_end)
-                merged_flag = True if (found_pair or deleted_secondary) and has_return_info else False
-
+                merged_flag = True if found_pair else deleted_secondary
                 return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
     except Exception as e:
@@ -1869,9 +1768,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         try:
             ws = open_worksheet(LEAVE_TAB)
-            success = await process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user)
-            if not success:
-                return
+            row = [driver, start, end, reason, notes]
+            ws.append_row(row, value_input_option="USER_ENTERED")
             try:
                 await update.effective_message.delete()
             except Exception:
@@ -1883,100 +1781,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Send confirmation plus a short leave summary for this driver (count of leave entries)
             try:
                 records = ws.get_all_records()
-                # compute month/year totals by summing existing leave rows for this driver (inclusive) + this entry
-                month_total = 0
-                year_total = 0
-                START_KEYS = ("Start", "Start Date", "Start DateTime", "StartDate")
-                END_KEYS = ("End", "End Date", "End DateTime", "EndDate")
-                DRIVER_KEYS = ("Driver", "driver", "Username", "Name")
-                for r in records:
-                    try:
-                        drv = None
-                        for k in DRIVER_KEYS:
-                            if k in r and str(r.get(k, "")).strip():
-                                drv = str(r.get(k, "")).strip()
-                                break
-                        if drv != driver:
-                            continue
-                        s_val = None
-                        e_val = None
-                        for k in START_KEYS:
-                            if k in r and str(r.get(k, "")).strip():
-                                s_val = str(r.get(k, "")).strip()
-                                break
-                        for k in END_KEYS:
-                            if k in r and str(r.get(k, "")).strip():
-                                e_val = str(r.get(k, "")).strip()
-                                break
-                        if not s_val or not e_val:
-                            continue
-                        s_val = s_val.split()[0]
-                        e_val = e_val.split()[0]
-                        s2 = datetime.strptime(s_val, "%Y-%m-%d")
-                        e2 = datetime.strptime(e_val, "%Y-%m-%d")
-                    except Exception:
-                        continue
-                    try:
-                        ld_raw = r.get('Leave Days', r.get('LeaveDays', ''))
-                        this_days = int(str(ld_raw).strip()) if str(ld_raw).strip() and str(ld_raw).strip().isdigit() else None
-                    except Exception:
-                        this_days = None
-                    if this_days is None:
-                        # fallback: compute excluding weekends and HOLIDAYS
-                        this_days = 0
-                        curd = s2
-                        while curd <= e2:
-                            try:
-                                is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
-                            except Exception:
-                                is_hol = False
-                            if curd.weekday() < 5 and not is_hol:
-                                this_days += 1
-                            curd += timedelta(days=1)
-                    if s2.year == sd.year and s2.month == sd.month:
-                        month_total += this_days
-                    if s2.year == sd.year:
-                        year_total += this_days
-                try:
-                    # compute leave days for current entry excluding weekends and HOLIDAYS
-                    days_this = 0
-                    curd = sd
-                    while curd <= ed:
-                        try:
-                            is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
-                        except Exception:
-                            is_hol = False
-                        if curd.weekday() < 5 and not is_hol:
-                            days_this += 1
-                        curd += timedelta(days=1)
-                except Exception:
-                    days_this = 0
-                found_exact = False
-                for r in records:
-                    try:
-                        s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
-                        e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
-                        dval = next((r[k] for k in DRIVER_KEYS if k in r and str(r.get(k, "")).strip()), None)
-                        if dval == driver and s_val.split()[0] == start and e_val.split()[0] == end:
-                            found_exact = True
-                            break
-                    except Exception:
-                        continue
-                if not found_exact:
-                    month_total += days_this
-                    year_total += days_this
-                month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
-                msg = (
-                    f"Driver {driver} {start} to {end} {reason} ({days_this} days).\n"
-                    f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
-                )
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+                cnt = sum(1 for r in records if str(r.get("Driver","")) == driver)
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.\nTotal leave entries for {driver}: {cnt}")
             except Exception:
-                # fallback: simple confirmation if any error computing totals
-                try:
-                    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
-                except Exception:
-                    pass
+                # fallback: simple confirmation
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
         except Exception:
             logger.exception("Failed to record leave")
             try:
@@ -2028,9 +1837,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         try:
             ws = open_worksheet(LEAVE_TAB)
-            success = await process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user)
-            if not success:
-                return
+            row = [driver, start, end, reason, notes]
+            ws.append_row(row, value_input_option="USER_ENTERED")
             try:
                 await update.effective_message.delete()
             except Exception:
@@ -2039,91 +1847,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
             except Exception:
                 pass
-                # Build and send aggregated leave summary (robust fallback path)
-                try:
-                    records = ws.get_all_records()
-                except Exception:
-                    records = []
-                month_total = 0
-                year_total = 0
-                START_KEYS = ("Start", "Start Date", "Start DateTime", "StartDate")
-                END_KEYS = ("End", "End Date", "End DateTime", "EndDate")
-                DRIVER_KEYS = ("Driver", "driver", "Username", "Name")
-                for r in records:
-                    try:
-                        drv = None
-                        for k in DRIVER_KEYS:
-                            if k in r and str(r.get(k, "")).strip():
-                                drv = str(r.get(k, "")).strip()
-                                break
-                        if drv != driver:
-                            continue
-                        s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
-                        e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
-                        if not s_val or not e_val:
-                            continue
-                        s_val = s_val.split()[0]
-                        e_val = e_val.split()[0]
-                        s2 = datetime.strptime(s_val, "%Y-%m-%d")
-                        e2 = datetime.strptime(e_val, "%Y-%m-%d")
-                    except Exception:
-                        continue
-                    try:
-                        ld_raw = r.get('Leave Days', r.get('LeaveDays', ''))
-                        this_days = int(str(ld_raw).strip()) if str(ld_raw).strip() and str(ld_raw).strip().isdigit() else None
-                    except Exception:
-                        this_days = None
-                    if this_days is None:
-                        # fallback: compute excluding weekends and HOLIDAYS
-                        this_days = 0
-                        curd = s2
-                        while curd <= e2:
-                            try:
-                                is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
-                            except Exception:
-                                is_hol = False
-                            if curd.weekday() < 5 and not is_hol:
-                                this_days += 1
-                            curd += timedelta(days=1)
-                    if s2.year == sd.year and s2.month == sd.month:
-                        month_total += this_days
-                    if s2.year == sd.year:
-                        year_total += this_days
-                try:
-                    # compute leave days for current entry excluding weekends and HOLIDAYS
-                    days_this = 0
-                    curd = sd
-                    while curd <= ed:
-                        try:
-                            is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
-                        except Exception:
-                            is_hol = False
-                        if curd.weekday() < 5 and not is_hol:
-                            days_this += 1
-                        curd += timedelta(days=1)
-                except Exception:
-                    days_this = 0
-                # if current entry not in sheet records yet, add it
-                found_exact = False
-                for r in records:
-                    try:
-                        s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
-                        e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
-                        dval = next((r[k] for k in DRIVER_KEYS if k in r and str(r.get(k, "")).strip()), None)
-                        if dval == driver and s_val.split()[0] == start and e_val.split()[0] == end:
-                            found_exact = True
-                            break
-                    except Exception:
-                        continue
-                if not found_exact:
-                    month_total += days_this
-                    year_total += days_this
-                month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
-                msg = (
-                    f"Driver {driver} {start} to {end} {reason} ({days_this} days).\n"
-                    f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
-                )
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
         except Exception:
             logger.exception("Failed to record leave")
             try:
@@ -2329,13 +2053,14 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # Removed early-return so merged summary is sent immediately.
-                    if (cur_cycle % 4) != 0:
+                    # Only send the full merged roundtrip summary on the second loop (even-numbered cycle).
+                    if (cur_cycle % 2) != 0:
+                        # First loop finished — do not send summary yet. Clear pending mission and return.
                         try:
                             context.user_data.pop("pending_mission", None)
                         except Exception:
                             pass
-                        # previously returned here; now continue to send summary immediately
+                        return
                     # We're on the second loop; proceed to prepare and send summary.
                     # Simple de-duplication: skip if we've sent one very recently.
                     if "last_merge_sent" not in chat_data:
@@ -2418,7 +2143,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         logger.exception("Failed to compute plate roundtrip counts for merged notify")
 
-                    month_label = month_start.strftime("%B")
+                    month_label = month_start.strftime("%Y-%m")
                     msg = t(user_lang, "roundtrip_merged_notify",
                             driver=username, d_month=d_month, month=month_label,
                             d_year=d_year, year=nowdt.year,
@@ -2533,7 +2258,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         pass
                 try:
-                    month_label = month_start.strftime("%B")
+                    month_label = month_start.strftime("%Y-%m")
                     await q.message.chat.send_message(t(user_lang, "trip_summary", driver=username, n_today=n_today, n_month=n_month, month=month_label, n_year=n_year, plate=plate, p_today=p_today, p_month=p_month, p_year=p_year, year=nowdt.year))
                 except Exception:
                     logger.exception("Failed to send trip summary")
@@ -2558,7 +2283,7 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
     # If it's the first (odd) cycle, skip sending summary now (clear pending and return)
-    if (cur_cycle % 4) != 0:
+    if (cur_cycle % 2) != 0:
         try:
             context.user_data.pop("pending_mission", None)
         except Exception:
