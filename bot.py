@@ -1781,82 +1781,74 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Send confirmation plus a short leave summary for this driver (count of leave entries)
             try:
                 records = ws.get_all_records()
-# compute month/year totals by summing existing leave rows for this driver (inclusive) + this entry
-month_total = 0
-year_total = 0
-START_KEYS = ("Start", "Start Date", "Start DateTime", "StartDate")
-END_KEYS = ("End", "End Date", "End DateTime", "EndDate")
-DRIVER_KEYS = ("Driver", "driver", "Username", "Name")
-for r in records:
-    try:
-        drv = None
-        for k in DRIVER_KEYS:
-            if k in r and str(r.get(k, "")).strip():
-                drv = str(r.get(k, "")).strip()
-                break
-        if drv is None or drv != driver:
-            continue
-        s_val = None
-        e_val = None
-        for k in START_KEYS:
-            if k in r and str(r.get(k, "")).strip():
-                s_val = str(r.get(k, "")).strip()
-                break
-        for k in END_KEYS:
-            if k in r and str(r.get(k, "")).strip():
-                e_val = str(r.get(k, "")).strip()
-                break
-        if not s_val or not e_val:
-            continue
-        # normalize possible datetime strings like '2025-12-01 00:00:00'
-        s_val = s_val.split()[0]
-        e_val = e_val.split()[0]
-        try:
-            s2 = datetime.strptime(s_val, "%Y-%m-%d")
-            e2 = datetime.strptime(e_val, "%Y-%m-%d")
-        except Exception:
-            continue
-        this_days = (e2 - s2).days + 1
-        if s2.year == sd.year and s2.month == sd.month:
-            month_total += this_days
-        if s2.year == sd.year:
-            year_total += this_days
-# ensure current entry days are counted (in case the sheet hasn't been updated yet)
-try:
-    days_this = (ed - sd).days + 1
-except Exception:
-    days_this = 0
-# It's possible the newly appended row is included in records; if not, add days_this to totals
-# (we guard to avoid double-counting by checking if any record exactly matches the start/end of this entry)
-found_exact = False
-for r in records:
-    try:
-        s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
-        e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
-        dval = next((r[k] for k in DRIVER_KEYS if k in r and str(r.get(k, "")).strip()), None)
-        if not s_val or not e_val or not dval:
-            continue
-        if dval == driver and s_val.split()[0] == start and e_val.split()[0] == end:
-            found_exact = True
-            break
-    except Exception:
-        continue
-if not found_exact:
-    # add this entry's days to totals
-    month_total += days_this
-    year_total += days_this
-month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
-msg = (
-    f"Driver {driver} {start} to {end} {reason} ({days_this} days).\\n"
-    f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
-)
-await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)            except Exception:
+                # compute month/year totals by summing existing leave rows for this driver (inclusive) + this entry
+                month_total = 0
+                year_total = 0
+                START_KEYS = ("Start", "Start Date", "Start DateTime", "StartDate")
+                END_KEYS = ("End", "End Date", "End DateTime", "EndDate")
+                DRIVER_KEYS = ("Driver", "driver", "Username", "Name")
+                for r in records:
+                    try:
+                        drv = None
+                        for k in DRIVER_KEYS:
+                            if k in r and str(r.get(k, "")).strip():
+                                drv = str(r.get(k, "")).strip()
+                                break
+                        if drv != driver:
+                            continue
+                        s_val = None
+                        e_val = None
+                        for k in START_KEYS:
+                            if k in r and str(r.get(k, "")).strip():
+                                s_val = str(r.get(k, "")).strip()
+                                break
+                        for k in END_KEYS:
+                            if k in r and str(r.get(k, "")).strip():
+                                e_val = str(r.get(k, "")).strip()
+                                break
+                        if not s_val or not e_val:
+                            continue
+                        s_val = s_val.split()[0]
+                        e_val = e_val.split()[0]
+                        s2 = datetime.strptime(s_val, "%Y-%m-%d")
+                        e2 = datetime.strptime(e_val, "%Y-%m-%d")
+                    except Exception:
+                        continue
+                    this_days = (e2 - s2).days + 1
+                    if s2.year == sd.year and s2.month == sd.month:
+                        month_total += this_days
+                    if s2.year == sd.year:
+                        year_total += this_days
+                try:
+                    days_this = (ed - sd).days + 1
+                except Exception:
+                    days_this = 0
+                found_exact = False
+                for r in records:
+                    try:
+                        s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
+                        e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
+                        dval = next((r[k] for k in DRIVER_KEYS if k in r and str(r.get(k, "")).strip()), None)
+                        if dval == driver and s_val.split()[0] == start and e_val.split()[0] == end:
+                            found_exact = True
+                            break
+                    except Exception:
+                        continue
+                if not found_exact:
+                    month_total += days_this
+                    year_total += days_this
+                month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
+                msg = (
+                    f"Driver {driver} {start} to {end} {reason} ({days_this} days).\n"
+                    f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
+                )
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+            except Exception:
                 # fallback: simple confirmation if any error computing totals
                 try:
                     await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
                 except Exception:
                     pass
-
         except Exception:
             logger.exception("Failed to record leave")
             try:
@@ -1918,27 +1910,65 @@ await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)      
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
             except Exception:
                 pass
-            # Send confirmation plus a short leave summary for this driver (count of leave entries)
-            try:
-                records = ws.get_all_records()
-                cnt = sum(1 for r in records if str(r.get("Driver","")) == driver)
-                # compute inclusive leave days for this entry
+                # Build and send aggregated leave summary (robust fallback path)
+                try:
+                    records = ws.get_all_records()
+                except Exception:
+                    records = []
+                month_total = 0
+                year_total = 0
+                START_KEYS = ("Start", "Start Date", "Start DateTime", "StartDate")
+                END_KEYS = ("End", "End Date", "End DateTime", "EndDate")
+                DRIVER_KEYS = ("Driver", "driver", "Username", "Name")
+                for r in records:
+                    try:
+                        drv = None
+                        for k in DRIVER_KEYS:
+                            if k in r and str(r.get(k, "")).strip():
+                                drv = str(r.get(k, "")).strip()
+                                break
+                        if drv != driver:
+                            continue
+                        s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
+                        e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
+                        if not s_val or not e_val:
+                            continue
+                        s_val = s_val.split()[0]
+                        e_val = e_val.split()[0]
+                        s2 = datetime.strptime(s_val, "%Y-%m-%d")
+                        e2 = datetime.strptime(e_val, "%Y-%m-%d")
+                    except Exception:
+                        continue
+                    this_days = (e2 - s2).days + 1
+                    if s2.year == sd.year and s2.month == sd.month:
+                        month_total += this_days
+                    if s2.year == sd.year:
+                        year_total += this_days
                 try:
                     days_this = (ed - sd).days + 1
                 except Exception:
                     days_this = 0
+                # if current entry not in sheet records yet, add it
+                found_exact = False
+                for r in records:
+                    try:
+                        s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
+                        e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
+                        dval = next((r[k] for k in DRIVER_KEYS if k in r and str(r.get(k, "")).strip()), None)
+                        if dval == driver and s_val.split()[0] == start and e_val.split()[0] == end:
+                            found_exact = True
+                            break
+                    except Exception:
+                        continue
+                if not found_exact:
+                    month_total += days_this
+                    year_total += days_this
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
                 msg = (
                     f"Driver {driver} {start} to {end} {reason} ({days_this} days).\n"
-                    f"Total leave days for {driver}: {days_this} days in {month_name} and {sd.strftime('%Y')}."
+                    f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
                 )
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-            except Exception:
-                try:
-                    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
-                except Exception:
-                    pass
-
         except Exception:
             logger.exception("Failed to record leave")
             try:
