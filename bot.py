@@ -1768,7 +1768,25 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         try:
             ws = open_worksheet(LEAVE_TAB)
-            row = [driver, start, end, reason, notes]
+            # compute leave_days excluding weekends and HOLIDAYS
+            try:
+                sd_dt = datetime.strptime(start, "%Y-%m-%d")
+                ed_dt = datetime.strptime(end, "%Y-%m-%d")
+            except Exception:
+                sd_dt = None
+                ed_dt = None
+            try:
+                records = ws.get_all_records()
+            except Exception:
+                records = []
+            leave_days = 0
+            if sd_dt and ed_dt and sd_dt <= ed_dt:
+                cur = sd_dt
+                while cur <= ed_dt:
+                    if cur.weekday() < 5 and cur.strftime("%Y-%m-%d") not in HOLIDAYS:
+                        leave_days += 1
+                    cur += timedelta(days=1)
+            row = [driver, start, end, str(leave_days), reason, notes]
             ws.append_row(row, value_input_option="USER_ENTERED")
             try:
                 await update.effective_message.delete()
