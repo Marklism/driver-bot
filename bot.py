@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Merged Driver Bot — usage notes (auto-inserted)
 
