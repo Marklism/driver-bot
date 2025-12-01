@@ -2365,7 +2365,7 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if bot_token:
             b = Bot(bot_token)
-            cmds = b.get_my_commands()
+            cmds = await b.get_my_commands()
             if cmds:
                 lines.append("Registered bot commands:")
                 for c in cmds:
@@ -2622,7 +2622,7 @@ async def _send_startup_debug(application):
         try:
             if bot_token:
                 b = Bot(bot_token)
-                cmds = b.get_my_commands()
+                cmds = await b.get_my_commands()
                 if cmds:
                     lines.append("Registered commands:")
                     for c in cmds:
