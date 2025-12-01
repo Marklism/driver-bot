@@ -1786,12 +1786,36 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 # compute monthly and yearly totals (include this newly appended row)
                 month_total = 0
                 year_total = 0
+                # support multiple header names that may exist in the sheet (Start, Start Date, Start DateTime, End, End Date)
+                START_KEYS = ("Start", "Start Date", "Start DateTime", "Start DateTimeUTC", "StartDate")
+                END_KEYS = ("End", "End Date", "End DateTime", "EndDate")
+                DRIVER_KEYS = ("Driver", "driver", "Username", "Name")
                 for r in records:
                     try:
-                        if str(r.get('Driver','')) != driver:
+                        drv = None
+                        for k in DRIVER_KEYS:
+                            if k in r and str(r.get(k, "")).strip():
+                                drv = str(r.get(k, "")).strip()
+                                break
+                        if drv is None or drv != driver:
                             continue
-                        s2 = datetime.strptime(str(r.get('Start','')).strip(), '%Y-%m-%d')
-                        e2 = datetime.strptime(str(r.get('End','')).strip(), '%Y-%m-%d')
+                        s_val = None
+                        e_val = None
+                        for k in START_KEYS:
+                            if k in r and str(r.get(k, "")).strip():
+                                s_val = str(r.get(k, "")).strip()
+                                break
+                        for k in END_KEYS:
+                            if k in r and str(r.get(k, "")).strip():
+                                e_val = str(r.get(k, "")).strip()
+                                break
+                        if not s_val or not e_val:
+                            continue
+                        # Normalize dates that may contain datetime parts
+                        s_val = s_val.split()[0]
+                        e_val = e_val.split()[0]
+                        s2 = datetime.strptime(s_val, "%Y-%m-%d")
+                        e2 = datetime.strptime(e_val, "%Y-%m-%d")
                     except Exception:
                         continue
                     this_days = (e2 - s2).days + 1
@@ -1799,15 +1823,15 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         month_total += this_days
                     if s2.year == sd.year:
                         year_total += this_days
-                # fallback: ensure days_this computed
+                # compute this entry days if not set
                 try:
                     days_this = (ed - sd).days + 1
                 except Exception:
                     days_this = 0
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
                 msg = (
-                    f"Driver {driver} {start} to {end} {reason} ({days_this} days).\n"
-                    f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}.")
+                    f\"Driver {driver} {start} to {end} {reason} ({days_this} days).\n\"
+                    f\"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}.\") 
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
             except Exception:
                 # fallback: simple confirmation if any error computing totals
