@@ -1782,10 +1782,28 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 records = ws.get_all_records()
                 cnt = sum(1 for r in records if str(r.get("Driver","")) == driver)
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.\nTotal leave entries for {driver}: {cnt}")
+                                try:
+                    days_this = (ed - sd).days + 1
+                    month_name = sd.strftime('%B')
+                    msg = (
+                        f"Driver {driver} {start} to {end} {reason} ({days_this} days).
+"
+                        f"Total leave days for {driver}: {days_this} days in {month_name} and {sd.strftime('%Y')}."
+                    )
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+
             except Exception:
                 # fallback: simple confirmation
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
+                                try:
+                    days_this = (ed - sd).days + 1
+                    month_name = sd.strftime('%B')
+                    msg = (
+                        f"Driver {driver} {start} to {end} {reason} ({days_this} days).
+"
+                        f"Total leave days for {driver}: {days_this} days in {month_name} and {sd.strftime('%Y')}."
+                    )
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+
         except Exception:
             logger.exception("Failed to record leave")
             try:
@@ -1847,7 +1865,16 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
+                            try:
+                    days_this = (ed - sd).days + 1
+                    month_name = sd.strftime('%B')
+                    msg = (
+                        f"Driver {driver} {start} to {end} {reason} ({days_this} days).
+"
+                        f"Total leave days for {driver}: {days_this} days in {month_name} and {sd.strftime('%Y')}."
+                    )
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+
         except Exception:
             logger.exception("Failed to record leave")
             try:
