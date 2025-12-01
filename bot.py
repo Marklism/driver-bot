@@ -597,7 +597,7 @@ TR = {
         "choose_end": "Choose vehicle plate to END trip:",
         "start_ok": "Driver {driver} {plate} starts trip at {ts}.",
         "end_ok": "Driver {driver} {plate} ends trip at {ts}.",
-        "trip_summary": "Driver {driver} completed {n_today} trip(s) today and {n_month} trip(s) in {month} and {n_year} trip(s) in {year}.\n{plate} completed {p_today} trip(s) today and {p_month} trip(s) in {month} and {p_year} trip(s) in {year}.",
+        "trip_summary": "Driver {driver} completed {n_today} trip(s) today and {n_month} trip(s) in {month_name} and {n_year} trip(s) in {year}.\n{plate} completed {p_today} trip(s) today and {p_month} trip(s) in {month_name} and {p_year} trip(s) in {year}.",
         "not_allowed": "❌ You are not allowed to operate plate: {plate}.",
         "invalid_sel": "Invalid selection.",
         "help": "Help: Use /start_trip or /end_trip and select a plate.",
@@ -2307,14 +2307,13 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # Only send the full merged roundtrip summary on the second loop (even-numbered cycle).
+                    # Removed early-return so merged summary is sent immediately.
                     if (cur_cycle % 2) != 0:
-                        # First loop finished — do not send summary yet. Clear pending mission and return.
                         try:
                             context.user_data.pop("pending_mission", None)
                         except Exception:
                             pass
-                        return
+                        # previously returned here; now continue to send summary immediately
                     # We're on the second loop; proceed to prepare and send summary.
                     # Simple de-duplication: skip if we've sent one very recently.
                     if "last_merge_sent" not in chat_data:
@@ -2397,7 +2396,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         logger.exception("Failed to compute plate roundtrip counts for merged notify")
 
-                    month_label = month_start.strftime("%Y-%m")
+                    month_label = month_start.strftime("%B")
                     msg = t(user_lang, "roundtrip_merged_notify",
                             driver=username, d_month=d_month, month=month_label,
                             d_year=d_year, year=nowdt.year,
@@ -2512,7 +2511,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         pass
                 try:
-                    month_label = month_start.strftime("%Y-%m")
+                    month_label = month_start.strftime("%B")
                     await q.message.chat.send_message(t(user_lang, "trip_summary", driver=username, n_today=n_today, n_month=n_month, month=month_label, n_year=n_year, plate=plate, p_today=p_today, p_month=p_month, p_year=p_year, year=nowdt.year))
                 except Exception:
                     logger.exception("Failed to send trip summary")
