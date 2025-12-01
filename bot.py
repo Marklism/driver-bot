@@ -1358,6 +1358,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     text = t(user_lang, "menu")
     keyboard = [
+        [InlineKeyboardButton("Clock In", callback_data="clock_in"), InlineKeyboardButton("Clock Out", callback_data="clock_out")],
         [InlineKeyboardButton("Start trip (select plate)", callback_data="show_start"),
          InlineKeyboardButton("End trip (select plate)", callback_data="show_end")],
         [InlineKeyboardButton("Mission start", callback_data="show_mission_start"),
@@ -2510,6 +2511,49 @@ async def delete_command_message(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         pass
 
+
+async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle Clock In / Clock Out buttons with callback_data 'clock_in' or 'clock_out'.
+    Calls record_clock_entry(driver, action) and edits the message to confirm.
+    """
+    try:
+        query = update.callback_query
+        await query.answer()
+        user = query.from_user or update.effective_user
+        driver = (user.username or user.first_name or "unknown").strip()
+        data = (query.data or "").strip().lower()
+        if data == "clock_in":
+            action = "IN"
+        elif data == "clock_out":
+            action = "OUT"
+        else:
+            action = None
+
+        if not action:
+            try:
+                await query.edit_message_text("Invalid clock action.")
+            except Exception:
+                pass
+            return
+
+        try:
+            rec = record_clock_entry(driver, action)
+            ts = rec[3] if len(rec) > 3 else now_str()
+            msg = f"Recorded **{action}** for {driver} at {ts}"
+        except Exception as e:
+            msg = f"Failed to record clock entry: {e}"
+
+        try:
+            await query.edit_message_text(msg)
+        except Exception:
+            try:
+                await query.message.reply_text(msg)
+            except Exception:
+                pass
+    except Exception:
+        logger.exception("Error in handle_clock_button")
+
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
@@ -2522,6 +2566,8 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("lang", lang_command))
 
     application.add_handler(CallbackQueryHandler(plate_callback))
+    # Clock In/Out buttons handler
+    application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
