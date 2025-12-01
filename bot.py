@@ -167,6 +167,35 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
     return round(total_ot, 2)
 
 
+
+async def handle_clock_in_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    user = q.from_user
+    driver = user.username or (user.first_name or "")
+    try:
+        rec = record_clock_entry(driver, "IN")
+        await q.edit_message_text(f"Recorded IN for {driver} at {rec[3]}")
+    except Exception as e:
+        try:
+            await q.edit_message_text("Failed to record clock IN.")
+        except Exception:
+            pass
+
+async def handle_clock_out_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    user = q.from_user
+    driver = user.username or (user.first_name or "")
+    try:
+        rec = record_clock_entry(driver, "OUT")
+        await q.edit_message_text(f"Recorded OUT for {driver} at {rec[3]}")
+    except Exception as e:
+        try:
+            await q.edit_message_text("Failed to record clock OUT.")
+        except Exception:
+            pass
+
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1359,7 +1388,8 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = t(user_lang, "menu")
     keyboard = [
         [InlineKeyboardButton("Start trip (select plate)", callback_data="show_start"),
-         InlineKeyboardButton("End trip (select plate)", callback_data="show_end")],
+         InlineKeyboardButton("End trip (select plate)", callback_data="show_end"),
+        [InlineKeyboardButton("Clock In", callback_data="clock_in"), InlineKeyboardButton("Clock Out", callback_data="clock_out")]],
         [InlineKeyboardButton("Mission start", callback_data="show_mission_start"),
          InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
         [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"),
@@ -2468,6 +2498,8 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CommandHandler("lang", lang_command))
+    application.add_handler(CallbackQueryHandler(handle_clock_in_cb, pattern=r"^clock_in$"))
+    application.add_handler(CallbackQueryHandler(handle_clock_out_cb, pattern=r"^clock_out$"))
 
     application.add_handler(CallbackQueryHandler(plate_callback))
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
@@ -2485,8 +2517,7 @@ def register_ui_handlers(application):
                 BotCommand("mission", "Quick mission menu"),
                 BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
                 BotCommand("leave", "Record leave (admin)"),
-                BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
-            ])
+                BotCommand("setup_menu", "Post and pin the main menu (admins only)"), BotCommand("clock_in", "Clock In"), BotCommand("clock_out", "Clock Out"), BotCommand("ot_report", "OT report: /ot_report [username] YYYY-MM"),])
         except Exception:
             logger.exception("Failed to set bot commands.")
 
@@ -2622,4 +2653,3 @@ def main():
             logger.exception("Polling exited with exception.")
 
 if __name__ == "__main__":
-    main()
