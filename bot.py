@@ -1793,10 +1793,10 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 records = ws.get_all_records()
                 cnt = sum(1 for r in records if str(r.get("Driver","")) == driver)
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.\nTotal leave entries for {driver}: {cnt}")
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} ({days} 天)" {reason}.\nTotal leave entries for {driver}: {cnt}")
             except Exception:
                 # fallback: simple confirmation
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} ({days} 天)" {reason}.")
         except Exception:
             logger.exception("Failed to record leave")
             try:
@@ -1859,7 +1859,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} ({days} 天)" {reason}.")
         except Exception:
             logger.exception("Failed to record leave")
             try:
