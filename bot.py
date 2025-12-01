@@ -1176,7 +1176,11 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     logger.exception("Failed cleaning up secondary mission row after merge.")
 
                 # Only treat as merged (and notify) when we actually deleted the secondary row
-                merged_flag = True if found_pair else deleted_secondary
+                                # Only treat as merged (and notify) when we actually deleted the secondary row
+                # and the primary row has return start and return end recorded (i.e. full roundtrip completed).
+                has_return_info = bool(return_start and return_end)
+                merged_flag = True if (found_pair or deleted_secondary) and has_return_info else False
+
                 return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
     except Exception as e:
