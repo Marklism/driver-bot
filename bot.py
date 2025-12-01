@@ -2312,7 +2312,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
                     # Removed early-return so merged summary is sent immediately.
-                    if (cur_cycle % 2) != 0:
+                    if (cur_cycle % 4) != 0:
                         try:
                             context.user_data.pop("pending_mission", None)
                         except Exception:
@@ -2540,7 +2540,7 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
     # If it's the first (odd) cycle, skip sending summary now (clear pending and return)
-    if (cur_cycle % 2) != 0:
+    if (cur_cycle % 4) != 0:
         try:
             context.user_data.pop("pending_mission", None)
         except Exception:
