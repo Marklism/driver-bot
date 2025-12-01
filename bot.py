@@ -1,4 +1,14 @@
 from __future__ import annotations
+
+def inclusive_date_count(start: str, end: str) -> int:
+    try:
+        sd=datetime.strptime(start,"%Y-%m-%d")
+        ed=datetime.strptime(end,"%Y-%m-%d")
+        if ed<sd: return 0
+        return (ed.date()-sd.date()).days+1
+    except:
+        return 0
+
 from telegram import Bot, BotCommand
 """
 Merged Driver Bot — usage notes (auto-inserted)
@@ -1768,6 +1778,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         try:
             ws = open_worksheet(LEAVE_TAB)
+            days = inclusive_date_count(start, end)
             row = [driver, start, end, reason, notes]
             ws.append_row(row, value_input_option="USER_ENTERED")
             try:
@@ -1837,6 +1848,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         try:
             ws = open_worksheet(LEAVE_TAB)
+            days = inclusive_date_count(start, end)
             row = [driver, start, end, reason, notes]
             ws.append_row(row, value_input_option="USER_ENTERED")
             try:
