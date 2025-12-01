@@ -1,5 +1,5 @@
-from telegram import Bot, BotCommand
 from __future__ import annotations
+from telegram import Bot, BotCommand
 """
 Merged Driver Bot — usage notes (auto-inserted)
 
