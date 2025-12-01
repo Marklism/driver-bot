@@ -131,35 +131,53 @@ def _is_weekend(dt: datetime) -> bool:
     return dt.weekday() >= 5  # 5=Sat,6=Sun
 
 
+
 def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool = False):
-    """Return total OT hours for one shift, possibly crossing midnight."""
+    """Compute OT hours according to rules:
+    - Weekdays (Mon-Fri):
+      * Morning OT: any work time before 07:00 counts as OT (7:00 - actual in).
+      * Evening OT: only count if the off time exceeds 18:30; OT = actual out - 18:00.
+    - Weekend or holiday: full duration (out - in) counts as OT.
+    - Shifts crossing midnight are split at midnight: hours before midnight assigned to the previous day segment,
+      hours after midnight to the following day segment.
+    - Function returns total OT hours (float, rounded 2 decimals) for the shift.
+    """
     if end_dt < start_dt:
+        # assume end past midnight -> attribute to next day accordingly by adding one day
         end_dt = end_dt + timedelta(days=1)
 
     total_ot = 0.0
-
     dt = start_dt
+
     while dt < end_dt:
-        next_day = (dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        segment_end = min(next_day, end_dt)
+        # segment until midnight of 'dt' day or end_dt
+        next_midnight = (dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        segment_end = min(next_midnight, end_dt)
 
-        seg_is_weekend = _is_weekend(dt)
-        seg_is_holiday = is_holiday
+        is_weekend = _is_weekend(dt)
+        seg_is_holiday = is_holiday or (dt.strftime("%Y-%m-%d") in HOLIDAYS)
 
-        if seg_is_weekend or seg_is_holiday:
-            hours = (segment_end - dt).total_seconds() / 3600
-            total_ot += hours
+        if is_weekend or seg_is_holiday:
+            # whole segment counts
+            hours = (segment_end - dt).total_seconds() / 3600.0
+            total_ot += max(hours, 0)
         else:
+            # Weekday logic
+            # Morning OT (before 07:00)
             t7 = dt.replace(hour=7, minute=0, second=0, microsecond=0)
             if dt < t7:
-                ot_morning = (min(segment_end, t7) - dt).total_seconds() / 3600
+                morning_end = min(segment_end, t7)
+                ot_morning = (morning_end - dt).total_seconds() / 3600.0
                 total_ot += max(ot_morning, 0)
 
+            # Evening OT: only count if actual off is after 18:30; OT = actual_off - 18:00 (but only for the portion in this segment)
             t18 = dt.replace(hour=18, minute=0, second=0, microsecond=0)
             t1830 = dt.replace(hour=18, minute=30, second=0, microsecond=0)
 
+            # If segment_end is after 18:30 on this day, count OT from max(dt,18:00) to segment_end
             if segment_end > t1830:
-                ot_evening = (segment_end - t18).total_seconds() / 3600
+                evening_start = max(dt, t18)
+                ot_evening = (segment_end - evening_start).total_seconds() / 3600.0
                 total_ot += max(ot_evening, 0)
 
         dt = segment_end
