@@ -1,14 +1,4 @@
 from __future__ import annotations
-
-def inclusive_date_count(start: str, end: str) -> int:
-    try:
-        sd=datetime.strptime(start,"%Y-%m-%d")
-        ed=datetime.strptime(end,"%Y-%m-%d")
-        if ed<sd: return 0
-        return (ed.date()-sd.date()).days+1
-    except:
-        return 0
-
 from telegram import Bot, BotCommand
 """
 Merged Driver Bot — usage notes (auto-inserted)
@@ -1609,7 +1599,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     m_val = res.get("mileage", km)
                     fuel_val = res.get("fuel", fuel_amt)
                     nowd = _now_dt().strftime(DATE_FMT)
-                    # 公共群通知固定显示 "paid by Mark"
+                    # Public group notification fixed to "paid by Mark"
                     msg = f"{plate} @ {m_val} km + ${fuel_val} fuel on {nowd} paid by Mark. difference from previous odo is {delta_txt} km."
                     await update.effective_chat.send_message(msg)
                 except Exception:
@@ -1705,7 +1695,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             res = {"ok": False}
             if typ == "parking":
                 res = record_parking(plate, amt, by_user=user.username or "")
-                # 公共群通知固定显示 "paid by Mark"
+                # Public group notification fixed to "paid by Mark"
                 msg_pub = f"{plate} parking fee ${amt} on {today_date_str()} paid by Mark."
             elif typ == "wash":
                 res = record_wash(plate, amt, by_user=user.username or "")
@@ -1777,7 +1767,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data.pop("pending_leave", None)
             return
         try:
-            
             ws = open_worksheet(LEAVE_TAB)
             row = [driver, start, end, reason, notes]
             ws.append_row(row, value_input_option="USER_ENTERED")
@@ -1789,55 +1778,14 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
             except Exception:
                 pass
+            # Send confirmation plus a short leave summary for this driver (count of leave entries)
             try:
-                # compute totals overlapping the month and year of the start date
                 records = ws.get_all_records()
-                # parse start month/year from this leave's start
-                try:
-                    sd_dt = datetime.strptime(start, "%Y-%m-%d")
-                    month_start = datetime(sd_dt.year, sd_dt.month, 1).date()
-                    if sd_dt.month == 12:
-                        month_end = datetime(sd_dt.year + 1, 1, 1).date() - timedelta(days=1)
-                    else:
-                        month_end = (datetime(sd_dt.year, sd_dt.month + 1, 1).date() - timedelta(days=1))
-                    year_start = datetime(sd_dt.year, 1, 1).date()
-                    year_end = datetime(sd_dt.year, 12, 31).date()
-                except Exception:
-                    month_start = None
-                    month_end = None
-                    year_start = None
-                    year_end = None
-
-                # accumulate
-                days_in_month = 0
-                days_in_year = 0
-                for r in records:
-                    r_driver = str(r.get("Driver") or r.get("driver") or "").strip()
-                    r_start = str(r.get("Start Date") or r.get("Start Date") or r.get("Start Date", "") or r.get("Start Date", "") or r.get("Start Date", "") or r.get("Start Date", "") if hasattr(r, 'get') else "").strip()
-                    # more robust keys
-                    if not r_start:
-                        r_start = str(r.get("Start Date", "") or r.get("Start Date", "") or r.get("Start Date", "")).strip()
-                    r_end = str(r.get("End Date") or r.get("End Date", "")).strip()
-                    if r_driver != driver:
-                        continue
-                    if not r_start or not r_end:
-                        continue
-                    if month_start and month_end:
-                        days_in_month += _overlap_days_in_window(r_start, r_end, month_start, month_end)
-                    if year_start and year_end:
-                        days_in_year += _overlap_days_in_window(r_start, r_end, year_start, year_end)
-
-                # send in requested format
-                month_label = sd_dt.strftime("%Y-%m") if 'sd_dt' in locals() else ""
-                year = sd_dt.year if 'sd_dt' in locals() else ""
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} ({days} 天) {reason}\\nTotal leave days for {driver}: {days_in_month} days in {month_label} & {days_in_year} days in {year}")
-            except Exception:
-                # fallback simple confirmation
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} ({days} 天) {reason}\\nTotal leave days for {driver}: {days} days in {month_label} & {days} days in {year}")
-" {reason}.\nTotal leave entries for {driver}: {cnt}")
+                cnt = sum(1 for r in records if str(r.get("Driver","")) == driver)
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.\nTotal leave entries for {driver}: {cnt}")
             except Exception:
                 # fallback: simple confirmation
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} ({days} 天)" {reason}.")
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
         except Exception:
             logger.exception("Failed to record leave")
             try:
@@ -1889,7 +1837,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         try:
             ws = open_worksheet(LEAVE_TAB)
-            days = inclusive_date_count(start, end)
             row = [driver, start, end, reason, notes]
             ws.append_row(row, value_input_option="USER_ENTERED")
             try:
@@ -1900,7 +1847,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} ({days} 天)" {reason}.")
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
         except Exception:
             logger.exception("Failed to record leave")
             try:
@@ -2459,7 +2406,7 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
+AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip)\b'
 
 async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
