@@ -1,3 +1,254 @@
+"""
+Merged Driver Bot — usage notes (auto-inserted)
+
+Before running this script, set these environment variables (examples):
+
+BOT_TOKEN — Telegram bot token, e.g. export BOT_TOKEN="123:ABC..."
+SHEET_ID — Google Sheets ID, e.g. export SHEET_ID="1aBcD..." (required if using Google Sheets)
+GOOGLE_CREDS_B64 — base64 of service-account JSON (export GOOGLE_CREDS_B64="$(base64 -w0 creds.json)") (required if using Google Sheets)
+
+Optional tab names (if you customized them): DRIVERS_TAB, LEAVE_TAB, FINANCE_TAB, DRIVER_OT_TAB, DRIVER_OT_TAB
+
+Notes:
+- This file was auto-merged. I tried to avoid changing existing behavior.
+- If you hit runtime errors (ImportError, NameError, KeyError), copy the full error text and send it back — I'll repair it.
+"""
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+from typing import Optional, Dict, List, Any
+
+
+
+
+
+# --- BEGIN: Inserted OT & Clock functionality (from Bot(包含OT和打卡).txt) ---
+# Added OT Table headers
+OT_HEADERS = ["Date", "Driver", "Action", "Timestamp", "ClockType", "Note"]
+
+# Various column indices
+M_IDX_ID = 0
+M_IDX_GID = 1
+M_IDX_DRIVER = 2
+M_IDX_PLATE = 3
+M_IDX_DEPART = 4
+M_IDX_FROM = 5
+M_IDX_TO = 6
+M_IDX_START = 7
+M_IDX_END = 8
+M_IDX_ROUNDTRIP = 9
+M_IDX_NOTE = 10
+
+# Leave sheet
+L_IDX_DRIVER = 0
+L_IDX_TYPE = 1
+L_IDX_START = 2
+L_IDX_END = 3
+L_IDX_STATUS = 4
+L_IDX_NOTE = 5
+
+# Finance sheet
+F_IDX_DRIVER = 0
+F_IDX_CAT = 1
+F_IDX_AMOUNT = 2
+F_IDX_DATE = 3
+F_IDX_NOTE = 4
+
+# OT Clock sheet (new)
+O_IDX_DATE = 0
+O_IDX_DRIVER = 1
+O_IDX_ACTION = 2
+O_IDX_TIME = 3
+O_IDX_TYPE = 4
+O_IDX_NOTE = 5
+
+# ---------------------------------------------------------
+#  OT SECTION — Clock In/Out + OT Calculation
+# ---------------------------------------------------------
+
+def record_clock_entry(driver: str, action: str, note: str = ""):
+    dt = local_now()
+    ws = open_worksheet(OT_TAB)
+
+    # Ensure headers exist
+    ensure_sheet_headers_match(OT_TAB, OT_HEADERS)
+
+    row = [
+        dt.strftime("%Y-%m-%d"),
+        driver,
+        action,
+        dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "IN" if action == "IN" else "OUT",
+        note,
+    ]
+    ws.append_row(row)
+    return row
+
+
+def get_last_clock_entry(driver: str):
+    ws = open_worksheet(OT_TAB)
+    vals = ws.get_all_values()
+    if len(vals) <= 1:
+        return None
+    # vals[0] is header
+    for row in reversed(vals[1:]):
+        if row[O_IDX_DRIVER] == driver:
+            return row
+    return None
+
+
+def _is_weekend(dt: datetime) -> bool:
+    return dt.weekday() >= 5  # 5=Sat,6=Sun
+
+
+def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool = False):
+    """Return total OT hours for one shift, possibly crossing midnight."""
+    if end_dt < start_dt:
+        end_dt = end_dt + timedelta(days=1)
+
+    total_ot = 0.0
+
+    dt = start_dt
+    while dt < end_dt:
+        next_day = (dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        segment_end = min(next_day, end_dt)
+
+        seg_is_weekend = _is_weekend(dt)
+        seg_is_holiday = is_holiday
+
+        if seg_is_weekend or seg_is_holiday:
+            hours = (segment_end - dt).total_seconds() / 3600
+            total_ot += hours
+        else:
+            t7 = dt.replace(hour=7, minute=0, second=0, microsecond=0)
+            if dt < t7:
+                ot_morning = (min(segment_end, t7) - dt).total_seconds() / 3600
+                total_ot += max(ot_morning, 0)
+
+            t18 = dt.replace(hour=18, minute=0, second=0, microsecond=0)
+            t1830 = dt.replace(hour=18, minute=30, second=0, microsecond=0)
+
+            if segment_end > t1830:
+                ot_evening = (segment_end - t18).total_seconds() / 3600
+                total_ot += max(ot_evening, 0)
+
+        dt = segment_end
+
+    return round(total_ot, 2)
+
+
+async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user = update.effective_user
+    driver = user.username or user.first_name
+
+    last = get_last_clock_entry(driver)
+    now_in = last is None or last[O_IDX_ACTION] == "OUT"
+
+    action = "IN" if now_in else "OUT"
+    rec = record_clock_entry(driver, action)
+
+    msg = f"Recorded **{action}** for {driver} at {rec[3]}"
+    await query.edit_message_text(msg)
+
+
+async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /ot_report [driver] YYYY-MM """
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /ot_report [username] YYYY-MM")
+        return
+
+    if len(args) == 1:
+        driver = update.effective_user.username
+        ym = args[0]
+    else:
+        driver = args[0]
+        ym = args[1]
+
+    try:
+        year, month = map(int, ym.split("-"))
+        month_start = datetime(year, month, 1)
+        if month == 12:
+            month_end = datetime(year + 1, 1, 1)
+        else:
+            month_end = datetime(year, month + 1, 1)
+    except Exception:
+        await update.message.reply_text("Invalid month format. Use YYYY-MM.")
+        return
+
+    ws = open_worksheet(OT_TAB)
+    vals = ws.get_all_values()
+    if len(vals) <= 1:
+        await update.message.reply_text("No OT records.")
+        return
+
+    records = []
+    for row in vals[1:]:
+        if len(row) < 4:
+            continue
+        d = row[O_IDX_DATE]
+        r_driver = row[O_IDX_DRIVER]
+        ts = row[O_IDX_TIME]
+        if r_driver != driver:
+            continue
+        try:
+            dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            continue
+        if month_start <= dt < month_end:
+            records.append((dt, row))
+
+    if not records:
+        await update.message.reply_text(f"No OT for {driver} in {ym}.")
+        return
+
+    records.sort(key=lambda x: x[0])
+
+    shifts = []
+    pending_start = None
+
+    for dt, row in records:
+        action = row[O_IDX_ACTION]
+        if action == "IN":
+            pending_start = dt
+        elif action == "OUT":
+            if pending_start:
+                shifts.append((pending_start, dt))
+                pending_start = None
+
+    if pending_start:
+        shifts.append((pending_start, month_end))
+
+    total_ot = 0.0
+    detail_lines = []
+
+    for st, ed in shifts:
+        ot = compute_ot_for_shift(st, ed)
+        total_ot += ot
+        detail_lines.append(f"{st} → {ed}: {ot}h")
+
+    result = f"OT Report for {driver} ({ym}):\n"
+    result += "\n".join(detail_lines)
+    result += f"\n\nTotal OT: **{round(total_ot, 2)} hours**"
+
+    await update.message.reply_text(result)
+# ---------------------------------------------------------
+# Driver / Mission / Leave / Finance Helpers
+
+# Register OT handlers (inserted)
+try:
+    # These handlers implement Clock In/Out toggle and OT reporting
+    application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
+    application.add_handler(CommandHandler("ot_report", ot_report_command))
+except Exception:
+    # If application not available at import time, registration will be attempted in register_ui_handlers
+    pass
+
+# --- END: Inserted OT & Clock functionality ---
 #!/usr/bin/env python3
 import os
 import json
