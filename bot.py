@@ -1894,13 +1894,39 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         e2 = datetime.strptime(e_val, "%Y-%m-%d")
                     except Exception:
                         continue
-                    this_days = (e2 - s2).days + 1
+                    try:
+                        ld_raw = r.get('Leave Days', r.get('LeaveDays', ''))
+                        this_days = int(str(ld_raw).strip()) if str(ld_raw).strip() and str(ld_raw).strip().isdigit() else None
+                    except Exception:
+                        this_days = None
+                    if this_days is None:
+                        # fallback: compute excluding weekends and HOLIDAYS
+                        this_days = 0
+                        curd = s2
+                        while curd <= e2:
+                            try:
+                                is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
+                            except Exception:
+                                is_hol = False
+                            if curd.weekday() < 5 and not is_hol:
+                                this_days += 1
+                            curd += timedelta(days=1)
                     if s2.year == sd.year and s2.month == sd.month:
                         month_total += this_days
                     if s2.year == sd.year:
                         year_total += this_days
                 try:
-                    days_this = (ed - sd).days + 1
+                    # compute leave days for current entry excluding weekends and HOLIDAYS
+                    days_this = 0
+                    curd = sd
+                    while curd <= ed:
+                        try:
+                            is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
+                        except Exception:
+                            is_hol = False
+                        if curd.weekday() < 5 and not is_hol:
+                            days_this += 1
+                        curd += timedelta(days=1)
                 except Exception:
                     days_this = 0
                 found_exact = False
@@ -2020,13 +2046,39 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         e2 = datetime.strptime(e_val, "%Y-%m-%d")
                     except Exception:
                         continue
-                    this_days = (e2 - s2).days + 1
+                    try:
+                        ld_raw = r.get('Leave Days', r.get('LeaveDays', ''))
+                        this_days = int(str(ld_raw).strip()) if str(ld_raw).strip() and str(ld_raw).strip().isdigit() else None
+                    except Exception:
+                        this_days = None
+                    if this_days is None:
+                        # fallback: compute excluding weekends and HOLIDAYS
+                        this_days = 0
+                        curd = s2
+                        while curd <= e2:
+                            try:
+                                is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
+                            except Exception:
+                                is_hol = False
+                            if curd.weekday() < 5 and not is_hol:
+                                this_days += 1
+                            curd += timedelta(days=1)
                     if s2.year == sd.year and s2.month == sd.month:
                         month_total += this_days
                     if s2.year == sd.year:
                         year_total += this_days
                 try:
-                    days_this = (ed - sd).days + 1
+                    # compute leave days for current entry excluding weekends and HOLIDAYS
+                    days_this = 0
+                    curd = sd
+                    while curd <= ed:
+                        try:
+                            is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
+                        except Exception:
+                            is_hol = False
+                        if curd.weekday() < 5 and not is_hol:
+                            days_this += 1
+                        curd += timedelta(days=1)
                 except Exception:
                     days_this = 0
                 # if current entry not in sheet records yet, add it
