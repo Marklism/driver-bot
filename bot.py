@@ -1599,7 +1599,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     m_val = res.get("mileage", km)
                     fuel_val = res.get("fuel", fuel_amt)
                     nowd = _now_dt().strftime(DATE_FMT)
-                    # Public group notification fixed to "paid by Mark"
+                    # 公共群通知固定显示 "paid by Mark"
                     msg = f"{plate} @ {m_val} km + ${fuel_val} fuel on {nowd} paid by Mark. difference from previous odo is {delta_txt} km."
                     await update.effective_chat.send_message(msg)
                 except Exception:
@@ -1695,7 +1695,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             res = {"ok": False}
             if typ == "parking":
                 res = record_parking(plate, amt, by_user=user.username or "")
-                # Public group notification fixed to "paid by Mark"
+                # 公共群通知固定显示 "paid by Mark"
                 msg_pub = f"{plate} parking fee ${amt} on {today_date_str()} paid by Mark."
             elif typ == "wash":
                 res = record_wash(plate, amt, by_user=user.username or "")
@@ -1780,42 +1780,10 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
             # Send confirmation plus a short leave summary for this driver (count of leave entries)
             try:
-                try:
-    records = ws.get_all_records()
-
-    # compute leave days for this entry (inclusive)
-    days_this = (ed - sd).days + 1
-
-    # compute monthly total for this driver (by start date month) and year total
-    month_total = 0
-    year_total = 0
-    for r in records:
-        if str(r.get("Driver", "")) != driver:
-            continue
-        try:
-            s2 = datetime.strptime(str(r.get("Start", "")).strip(), "%Y-%m-%d")
-            e2 = datetime.strptime(str(r.get("End", "")).strip(), "%Y-%m-%d")
-        except Exception:
-            continue
-
-        this_days = (e2 - s2).days + 1
-
-        # month total (same month as new entry start)
-        if s2.year == sd.year and s2.month == sd.month:
-            month_total += this_days
-
-        # year total (same year as new entry start)
-        if s2.year == sd.year:
-            year_total += this_days
-
-    month_name = sd.strftime('%B')
-    msg = (
-        f"Driver {driver} {start} to {end} {reason} ({days_this} days).\n"
-        f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
-    )
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-
-except Exception:
+                records = ws.get_all_records()
+                cnt = sum(1 for r in records if str(r.get("Driver","")) == driver)
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.\nTotal leave entries for {driver}: {cnt}")
+            except Exception:
                 # fallback: simple confirmation
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
         except Exception:
@@ -2438,7 +2406,7 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip)\b'
+AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
 async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
