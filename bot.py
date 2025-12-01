@@ -597,7 +597,7 @@ TR = {
         "choose_end": "Choose vehicle plate to END trip:",
         "start_ok": "Driver {driver} {plate} starts trip at {ts}.",
         "end_ok": "Driver {driver} {plate} ends trip at {ts}.",
-        "trip_summary": "Driver {driver} completed {n_today} trip(s) today and {n_month} trip(s) in {month_name} and {n_year} trip(s) in {year}.\n{plate} completed {p_today} trip(s) today and {p_month} trip(s) in {month_name} and {p_year} trip(s) in {year}.",
+        "trip_summary": "Driver {driver} completed {n_today} trip(s) today and {n_month} trip(s) in {month} and {n_year} trip(s) in {year}.\n{plate} completed {p_today} trip(s) today and {p_month} trip(s) in {month} and {p_year} trip(s) in {year}.",
         "not_allowed": "❌ You are not allowed to operate plate: {plate}.",
         "invalid_sel": "Invalid selection.",
         "help": "Help: Use /start_trip or /end_trip and select a plate.",
