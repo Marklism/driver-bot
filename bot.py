@@ -13,10 +13,37 @@ Notes:
 - This file was auto-merged. I tried to avoid changing existing behavior.
 - If you hit runtime errors (ImportError, NameError, KeyError), copy the full error text and send it back — I'll repair it.
 """
+
+
+def check_deployment_requirements():
+    """
+    Deployment check: prints warnings about missing environment variables and missing optional imports.
+    This runs at startup (inside main) to give clearer logs on Railway.
+    """
+    import os, sys
+    required_env = ["BOT_TOKEN", "SHEET_ID", "GOOGLE_CREDS_B64"]
+    missing = [v for v in required_env if not os.getenv(v)]
+    if missing:
+        print("=== DEPLOYMENT CHECK WARNING ===")
+        print("Missing required environment variables:", missing)
+        print("Please set them in your Railway project variables.")
+    else:
+        print("Deployment check: required env vars present (BOT_TOKEN, SHEET_ID, GOOGLE_CREDS_B64).")
+    # Try importing some optional modules to give clearer messages
+    optional_checks = ["gspread", "oauth2client", "zoneinfo", "httpx"]
+    for mod in optional_checks:
+        try:
+            __import__(mod)
+        except Exception as e:
+            print(f"Note: optional module import failed: {mod} -> {e}")
+    print("=== DEPLOYMENT CHECK COMPLETE ===")
+
 try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
+from datetime import datetime, timedelta, time as dtime
+
 from typing import Optional, Dict, List, Any
 
 
@@ -2519,6 +2546,7 @@ def _delete_telegram_webhook(token: str) -> bool:
         return False
 
 def main():
+    check_deployment_requirements()
     ensure_env()
     if LOCAL_TZ and ZoneInfo:
         try:
