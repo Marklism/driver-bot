@@ -2339,6 +2339,58 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
     else:
         await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
 
+
+
+
+async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /debug_bot - replies with a self-check report including env vars and current bot commands.
+    """
+    try:
+        await update.effective_message.delete()
+    except Exception:
+        pass
+    user = update.effective_user
+    bot_token = os.getenv("BOT_TOKEN")
+    sheet_id = os.getenv("SHEET_ID") or os.getenv("GOOGLE_SHEET_NAME") or ""
+    google_creds = bool(os.getenv("GOOGLE_CREDS_B64") or os.getenv("GOOGLE_CREDS_BASE64") or os.getenv("GOOGLE_CREDS_PATH"))
+    menu_chat = os.getenv("MENU_CHAT_ID") or os.getenv("SUMMARY_CHAT_ID") or ""
+    lines = []
+    lines.append("**Driver Bot - Debug Report**")
+    lines.append(f"Bot token present: {'Yes' if bot_token else 'No'}")
+    lines.append(f"SHEET_ID present: {'Yes' if sheet_id else 'No'}")
+    lines.append(f"Google creds present: {'Yes' if google_creds else 'No'}")
+    lines.append(f"MENU_CHAT_ID / SUMMARY_CHAT_ID: {menu_chat or '(not set)'}")
+    # Try to fetch current bot commands
+    try:
+        if bot_token:
+            b = Bot(bot_token)
+            cmds = b.get_my_commands()
+            if cmds:
+                lines.append("Registered bot commands:")
+                for c in cmds:
+                    lines.append(f" - /{c.command}: {c.description}")
+            else:
+                lines.append("Registered bot commands: (none)")
+    except Exception as e:
+        lines.append("Failed to fetch bot commands: " + str(e))
+    # Basic feature checks (handlers presence cannot be introspected easily; we'll report config and tabs)
+    try:
+        tabs = list(HEADERS_BY_TAB.keys()) if 'HEADERS_BY_TAB' in globals() else []
+        lines.append("Known sheet tabs: " + (", ".join(tabs) if tabs else "(none)"))
+    except Exception:
+        pass
+    text = "\\n".join(lines)
+    # Send in chat (split if too long)
+    try:
+        await update.effective_chat.send_message(text)
+    except Exception:
+        try:
+            await context.bot.send_message(chat_id=user.id, text=text)
+        except Exception:
+            pass
+
+
 AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
 async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2476,6 +2528,9 @@ def register_ui_handlers(application):
     application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
+    
+    # Debug command for runtime self-check
+    application.add_handler(CommandHandler('debug_bot', debug_bot_command))
     async def _set_cmds():
         try:
             await application.bot.set_my_commands([
@@ -2547,33 +2602,75 @@ def _delete_telegram_webhook(token: str) -> bool:
         logger.exception("Failed to call deleteWebhook: %s", e)
         return False
 
+
+
+async def _send_startup_debug(application):
+    """
+    Send startup debug report to MENU_CHAT_ID or SUMMARY_CHAT_ID if configured.
+    """
+    chat_id = os.getenv("MENU_CHAT_ID") or os.getenv("SUMMARY_CHAT_ID")
+    if not chat_id:
+        return
+    try:
+        bot_token = os.getenv("BOT_TOKEN")
+        lines = []
+        lines.append("Driver Bot startup debug report:")
+        lines.append(f"Bot token present: {'Yes' if bot_token else 'No'}")
+        lines.append(f"SHEET_ID present: {'Yes' if (os.getenv('SHEET_ID') or os.getenv('GOOGLE_SHEET_NAME')) else 'No'}")
+        lines.append(f"Google creds present: {'Yes' if (os.getenv('GOOGLE_CREDS_B64') or os.getenv('GOOGLE_CREDS_BASE64') or os.getenv('GOOGLE_CREDS_PATH')) else 'No'}")
+        # list commands
+        try:
+            if bot_token:
+                b = Bot(bot_token)
+                cmds = b.get_my_commands()
+                if cmds:
+                    lines.append("Registered commands:")
+                    for c in cmds:
+                        lines.append(f" - /{c.command}: {c.description}")
+        except Exception as e:
+            lines.append("Failed to fetch commands: " + str(e))
+        text = "\\n".join(lines)
+        await application.bot.send_message(chat_id=chat_id, text=text)
+    except Exception:
+        pass
+
+
+
 def main():
     check_deployment_requirements()
     ensure_env()
 
-    # --- Set Telegram slash commands on startup (helps Telegram menu reflect available commands) ---
+    # --- Set Telegram slash commands on startup (uses direct HTTP API to avoid coroutine issues) ---
     try:
         token_tmp = os.getenv("BOT_TOKEN")
         if token_tmp:
             try:
-                bot_for_cmds = Bot(token_tmp)
-                cmds = [
-                    BotCommand("start", "Show menu"),
-                    BotCommand("ot_report", "OT report: /ot_report [username] YYYY-MM"),
-                    BotCommand("leave", "Request leave"),
-                    BotCommand("finance", "Add finance record"),
-                    BotCommand("mission_end", "End mission"),
+                # Build command list for Telegram API
+                cmds_payload = [
+                    {"command": "start", "description": "Show menu"},
+                    {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
+                    {"command": "leave", "description": "Request leave"},
+                    {"command": "finance", "description": "Add finance record"},
+                    {"command": "mission_end", "description": "End mission"},
+                    {"command": "clock_in", "description": "Clock In"},
+                    {"command": "clock_out", "description": "Clock Out"}
                 ]
                 try:
-                    bot_for_cmds.set_my_commands(cmds)
-                    print("Telegram commands set on startup.")
+                    import json, urllib.request
+                    url = f"https://api.telegram.org/bot{token_tmp}/setMyCommands"
+                    data = json.dumps({ "commands": cmds_payload }).encode("utf-8")
+                    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        resp_text = resp.read().decode("utf-8", errors="ignore")
+                        print("Set my commands via HTTP API:", resp_text[:200])
                 except Exception as e:
-                    print("Warning: failed to set Telegram commands:", e)
+                    print("Warning: failed to set Telegram commands via HTTP API:", e)
             except Exception as e:
-                print("Warning: could not create Bot client for setting commands:", e)
+                print("Warning: could not prepare setting commands:", e)
     except Exception:
         pass
     # --- end set commands ---
+
 
     if LOCAL_TZ and ZoneInfo:
         try:
@@ -2592,6 +2689,28 @@ def main():
 
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
     register_ui_handlers(application)
+
+    # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
+    try:
+        import asyncio
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except Exception:
+            try:
+                loop = asyncio.get_event_loop()
+            except Exception:
+                loop = None
+        if loop and hasattr(loop, "create_task"):
+            loop.create_task(_send_startup_debug(application))
+        else:
+            try:
+                if hasattr(application, "create_task"):
+                    application.create_task(_send_startup_debug(application))
+            except Exception:
+                pass
+    except Exception:
+        pass
     schedule_daily_summary(application)
 
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
