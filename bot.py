@@ -1,3 +1,4 @@
+from telegram import Bot, BotCommand
 from __future__ import annotations
 """
 Merged Driver Bot — usage notes (auto-inserted)
@@ -2549,6 +2550,31 @@ def _delete_telegram_webhook(token: str) -> bool:
 def main():
     check_deployment_requirements()
     ensure_env()
+
+    # --- Set Telegram slash commands on startup (helps Telegram menu reflect available commands) ---
+    try:
+        token_tmp = os.getenv("BOT_TOKEN")
+        if token_tmp:
+            try:
+                bot_for_cmds = Bot(token_tmp)
+                cmds = [
+                    BotCommand("start", "Show menu"),
+                    BotCommand("ot_report", "OT report: /ot_report [username] YYYY-MM"),
+                    BotCommand("leave", "Request leave"),
+                    BotCommand("finance", "Add finance record"),
+                    BotCommand("mission_end", "End mission"),
+                ]
+                try:
+                    bot_for_cmds.set_my_commands(cmds)
+                    print("Telegram commands set on startup.")
+                except Exception as e:
+                    print("Warning: failed to set Telegram commands:", e)
+            except Exception as e:
+                print("Warning: could not create Bot client for setting commands:", e)
+    except Exception:
+        pass
+    # --- end set commands ---
+
     if LOCAL_TZ and ZoneInfo:
         try:
             ZoneInfo(LOCAL_TZ)
