@@ -580,7 +580,7 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     MISSIONS_REPORT_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
     SUMMARY_TAB: ["Date", "PeriodType", "TotalsJSON", "HumanSummary"],
     DRIVERS_TAB: ["Username", "Plates"],
-    LEAVE_TAB: ["Driver", "Start Date", "End Date", "Reason", "Notes"],
+    LEAVE_TAB: ["Driver", "Start Date", "End Date", "Leave Days", "Reason", "Notes"],
     MAINT_TAB: ["Plate", "Mileage", "Maintenance Item", "Cost", "Date", "Workshop", "Notes"],
     EXPENSE_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Delta KM", "Fuel Cost", "Parking Fee", "Other Fee", "Invoice", "DriverPaid"],
     FUEL_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Delta KM", "Fuel Cost", "Invoice", "DriverPaid"],
@@ -763,6 +763,76 @@ def open_worksheet(tab: str = ""):
             except Exception:
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
         return sh.sheet1
+
+async def process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user):
+    """Helper to append leave row with Leave Days, check duplicates and exclude weekends/holidays."""
+    try:
+        sd_dt = datetime.strptime(start, "%Y-%m-%d")
+        ed_dt = datetime.strptime(end, "%Y-%m-%d")
+    except Exception:
+        sd_dt = None
+        ed_dt = None
+
+    try:
+        records = ws.get_all_records()
+    except Exception:
+        records = []
+
+    # check overlaps
+    if sd_dt and ed_dt:
+        for r in records:
+            try:
+                r_driver = next((r[k] for k in ("Driver","driver","Username","Name") if k in r and str(r.get(k,"")).strip()), "")
+                if r_driver != driver:
+                    continue
+                r_start = next((r[k] for k in ("Start","Start Date","Start DateTime","StartDate") if k in r and str(r.get(k,"")).strip()), None)
+                r_end = next((r[k] for k in ("End","End Date","End DateTime","EndDate") if k in r and str(r.get(k,"")).strip()), None)
+                if not r_start or not r_end:
+                    continue
+                r_s = str(r_start).split()[0]
+                r_e = str(r_end).split()[0]
+                r_sd = datetime.strptime(r_s, "%Y-%m-%d")
+                r_ed = datetime.strptime(r_e, "%Y-%m-%d")
+                if not (ed_dt < r_sd or sd_dt > r_ed):
+                    # overlap
+                    msg = f"This date has already been applied for leave ({r_s} to {r_e}), please choose different dates."
+                    try:
+                        await context.bot.send_message(chat_id=user.id, text=msg)
+                    except Exception:
+                        pass
+                    try:
+                        await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
+                    except Exception:
+                        pass
+                    context.user_data.pop("pending_leave", None)
+                    return False
+            except Exception:
+                continue
+
+    # compute leave days excluding weekends and HOLIDAYS
+    leave_days = 0
+    if sd_dt and ed_dt and sd_dt <= ed_dt:
+        cur = sd_dt
+        while cur <= ed_dt:
+            try:
+                is_hol = cur.strftime("%Y-%m-%d") in HOLIDAYS
+            except Exception:
+                is_hol = False
+            if cur.weekday() < 5 and not is_hol:
+                leave_days += 1
+            cur += timedelta(days=1)
+
+    row = [driver, start, end, str(leave_days), reason, notes]
+    try:
+        ws.append_row(row, value_input_option="USER_ENTERED")
+    except Exception:
+        try:
+            ws.append_row(row)
+        except Exception:
+            logger.exception("Failed to append leave row")
+    # success
+    return True
+
 
 def load_driver_map_from_env() -> Dict[str, List[str]]:
     if not DRIVER_PLATE_MAP_JSON:
@@ -1777,8 +1847,9 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         try:
             ws = open_worksheet(LEAVE_TAB)
-            row = [driver, start, end, reason, notes]
-            ws.append_row(row, value_input_option="USER_ENTERED")
+            success = await process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user)
+            if not success:
+                return
             try:
                 await update.effective_message.delete()
             except Exception:
@@ -1909,8 +1980,9 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         try:
             ws = open_worksheet(LEAVE_TAB)
-            row = [driver, start, end, reason, notes]
-            ws.append_row(row, value_input_option="USER_ENTERED")
+            success = await process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user)
+            if not success:
+                return
             try:
                 await update.effective_message.delete()
             except Exception:
