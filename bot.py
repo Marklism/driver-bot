@@ -1857,6 +1857,15 @@ async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    # If this callback is for clock buttons, delegate to the clock handler immediately.
+    try:
+        data_check = (q.data or "").strip()
+    except Exception:
+        data_check = ""
+    if data_check.startswith("clock_"):
+        # call dedicated handler to avoid being handled as invalid selection by plate_callback
+        return await handle_clock_button(update, context)
+
     await q.answer()
     data = q.data
     user = q.from_user
