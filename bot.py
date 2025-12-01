@@ -97,7 +97,7 @@ O_IDX_NOTE = 5
 # ---------------------------------------------------------
 
 def record_clock_entry(driver: str, action: str, note: str = ""):
-    dt = local_now()
+    dt = _now_dt()
     ws = open_worksheet(OT_TAB)
 
     # Ensure headers exist
@@ -353,6 +353,11 @@ SUMMARY_TAB = os.getenv("SUMMARY_TAB", "Summary")
 MISSIONS_TAB = os.getenv("MISSIONS_TAB", "Missions")
 MISSIONS_REPORT_TAB = os.getenv("MISSIONS_REPORT_TAB", "Missions_Report")
 LEAVE_TAB = os.getenv("LEAVE_TAB", "Driver_Leave")
+
+# OT tab name (created if missing)
+OT_TAB = os.getenv('OT_TAB', 'Driver_OT')
+OT_HEADERS = ['Date', 'Driver', 'Action', 'Timestamp', 'ClockType', 'Note']
+
 MAINT_TAB = os.getenv("MAINT_TAB", "Vehicle_Maintenance")
 EXPENSE_TAB = os.getenv("EXPENSE_TAB", "Trip_Expenses")
 
