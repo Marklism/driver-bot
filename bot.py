@@ -1782,7 +1782,24 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 records = ws.get_all_records()
                 cnt = sum(1 for r in records if str(r.get("Driver","")) == driver)
-                # compute inclusive leave days for this entry
+                
+                # compute monthly and yearly totals (include this newly appended row)
+                month_total = 0
+                year_total = 0
+                for r in records:
+                    try:
+                        if str(r.get('Driver','')) != driver:
+                            continue
+                        s2 = datetime.strptime(str(r.get('Start','')).strip(), '%Y-%m-%d')
+                        e2 = datetime.strptime(str(r.get('End','')).strip(), '%Y-%m-%d')
+                    except Exception:
+                        continue
+                    this_days = (e2 - s2).days + 1
+                    if s2.year == sd.year and s2.month == sd.month:
+                        month_total += this_days
+                    if s2.year == sd.year:
+                        year_total += this_days
+                # fallback: ensure days_this computed
                 try:
                     days_this = (ed - sd).days + 1
                 except Exception:
@@ -1790,8 +1807,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
                 msg = (
                     f"Driver {driver} {start} to {end} {reason} ({days_this} days).\n"
-                    f"Total leave days for {driver}: {days_this} days in {month_name} and {sd.strftime('%Y')}."
-                )
+                    f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}.")
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
             except Exception:
                 # fallback: simple confirmation if any error computing totals
