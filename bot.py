@@ -2053,9 +2053,9 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # Only send the full merged roundtrip summary on the second loop (even-numbered cycle).
-                    if (cur_cycle % 2) != 0:
-                        # First loop finished — do not send summary yet. Clear pending mission and return.
+                    # Only send the full merged roundtrip summary after FOUR cycles (complete 4 segments).
+                    if (cur_cycle % 4) != 0:
+                        # Not yet the 4th cycle — clear pending mission and return.
                         try:
                             context.user_data.pop("pending_mission", None)
                         except Exception:
