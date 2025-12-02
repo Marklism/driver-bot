@@ -598,7 +598,8 @@ TR = {
         "mission_start_ok": "Driver {driver} {plate} departures from {dep} at {ts}.",
         "mission_end_ok": "Driver {driver} {plate} arrives at {arr} at {ts}.",
         "mission_no_open": "No open mission found for {plate}.",
-        "roundtrip_merged_notify": "✅ Driver {driver} completed {d_month} mission(s) in {month} and {d_year} mission(s) in {year}. {plate} completed {p_month} mission(s) in {month} and {p_year} mission(s) in {year}.",
+        "roundtrip_merged_notify": "✅ Driver {driver} completed {d_month} mission(s) in {month_name} and {d_year} mission(s) in {year}.
+{plate} completed {p_month} mission(s) in {month_name} and {p_year} mission(s) in {year}.",
         "lang_set": "Language set to {lang}.",
         "invalid_amount": "Invalid amount — please send a numeric value like `23.5`.",
         "invalid_odo": "Invalid odometer — please send numeric KM like `12345` or `12345KM`.",
@@ -2053,8 +2054,8 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # Only send the full merged roundtrip summary on the second loop (even-numbered cycle).
-                    if (cur_cycle % 2) != 0:
+                    # Only send the full merged roundtrip summary on the fourth merged event (every 4th).
+                    if (cur_cycle % 4) != 0:
                         # First loop finished — do not send summary yet. Clear pending mission and return.
                         try:
                             context.user_data.pop("pending_mission", None)
