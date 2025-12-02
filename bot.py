@@ -547,6 +547,87 @@ import queue
 import time
 from typing import Callable, Any, Optional, Dict, Tuple
 
+
+# --- BEGIN: Bot state persistence to Google Sheets (mission_cycle) ---
+import base64, json, io
+from google.oauth2 import service_account
+import gspread
+
+_LOADED_MISSION_CYCLES = {}
+
+def _get_gspread_client():
+    # Accept either GOOGLE_CREDS_BASE64 or GOOGLE_CREDS_B64 env var
+    b64 = os.getenv("GOOGLE_CREDS_BASE64") or os.getenv("GOOGLE_CREDS_B64")
+    if not b64:
+        raise RuntimeError("Google credentials not provided in environment (GOOGLE_CREDS_BASE64 / GOOGLE_CREDS_B64)")
+    cred_json = base64.b64decode(b64)
+    creds = service_account.Credentials.from_service_account_info(json.loads(cred_json))
+    return gspread.authorize(creds)
+
+def open_bot_state_worksheet():
+    gc = _get_gspread_client()
+    # prefer GOOGLE_SHEET_NAME, else fall back to SHEET_ID
+    sheet_name = os.getenv("GOOGLE_SHEET_NAME")
+    sheet_id = os.getenv("SHEET_ID")
+    if sheet_name:
+        sh = gc.open(sheet_name)
+    elif sheet_id:
+        sh = gc.open_by_key(sheet_id)
+    else:
+        raise RuntimeError("Neither GOOGLE_SHEET_NAME nor SHEET_ID provided")
+    tab = os.getenv("BOT_STATE_TAB") or "Bot_State"
+    try:
+        ws = sh.worksheet(tab)
+    except Exception:
+        # create worksheet if missing
+        ws = sh.add_worksheet(tab, rows=100, cols=10)
+        # set headers
+        ws.update("A1:B1", [["Key","Value"]])
+    return ws
+
+def load_mission_cycles_from_sheet():
+    global _LOADED_MISSION_CYCLES
+    try:
+        ws = open_bot_state_worksheet()
+        records = ws.get_all_records()
+        for r in records:
+            k = r.get("Key") or r.get("key")
+            v = r.get("Value") or r.get("value")
+            if k and v:
+                if k == "mission_cycle":
+                    try:
+                        _LOADED_MISSION_CYCLES = json.loads(v)
+                    except Exception:
+                        _LOADED_MISSION_CYCLES = {}
+                    return _LOADED_MISSION_CYCLES
+        # if not found, keep empty dict
+        _LOADED_MISSION_CYCLES = {}
+        return _LOADED_MISSION_CYCLES
+    except Exception:
+        # don't crash startup; leave empty
+        _LOADED_MISSION_CYCLES = {}
+        return _LOADED_MISSION_CYCLES
+
+def save_mission_cycles_to_sheet(mdict):
+    try:
+        ws = open_bot_state_worksheet()
+        records = ws.get_all_records()
+        found_row = None
+        for idx, r in enumerate(records, start=2):
+            k = r.get("Key") or r.get("key")
+            if k == "mission_cycle":
+                found_row = idx
+                break
+        json_val = json.dumps(mdict, ensure_ascii=False)
+        if found_row:
+            ws.update(f"B{found_row}", json_val)
+        else:
+            ws.append_row(["mission_cycle", json_val])
+    except Exception as e:
+        logger.exception("Failed to save mission cycles to sheet: %s", e)
+# --- END: Bot state persistence ---
+
+
 # Simple thread-based serial executor to avoid 429s.
 class GoogleApiQueue:
     def __init__(self, min_interval_sec: float = 1.0, max_retries: int = 5, backoff_factor: float = 1.5):
@@ -2446,8 +2527,12 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # Restore correct logic: only send summary on completed roundtrip (2 events)
-                    if (cur_cycle % 2) != 0:
+                                        try:
+                        save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
+                    except Exception:
+                        logger.exception("Failed to persist mission_cycle after update")
+# Restore correct logic: only send summary on 4th cycle
+                    if (cur_cycle % 4) != 0:
                         return
                     # Simple de-duplication: skip if we've sent one very recently.
                     if "last_merge_sent" not in chat_data:
@@ -2660,7 +2745,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    # TWO-LOOP MISSION LOGIC: only send merged summary after return leg (2 events)
+    # TWO-LOOP MISSION LOGIC: only send merged summary on second cycle
     chat_data = context.chat_data
     if "mission_cycle" not in chat_data:
         chat_data["mission_cycle"] = {}
@@ -2669,8 +2754,12 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_data["mission_cycle"][key_cycle] = cur_cycle
     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-    # If it's the first (odd) cycle, skip sending summary now (clear pending and return)
-    if (cur_cycle % 2) != 0:
+                        try:
+                        save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
+                    except Exception:
+                        logger.exception("Failed to persist mission_cycle after update")
+# If it's the first (odd) cycle, skip sending summary now (clear pending and return)
+    if (cur_cycle % 4) != 0:
         try:
             context.user_data.pop("pending_mission", None)
         except Exception:
