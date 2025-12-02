@@ -167,6 +167,7 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
     return round(total_ot, 2)
 
 
+
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -174,14 +175,148 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     driver = user.username or user.first_name
 
+    # get last entry before toggling (may be None)
     last = get_last_clock_entry(driver)
-    now_in = last is None or last[O_IDX_ACTION] == "OUT"
+    now_in = last is None or (len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "OUT")
 
     action = "IN" if now_in else "OUT"
     rec = record_clock_entry(driver, action)
 
-    msg = f"Recorded **{action}** for {driver} at {rec[3]}"
-    await query.edit_message_text(msg)
+    # parse timestamp
+    try:
+        ts_dt = datetime.strptime(rec[3], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        ts_dt = _now_dt()
+
+    # determine weekend/holiday
+    try:
+        hols = {h.strip() for h in os.getenv("HOLIDAYS", "").split(",") if h.strip()}
+    except Exception:
+        hols = set()
+    is_holiday = ts_dt.strftime("%Y-%m-%d") in hols
+    is_weekend = _is_weekend(ts_dt)
+
+    # helper to write OT summary rows
+    def _write_ot_rows(rows):
+        try:
+            SUM_TAB = os.getenv("OT_SUM_TAB", "Driver_OT_Calculated")
+            ws = open_worksheet(SUM_TAB)
+            headers = ['Date', 'Driver', 'Start Time', 'End Time', 'OT hours', 'OT type', 'Note']
+            ensure_sheet_headers_match(ws, headers)
+            for r in rows:
+                try:
+                    ws.append_row(r, value_input_option='USER_ENTERED')
+                except Exception:
+                    try:
+                        ws.append_row(r)
+                    except Exception:
+                        logger.exception("Failed to append OT calc row %s", r)
+        except Exception:
+            logger.exception("Failed writing OT calc rows")
+
+    rows_to_write = []
+    morning_ot = 0.0
+    evening_ot = 0.0
+    weekend_ot = 0.0
+    notes = []
+
+    if action == "IN":
+        # Morning OT rule: only count on weekdays, not holidays, and between 04:00 and 07:00
+        if (not is_weekend) and (not is_holiday):
+            t4 = ts_dt.replace(hour=4, minute=0, second=0, microsecond=0)
+            t7 = ts_dt.replace(hour=7, minute=0, second=0, microsecond=0)
+            if t4 <= ts_dt < t7:
+                end_morning = ts_dt.replace(hour=8, minute=0, second=0, microsecond=0)
+                morning_ot = round((end_morning - ts_dt).total_seconds() / 3600.0, 2)
+                if morning_ot > 0:
+                    rows_to_write.append([ts_dt.strftime("%Y-%m-%d"), driver, ts_dt.strftime("%H:%M:%S"), "08:00:00", str(morning_ot), "Morning", "Clock In morning OT"])
+    else:
+        # action == OUT
+        # find matching start time from last (the 'last' variable should be the previous IN entry)
+        start_dt = None
+        if last and len(last) > O_IDX_TIME:
+            try:
+                start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                start_dt = None
+
+        if start_dt is None:
+            # no start found, nothing to compute
+            pass
+        else:
+            # If weekend or holiday for the start date -> whole shift counts as OT (single row)
+            if _is_weekend(start_dt) or (start_dt.strftime("%Y-%m-%d") in hols):
+                total = round((ts_dt - start_dt).total_seconds() / 3600.0, 2) if ts_dt >= start_dt else round(((ts_dt + timedelta(days=1)) - start_dt).total_seconds() / 3600.0, 2)
+                weekend_ot = total if total > 0 else 0.0
+                if weekend_ot > 0:
+                    rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, start_dt.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), str(weekend_ot), "Weekend/Holiday", "Clock Out weekend OT"])
+            else:
+                # normal weekday: compute evening OT if any (>=18:30)
+                t18 = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+                t1830 = ts_dt.replace(hour=18, minute=30, second=0, microsecond=0)
+                # handle crossing midnight: if end date != start date, split into two parts
+                if ts_dt.date() != start_dt.date():
+                    # day1: from start_dt to 23:59:59 of start_dt.date()
+                    day1_end = datetime.combine(start_dt.date(), dtime(23, 59, 59))
+                    # compute evening part for day1
+                    evening_start = max(start_dt, start_dt.replace(hour=18, minute=0, second=0, microsecond=0))
+                    if day1_end > evening_start and day1_end > start_dt:
+                        ev = round((day1_end - evening_start).total_seconds() / 3600.0, 2)
+                        if ev > 0:
+                            rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, evening_start.strftime("%H:%M:%S"), day1_end.strftime("%H:%M:%S"), str(ev), "Evening", "Cross-midnight part day1"])
+                    # day2: from 00:00 to ts_dt
+                    day2_start = datetime.combine(ts_dt.date(), dtime(0,0,0))
+                    # for day2, if it's weekend/holiday count fully, else if after 00:00 and before 04:00 count as early OT
+                    if _is_weekend(day2_start) or (day2_start.strftime("%Y-%m-%d") in hols):
+                        ev2 = round((ts_dt - day2_start).total_seconds() / 3600.0, 2)
+                        if ev2 > 0:
+                            rows_to_write.append([day2_start.strftime("%Y-%m-%d"), driver, day2_start.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), str(ev2), "Weekend/Holiday", "Cross-midnight part day2"])
+                    else:
+                        # early-morning OT (0:00-4:00) counting rule for OUT between 0:00 and 4:00
+                        if day2_start <= ts_dt < day2_start.replace(hour=4, minute=0, second=0, microsecond=0):
+                            ev2 = round((ts_dt - day2_start).total_seconds() / 3600.0, 2)
+                            if ev2 > 0:
+                                rows_to_write.append([day2_start.strftime("%Y-%m-%d"), driver, day2_start.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), str(ev2), "EarlyMorning", "Cross-midnight early OT"])
+                else:
+                    # same-day: evening OT if ts_dt >= 18:30
+                    if ts_dt >= t1830:
+                        evening_ot = round((ts_dt - t18).total_seconds() / 3600.0, 2)
+                        if evening_ot > 0:
+                            rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, "18:00:00", ts_dt.strftime("%H:%M:%S"), str(evening_ot), "Evening", "Clock Out evening OT"])
+                    # also handle OUT between 0:00 and 4:00 same-day unlikely since same-day implies no cross midnight
+
+    # write summary rows if any
+    if rows_to_write:
+        try:
+            _write_ot_rows(rows_to_write)
+        except Exception:
+            logger.exception("Failed to write OT summary rows")
+
+    # prepare reply message: only include parts that are >0
+    parts = []
+    if morning_ot > 0:
+        parts.append(f"Morning OT : {morning_ot} hour(s).")
+    if evening_ot > 0:
+        parts.append(f"Evening OT : {evening_ot} hour(s).")
+    if weekend_ot > 0:
+        parts.append(f"Weekend OT: {weekend_ot} hour(s).")
+
+    if parts:
+        # single-line receipt similar to your requested format
+        summary = " ".join(parts)
+        try:
+            await query.edit_message_text(f"Driver {driver} clocked {'in' if action=='IN' else 'out'} at {ts_dt.strftime('%H:%M')}. {summary}")
+        except Exception:
+            try:
+                await query.edit_message_text(f"Recorded {action} for {driver} at {rec[3]}")
+            except Exception:
+                pass
+    else:
+        # default short confirmation (no OT)
+        try:
+            await query.edit_message_text(f"Recorded {action} for {driver} at {rec[3]}")
+        except Exception:
+            pass
 
 
 async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
