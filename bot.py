@@ -2748,20 +2748,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    # TWO-LOOP MISSION LOGIC: only send merged summary on second cycle
-    chat_data = context.chat_data
-    if "mission_cycle" not in chat_data:
-                        # initialize from persisted sheet cache if available
-                        chat_data["mission_cycle"] = dict(_LOADED_MISSION_CYCLES) if isinstance(_LOADED_MISSION_CYCLES, dict) else {}
-
-    key_cycle = f"mission_cycle|{username}|{plate}"
-    cur_cycle = chat_data["mission_cycle"].get(key_cycle, 0) + 1
-    chat_data["mission_cycle"][key_cycle] = cur_cycle
-                    try:
-                        save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
-                    except Exception:
-                        logger.exception("Failed to persist mission_cycle after update")
-    logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
     # If it's the first (odd) cycle, skip sending summary now (clear pending and return)
     if (cur_cycle % 4) != 0:
