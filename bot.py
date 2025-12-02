@@ -1,5 +1,111 @@
 from __future__ import annotations
 from telegram import Bot, BotCommand
+
+
+# --- BEGIN AUTO-INSERT: mission/roundtrip helpers (added by assistant) ---
+import asyncio
+from datetime import datetime
+
+async def process_merged_roundtrip(context, username, plate, q, user_lang):
+    """Update mission_cycle, persist, and send summary when a full roundtrip (out+return) completes."""
+    try:
+        # ensure mission_cycle structure loaded
+        if "mission_cycle" not in context.chat_data:
+            try:
+                _ensure_mission_cycle_loaded(context.chat_data)
+            except Exception:
+                context.chat_data.setdefault("mission_cycle", {})
+        key_cycle = f"mission_cycle|{username}|{plate}"
+        cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 0) + 1
+        context.chat_data.setdefault("mission_cycle", {})[key_cycle] = cur_cycle
+        try:
+            # persist best-effort
+            save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
+        except Exception:
+            try:
+                logger.exception("Failed to persist mission_cycle after update (process_merged_roundtrip)")
+            except Exception:
+                pass
+        # Only trigger on even cycles (1 outbound, 2 return -> trigger)
+        if (cur_cycle % 2) != 0:
+            return
+        # Prepare summary and send
+        try:
+            nowdt = _now_dt()
+            month_start = datetime(nowdt.year, nowdt.month, 1)
+            if nowdt.month == 12:
+                month_end = datetime(nowdt.year + 1, 1, 1)
+            else:
+                month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+            counts = count_roundtrips_per_driver_month(month_start, month_end)
+            d_month = counts.get(username, 0)
+            year_start = datetime(nowdt.year, 1, 1)
+            counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
+            d_year = counts_year.get(username, 0)
+            plate_counts_month = 0
+            plate_counts_year = 0
+            try:
+                vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                target_plate = str(plate).strip()
+                year_end = datetime(nowdt.year + 1, 1, 1)
+                for r in vals_all[sidx:]:
+                    r = _ensure_row_length(r, M_MANDATORY_COLS)
+                    rpl = str(r[M_IDX_PLATE]).strip() if len(r) > M_IDX_PLATE else ""
+                    rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
+                    rstart = str(r[M_IDX_START]).strip() if len(r) > M_IDX_START else ""
+                    if not rpl or rpl != target_plate or rrt != "yes":
+                        continue
+                    sdt = parse_ts(rstart)
+                    if not sdt:
+                        continue
+                    if month_start <= sdt < month_end:
+                        plate_counts_month += 1
+                    if year_start <= sdt < year_end:
+                        plate_counts_year += 1
+            except Exception:
+                try:
+                    logger.exception("Failed to compute plate roundtrip counts (process_merged_roundtrip)")
+                except Exception:
+                    pass
+            month_label = month_start.strftime("%B")
+            msg = t(user_lang, "roundtrip_merged_notify", driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+            try:
+                await q.message.chat.send_message(msg)
+                # reset cycle
+                try:
+                    context.chat_data.setdefault("mission_cycle", {})[key_cycle] = 0
+                    save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
+                except Exception:
+                    try:
+                        logger.exception("Failed to reset/persist mission_cycle after sending summary")
+                    except Exception:
+                        pass
+            except Exception:
+                try:
+                    logger.exception("Failed to send merged roundtrip summary (process_merged_roundtrip)")
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                logger.exception("Failed preparing merged roundtrip summary (process_merged_roundtrip)")
+            except Exception:
+                pass
+    except Exception:
+        try:
+            logger.exception("Unhandled in process_merged_roundtrip") 
+        except Exception:
+            pass
+
+def write_ot_rows_safe(rows):
+    try:
+        _write_ot_rows(rows)
+    except Exception:
+        try:
+            logger.exception("write_ot_rows_safe failed")
+        except Exception:
+            pass
+
+# --- END AUTO-INSERT ---
 """
 Merged Driver Bot — usage notes (auto-inserted)
 
@@ -15,7 +121,6 @@ Notes:
 - This file was auto-merged. I tried to avoid changing existing behavior.
 - If you hit runtime errors (ImportError, NameError, KeyError), copy the full error text and send it back — I'll repair it.
 """
-
 
 def check_deployment_requirements():
     """
@@ -47,10 +152,6 @@ except Exception:
 from datetime import datetime, timedelta, time as dtime
 
 from typing import Optional, Dict, List, Any
-
-
-
-
 
 # --- BEGIN: Inserted OT & Clock functionality (from Bot(包含OT和打卡).txt) ---
 # Added OT Table headers
@@ -114,7 +215,6 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
     ws.append_row(row)
     return row
 
-
 def get_last_clock_entry(driver: str):
     ws = open_worksheet(OT_TAB)
     vals = ws.get_all_values()
@@ -126,10 +226,8 @@ def get_last_clock_entry(driver: str):
             return row
     return None
 
-
 def _is_weekend(dt: datetime) -> bool:
     return dt.weekday() >= 5  # 5=Sat,6=Sun
-
 
 def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool = False):
     """Return total OT hours for one shift, possibly crossing midnight."""
@@ -166,8 +264,6 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
 
     return round(total_ot, 2)
 
-
-
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -195,25 +291,9 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         hols = set()
     is_holiday = ts_dt.strftime("%Y-%m-%d") in hols
     is_weekend = _is_weekend(ts_dt)
+    # _write_ot_rows implementation moved to top-level
 
-    # helper to write OT summary rows
-    def _write_ot_rows(rows):
-        try:
-            SUM_TAB = os.getenv("OT_SUM_TAB", "Driver_OT_Calculated")
-            ws = open_worksheet(SUM_TAB)
-            headers = ['Date', 'Driver', 'Start Time', 'End Time', 'OT hours', 'OT type', 'Note']
-            ensure_sheet_headers_match(ws, headers)
-            for r in rows:
-                try:
-                    ws.append_row(r, value_input_option='USER_ENTERED')
-                except Exception:
-                    try:
-                        ws.append_row(r)
-                    except Exception:
-                        logger.exception("Failed to append OT calc row %s", r)
-        except Exception:
-            logger.exception("Failed writing OT calc rows")
-
+    
     rows_to_write = []
     morning_ot = 0.0
     evening_ot = 0.0
@@ -317,7 +397,6 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text(f"Recorded {action} for {driver} at {rec[3]}")
         except Exception:
             pass
-
 
 async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
@@ -540,12 +619,172 @@ DATE_FMT = "%Y-%m-%d"
 
 ROUNDTRIP_WINDOW_HOURS = int(os.getenv("ROUNDTRIP_WINDOW_HOURS", "24"))
 
-
 # --- BEGIN: Google Sheets API queue, caching and Worksheet proxy helpers ---
 import threading
 import queue
 import time
 from typing import Callable, Any, Optional, Dict, Tuple
+
+# --- BEGIN: Bot state persistence to Google Sheets (mission_cycle) ---
+import base64, json, io
+from google.oauth2 import service_account
+import gspread
+
+# --- BEGIN: ENV NAMES NORMALIZATION & Bot-state persistence helpers ---
+import base64, json
+from google.oauth2 import service_account
+import gspread
+
+# Compatibility alias: accept either GOOGLE_CREDS_B64 or GOOGLE_CREDS_BASE64
+import os
+if not os.getenv('GOOGLE_CREDS_B64') and os.getenv('GOOGLE_CREDS_BASE64'):
+    os.environ['GOOGLE_CREDS_B64'] = os.getenv('GOOGLE_CREDS_BASE64')
+
+if not os.getenv('GOOGLE_CREDS_B64') and os.getenv('GOOGLE_CREDS_BASE64'):
+    os.environ['GOOGLE_CREDS_B64'] = os.getenv('GOOGLE_CREDS_BASE64')
+_GSPREAD_SCOPES = ['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive']
+_LOADED_MISSION_CYCLES = {}
+def _get_gspread_client():
+    b64 = os.getenv('GOOGLE_CREDS_B64') or os.getenv('GOOGLE_CREDS_BASE64')
+    if not b64:
+        raise RuntimeError('Google credentials not provided (GOOGLE_CREDS_B64 / GOOGLE_CREDS_BASE64)')
+    info = json.loads(base64.b64decode(b64))
+    try:
+        creds = service_account.Credentials.from_service_account_info(info, scopes=_GSPREAD_SCOPES)
+    except Exception:
+        creds = service_account.Credentials.from_service_account_info(info)
+    return gspread.authorize(creds)
+def open_bot_state_worksheet():
+    gc = _get_gspread_client()
+    sheet_name = os.getenv('GOOGLE_SHEET_NAME'); sheet_id = os.getenv('SHEET_ID')
+    if sheet_name: sh = gc.open(sheet_name)
+    elif sheet_id: sh = gc.open_by_key(sheet_id)
+    else: raise RuntimeError('Provide GOOGLE_SHEET_NAME or SHEET_ID')
+    tab = os.getenv('BOT_STATE_TAB') or 'Bot_State'
+    try: ws = sh.worksheet(tab)
+    except Exception:
+        ws = sh.add_worksheet(tab, rows=100, cols=10); ws.update('A1:B1',[['Key','Value']])
+    return ws
+def load_mission_cycles_from_sheet():
+    global _LOADED_MISSION_CYCLES
+    try:
+        ws = open_bot_state_worksheet(); records = ws.get_all_records()
+        for r in records:
+            k = r.get('Key') or r.get('key'); v = r.get('Value') or r.get('value')
+            if k == 'mission_cycle' and v:
+                _LOADED_MISSION_CYCLES = json.loads(v); return _LOADED_MISSION_CYCLES
+    except Exception:
+        pass
+    _LOADED_MISSION_CYCLES = {}; return _LOADED_MISSION_CYCLES
+def save_mission_cycles_to_sheet(mdict):
+    try:
+        ws = open_bot_state_worksheet(); records = ws.get_all_records(); found=None
+        for idx,r in enumerate(records,start=2):
+            k = r.get('Key') or r.get('key')
+            if k == 'mission_cycle': found=idx; break
+        j=json.dumps(mdict, ensure_ascii=False)
+        if found: ws.update(f'B{found}', j)
+        else: ws.append_row(['mission_cycle', j])
+    except Exception:
+        try: logger.exception('Failed to save mission cycles to sheet')
+        except Exception: pass
+# --- END: ENV NAMES NORMALIZATION & Bot-state persistence helpers ---
+
+# Top-level OT writer (moved out of nested scope to avoid indentation issues)
+def _write_ot_rows(rows):
+    logger.info("Entering _write_ot_rows")
+    try:
+        SUM_TAB = os.getenv("OT_SUM_TAB", "Driver_OT_Calculated")
+        ws = open_worksheet(SUM_TAB)
+        headers = ['Date', 'Driver', 'Start Time', 'End Time', 'OT hours', 'OT type', 'Note']
+        try:
+            ensure_sheet_headers_match(ws, headers)
+        except Exception:
+            pass
+        for r in rows:
+            try:
+                ws.append_row(r, value_input_option='USER_ENTERED')
+            except Exception:
+                try:
+                    ws.append_row(r)
+                except Exception:
+                    logger.exception("Failed to append OT calc row %s", r)
+    except Exception:
+        logger.exception("Failed writing OT calc rows")
+
+_LOADED_MISSION_CYCLES = {}
+
+def _get_gspread_client():
+    # Accept either GOOGLE_CREDS_BASE64 or GOOGLE_CREDS_B64 env var
+    b64 = os.getenv("GOOGLE_CREDS_BASE64") or os.getenv("GOOGLE_CREDS_B64")
+    if not b64:
+        raise RuntimeError("Google credentials not provided in environment (GOOGLE_CREDS_BASE64 / GOOGLE_CREDS_B64)")
+    cred_json = base64.b64decode(b64)
+    creds = service_account.Credentials.from_service_account_info(json.loads(cred_json), scopes=['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive'])
+    return gspread.authorize(creds)
+
+def open_bot_state_worksheet():
+    gc = _get_gspread_client()
+    # prefer GOOGLE_SHEET_NAME, else fall back to SHEET_ID
+    sheet_name = os.getenv("GOOGLE_SHEET_NAME")
+    sheet_id = os.getenv("SHEET_ID")
+    if sheet_name:
+        sh = gc.open(sheet_name)
+    elif sheet_id:
+        sh = gc.open_by_key(sheet_id)
+    else:
+        raise RuntimeError("Neither GOOGLE_SHEET_NAME nor SHEET_ID provided")
+    tab = os.getenv("BOT_STATE_TAB") or "Bot_State"
+    try:
+        ws = sh.worksheet(tab)
+    except Exception:
+        # create worksheet if missing
+        ws = sh.add_worksheet(tab, rows=100, cols=10)
+        # set headers
+        ws.update("A1:B1", [["Key","Value"]])
+    return ws
+
+def load_mission_cycles_from_sheet():
+    global _LOADED_MISSION_CYCLES
+    try:
+        ws = open_bot_state_worksheet()
+        records = ws.get_all_records()
+        for r in records:
+            k = r.get("Key") or r.get("key")
+            v = r.get("Value") or r.get("value")
+            if k and v:
+                if k == "mission_cycle":
+                    try:
+                        _LOADED_MISSION_CYCLES = json.loads(v)
+                    except Exception:
+                        _LOADED_MISSION_CYCLES = {}
+                    return _LOADED_MISSION_CYCLES
+        # if not found, keep empty dict
+        _LOADED_MISSION_CYCLES = {}
+        return _LOADED_MISSION_CYCLES
+    except Exception:
+        # don't crash startup; leave empty
+        _LOADED_MISSION_CYCLES = {}
+        return _LOADED_MISSION_CYCLES
+
+def save_mission_cycles_to_sheet(mdict):
+    try:
+        ws = open_bot_state_worksheet()
+        records = ws.get_all_records()
+        found_row = None
+        for idx, r in enumerate(records, start=2):
+            k = r.get("Key") or r.get("key")
+            if k == "mission_cycle":
+                found_row = idx
+                break
+        json_val = json.dumps(mdict, ensure_ascii=False)
+        if found_row:
+            ws.update(f"B{found_row}", json_val)
+        else:
+            ws.append_row(["mission_cycle", json_val])
+    except Exception as e:
+        logger.exception("Failed to save mission cycles to sheet: %s", e)
+# --- END: Bot state persistence ---
 
 # Simple thread-based serial executor to avoid 429s.
 class GoogleApiQueue:
@@ -967,7 +1206,6 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             logger.exception("Failed to append leave row")
     # success
     return True
-
 
 def load_driver_map_from_env() -> Dict[str, List[str]]:
     if not DRIVER_PLATE_MAP_JSON:
@@ -2434,92 +2672,54 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
-
+                # ==== merged roundtrip handling (clean replacement) ====
+                # Ensure mission_cycle loaded
                 try:
-                    # TWO-LOOP MISSION LOGIC:
-                    # Track mission cycles in context.chat_data per driver+plate.
-                    chat_data = context.chat_data
-                    if "mission_cycle" not in chat_data:
-                        chat_data["mission_cycle"] = {}
-                    key_cycle = f"mission_cycle|{username}|{plate}"
-                    cur_cycle = chat_data["mission_cycle"].get(key_cycle, 0) + 1
-                    chat_data["mission_cycle"][key_cycle] = cur_cycle
-                    logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
-
-                    # Restore correct logic: only send summary on completed roundtrip (2 events)
-                    if (cur_cycle % 2) != 0:
-                        return
-                    # Simple de-duplication: skip if we've sent one very recently.
-                    if "last_merge_sent" not in chat_data:
-                        chat_data["last_merge_sent"] = {}
-                    last_map = chat_data["last_merge_sent"]
-
+                    _ensure_mission_cycle_loaded(context.chat_data)
+                except Exception:
+                    pass
+                key_cycle = f"mission_cycle|{username}|{plate}"
+                cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 0) + 1
+                context.chat_data.setdefault("mission_cycle", {})[key_cycle] = cur_cycle
+                logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
+                # persist immediately (best-effort)
+                try:
+                    save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
+                except Exception:
+                    try:
+                        logger.exception("Failed to persist mission_cycle after update")
+                    except Exception:
+                        pass
+                # Only trigger summary when a full roundtrip is complete (outbound + return)
+                if (cur_cycle % 2) != 0:
+                    # waiting for paired leg
+                    return
+                # Full roundtrip complete -> compute and send summary
+                try:
                     nowdt = _now_dt()
-                    key = f"{username}|{plate}"
-                    last_time = last_map.get(key)
-
-                    skip_seconds = 60
-                    if last_time:
-                        try:
-                            if isinstance(last_time, str):
-                                lt = datetime.fromisoformat(last_time)
-                            else:
-                                lt = last_time
-                            if (nowdt - lt).total_seconds() < skip_seconds:
-                                logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
-                                # Reset cycle so future attempts can run normally.
-                                chat_data["mission_cycle"][key_cycle] = 0
-                                try:
-                                    context.user_data.pop("pending_mission", None)
-                                except Exception:
-                                    pass
-                                return
-                        except Exception:
-                            pass
-
                     month_start = datetime(nowdt.year, nowdt.month, 1)
                     if nowdt.month == 12:
                         month_end = datetime(nowdt.year + 1, 1, 1)
                     else:
                         month_end = datetime(nowdt.year, nowdt.month + 1, 1)
-
                     counts = count_roundtrips_per_driver_month(month_start, month_end)
                     d_month = counts.get(username, 0)
                     year_start = datetime(nowdt.year, 1, 1)
                     counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
                     d_year = counts_year.get(username, 0)
-
                     plate_counts_month = 0
                     plate_counts_year = 0
                     try:
                         vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
-                        # normalize the plate we compare against
                         target_plate = str(plate).strip()
-                        # compute explicit month_end and year_end (reuse month_start, year_start defined earlier)
-                        try:
-                            # month_end already computed above in surrounding code; guard if missing
-                            month_end = month_end
-                        except Exception:
-                            if nowdt.month == 12:
-                                month_end = datetime(nowdt.year + 1, 1, 1)
-                            else:
-                                month_end = datetime(nowdt.year, nowdt.month + 1, 1)
                         year_end = datetime(nowdt.year + 1, 1, 1)
-
                         for r in vals_all[sidx:]:
-                            # Defensive: ensure row length and normalize values
                             r = _ensure_row_length(r, M_MANDATORY_COLS)
                             rpl = str(r[M_IDX_PLATE]).strip() if len(r) > M_IDX_PLATE else ""
                             rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
                             rstart = str(r[M_IDX_START]).strip() if len(r) > M_IDX_START else ""
-                            # Compare normalized plates (case-insensitive if you prefer: .upper())
-                            if not rpl:
+                            if not rpl or rpl != target_plate or rrt != "yes":
                                 continue
-                            if rpl != target_plate:
-                                continue
-                            if rrt != "yes":
-                                continue
-                            # parse and count within ranges
                             sdt = parse_ts(rstart)
                             if not sdt:
                                 continue
@@ -2528,38 +2728,51 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if year_start <= sdt < year_end:
                                 plate_counts_year += 1
                     except Exception:
-                        logger.exception("Failed to compute plate roundtrip counts for merged notify")
-
+                        try:
+                            logger.exception("Failed to compute plate roundtrip counts")
+                        except Exception:
+                            pass
                     month_label = month_start.strftime("%B")
-                    msg = t(user_lang, "roundtrip_merged_notify",
-                            driver=username, d_month=d_month, month=month_label,
-                            d_year=d_year, year=nowdt.year,
-                            plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                    msg = t(user_lang, "roundtrip_merged_notify", driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
                     try:
                         await q.message.chat.send_message(msg)
-                        # record sent time and reset the cycle counter
+                        # record sent time and reset cycle counter
                         try:
-                            last_map[key] = nowdt.isoformat()
-                            chat_data["last_merge_sent"] = last_map
-                            chat_data["mission_cycle"][key_cycle] = 0
+                            last_map = context.chat_data.get("last_merge_sent", {})
+                            last_map[f"{username}|{plate}"] = nowdt.isoformat()
+                            context.chat_data["last_merge_sent"] = last_map
+                            context.chat_data["mission_cycle"][key_cycle] = 0
+                            try:
+                                save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
+                            except Exception:
+                                try:
+                                    logger.exception("Failed to persist mission_cycle after reset")
+                                except Exception:
+                                    pass
                         except Exception:
-                            logger.exception("Failed to persist last_merge_sent timestamp or reset cycle")
+                            try:
+                                logger.exception("Failed to persist last_merge_sent timestamp or reset cycle")
+                            except Exception:
+                                pass
                     except Exception:
-                        logger.exception("Failed to send merged roundtrip summary.")
+                        try:
+                            logger.exception("Failed to send merged roundtrip summary.")
+                        except Exception:
+                            pass
                 except Exception:
-                    logger.exception("Failed preparing merged roundtrip summary.")
+                    try:
+                        logger.exception("Failed preparing merged roundtrip summary.")
+                    except Exception:
+                        pass
 
-                except Exception:
-                    logger.exception("Failed preparing merged roundtrip summary.")
-
-        except Exception:
-            logger.exception("Failed mission end flow")
-            await q.edit_message_text("❌ Internal error during mission end.")
-
-        context.user_data.pop("pending_mission", None)
-        return
     # ---------- end mission-related handlers ----------
 
+        except Exception:
+            try:
+                logger.exception("Closed missing except for mission handler")
+            except Exception:
+                pass
+            pass
     if data.startswith("start|") or data.startswith("end|"):
         try:
             action, plate = data.split("|", 1)
@@ -2660,16 +2873,24 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    # TWO-LOOP MISSION LOGIC: only send merged summary after return leg (2 events)
+    # TWO-LOOP MISSION LOGIC: only send merged summary on second cycle
     chat_data = context.chat_data
     if "mission_cycle" not in chat_data:
         chat_data["mission_cycle"] = {}
     key_cycle = f"mission_cycle|{username}|{plate}"
     cur_cycle = chat_data["mission_cycle"].get(key_cycle, 0) + 1
     chat_data["mission_cycle"][key_cycle] = cur_cycle
+    try:
+        save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
+    except Exception:
+        logger.exception("Failed to persist mission_cycle after update")
     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-    # If it's the first (odd) cycle, skip sending summary now (clear pending and return)
+    try:
+                        save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
+    except Exception:
+                        logger.exception("Failed to persist mission_cycle after update")
+# If it's the first (odd) cycle, skip sending summary now (clear pending and return)
     if (cur_cycle % 2) != 0:
         try:
             context.user_data.pop("pending_mission", None)
@@ -2741,9 +2962,6 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
     else:
         await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
 
-
-
-
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /debug_bot - replies with a self-check report including env vars and current bot commands.
@@ -2791,7 +3009,6 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=user.id, text=text)
         except Exception:
             pass
-
 
 AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
 
@@ -2911,7 +3128,6 @@ async def delete_command_message(update: Update, context: ContextTypes.DEFAULT_T
             await update.effective_message.delete()
     except Exception:
         pass
-
 
 async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -3049,8 +3265,6 @@ def _delete_telegram_webhook(token: str) -> bool:
         logger.exception("Failed to call deleteWebhook: %s", e)
         return False
 
-
-
 async def _send_startup_debug(application):
     """
     Send startup debug report to MENU_CHAT_ID or SUMMARY_CHAT_ID if configured.
@@ -3080,8 +3294,6 @@ async def _send_startup_debug(application):
         await application.bot.send_message(chat_id=chat_id, text=text)
     except Exception:
         pass
-
-
 
 def main():
     check_deployment_requirements()
@@ -3117,7 +3329,6 @@ def main():
     except Exception:
         pass
     # --- end set commands ---
-
 
     if LOCAL_TZ and ZoneInfo:
         try:
@@ -3190,4 +3401,3 @@ def main():
 if __name__ == "__main__":
     
     main()
-main()\n\n# Startup: attempt to load bot-state mission cycles\ntry:\n    _LOADED_MISSION_CYCLES = load_mission_cycles_from_sheet()\n    logger.info('Loaded mission_cycle state from sheet: %d keys', len(_LOADED_MISSION_CYCLES))\nexcept Exception:\n    logger.exception('Failed to load mission_cycle from sheet at startup')\n
