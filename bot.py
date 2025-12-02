@@ -2446,8 +2446,8 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # Restore correct logic: only send summary on 4th cycle
-                    if (cur_cycle % 4) != 0:
+                    # Restore correct logic: only send summary on completed roundtrip (2 events)
+                    if (cur_cycle % 2) != 0:
                         return
                     # Simple de-duplication: skip if we've sent one very recently.
                     if "last_merge_sent" not in chat_data:
@@ -2660,7 +2660,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    # TWO-LOOP MISSION LOGIC: only send merged summary on second cycle
+    # TWO-LOOP MISSION LOGIC: only send merged summary after return leg (2 events)
     chat_data = context.chat_data
     if "mission_cycle" not in chat_data:
         chat_data["mission_cycle"] = {}
@@ -2670,7 +2670,7 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
     # If it's the first (odd) cycle, skip sending summary now (clear pending and return)
-    if (cur_cycle % 4) != 0:
+    if (cur_cycle % 2) != 0:
         try:
             context.user_data.pop("pending_mission", None)
         except Exception:
