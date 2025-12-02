@@ -528,6 +528,126 @@ import gspread
 import base64, json
 from google.oauth2 import service_account
 import gspread
+# --- BEGIN: Refactor Helpers for mission roundtrip / bot-state / OT (B) ---
+import base64, json, asyncio
+from datetime import datetime
+# Ensure scopes for gspread usage already handled in helpers inserted earlier.
+async def process_merged_roundtrip(context, username, plate, q, user_lang):
+    """
+    Handle a merged roundtrip: update mission_cycle, persist, and send summary when full roundtrip completed.
+    This is async so it can be awaited from handlers.
+    """
+    try:
+        _ensure_mission_cycle_loaded(context.chat_data)
+    except Exception:
+        pass
+    key_cycle = f"mission_cycle|{username}|{plate}"
+    cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 0) + 1
+    context.chat_data.setdefault("mission_cycle", {})[key_cycle] = cur_cycle
+    try:
+        save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
+    except Exception:
+        try:
+            logger.exception("Failed to persist mission_cycle after update (process_merged_roundtrip)")
+        except Exception:
+            pass
+    # Only trigger summary when a full roundtrip is complete (outbound + return)
+    if (cur_cycle % 2) != 0:
+        # waiting for paired leg
+        return
+    # Full roundtrip complete -> compute and send summary
+    try:
+        nowdt = _now_dt()
+        month_start = datetime(nowdt.year, nowdt.month, 1)
+        if nowdt.month == 12:
+            month_end = datetime(nowdt.year + 1, 1, 1)
+        else:
+            month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+        counts = count_roundtrips_per_driver_month(month_start, month_end)
+        d_month = counts.get(username, 0)
+        year_start = datetime(nowdt.year, 1, 1)
+        counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
+        d_year = counts_year.get(username, 0)
+        # plate counts in month/year
+        plate_counts_month = 0
+        plate_counts_year = 0
+        try:
+            vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+            target_plate = str(plate).strip()
+            year_end = datetime(nowdt.year + 1, 1, 1)
+            for r in vals_all[sidx:]:
+                r = _ensure_row_length(r, M_MANDATORY_COLS)
+                rpl = str(r[M_IDX_PLATE]).strip() if len(r) > M_IDX_PLATE else ""
+                rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
+                rstart = str(r[M_IDX_START]).strip() if len(r) > M_IDX_START else ""
+                if not rpl or rpl != target_plate or rrt != "yes":
+                    continue
+                sdt = parse_ts(rstart)
+                if not sdt:
+                    continue
+                if month_start <= sdt < month_end:
+                    plate_counts_month += 1
+                if year_start <= sdt < year_end:
+                    plate_counts_year += 1
+        except Exception:
+            try:
+                logger.exception("Failed to compute plate roundtrip counts (process_merged_roundtrip)")
+            except Exception:
+                pass
+        month_label = month_start.strftime("%B")
+        msg = t(user_lang, "roundtrip_merged_notify", driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+        try:
+            await q.message.chat.send_message(msg)
+            # record sent time and reset cycle counter
+            try:
+                last_map = context.chat_data.get("last_merge_sent", {})
+                last_map[f"{username}|{plate}"] = nowdt.isoformat()
+                context.chat_data["last_merge_sent"] = last_map
+                context.chat_data["mission_cycle"][key_cycle] = 0
+                try:
+                    save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
+                except Exception:
+                    try:
+                        logger.exception("Failed to persist mission_cycle after reset (process_merged_roundtrip)")
+                    except Exception:
+                        pass
+            except Exception:
+                try:
+                    logger.exception("Failed to persist last_merge_sent timestamp or reset cycle (process_merged_roundtrip)")
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                logger.exception("Failed to send merged roundtrip summary (process_merged_roundtrip).")
+            except Exception:
+                pass
+    except Exception:
+        try:
+            logger.exception("Failed preparing merged roundtrip summary (process_merged_roundtrip).")
+        except Exception:
+            pass
+
+def persist_mission_cycles_safe(mdict):
+    try:
+        save_mission_cycles_to_sheet(mdict)
+    except Exception:
+        try:
+            logger.exception("persist_mission_cycles_safe failed")
+        except Exception:
+            pass
+
+# Top-level OT writer (ensure exists)
+def write_ot_rows_safe(rows):
+    try:
+        _write_ot_rows(rows)
+    except Exception:
+        try:
+            logger.exception("write_ot_rows_safe failed")
+        except Exception:
+            pass
+
+# --- END: Refactor Helpers (B) ---
+
 if not os.getenv('GOOGLE_CREDS_B64') and os.getenv('GOOGLE_CREDS_BASE64'):
     os.environ['GOOGLE_CREDS_B64'] = os.getenv('GOOGLE_CREDS_BASE64')
 _GSPREAD_SCOPES = ['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive']
@@ -2560,8 +2680,8 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
-                # ==== merged roundtrip handling (clean replacement) ====
-                # Ensure mission_cycle loaded
+                await process_merged_roundtrip(context, username, plate, q, user_lang)
+
                 try:
                     _ensure_mission_cycle_loaded(context.chat_data)
                 except Exception:
