@@ -598,8 +598,7 @@ TR = {
         "mission_start_ok": "Driver {driver} {plate} departures from {dep} at {ts}.",
         "mission_end_ok": "Driver {driver} {plate} arrives at {arr} at {ts}.",
         "mission_no_open": "No open mission found for {plate}.",
-        "roundtrip_merged_notify": "✅ Driver {driver} completed {d_month} mission(s) in {month_name} and {d_year} mission(s) in {year}.
-{plate} completed {p_month} mission(s) in {month_name} and {p_year} mission(s) in {year}.",
+        "roundtrip_merged_notify": "✅ Driver {driver} completed {d_month} mission(s) in {month} and {d_year} mission(s) in {year}. {plate} completed {p_month} mission(s) in {month} and {p_year} mission(s) in {year}.",
         "lang_set": "Language set to {lang}.",
         "invalid_amount": "Invalid amount — please send a numeric value like `23.5`.",
         "invalid_odo": "Invalid odometer — please send numeric KM like `12345` or `12345KM`.",
