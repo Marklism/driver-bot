@@ -101,7 +101,7 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
     ws = open_worksheet(OT_TAB)
 
     # Ensure headers exist
-    ensure_sheet_headers_match(ws, OT_HEADERS)
+    ensure_sheet_headers_match(OT_TAB, OT_HEADERS)
 
     row = [
         dt.strftime("%Y-%m-%d"),
@@ -167,7 +167,6 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
     return round(total_ot, 2)
 
 
-
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -175,128 +174,15 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     driver = user.username or user.first_name
 
-    # get last entry before toggling
     last = get_last_clock_entry(driver)
     now_in = last is None or last[O_IDX_ACTION] == "OUT"
 
     action = "IN" if now_in else "OUT"
     rec = record_clock_entry(driver, action)
 
-    # parse timestamp
-    try:
-        ts_dt = datetime.strptime(rec[3], "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        ts_dt = _now_dt()
+    msg = f"Recorded **{action}** for {driver} at {rec[3]}"
+    await query.edit_message_text(msg)
 
-    # holiday/weekend
-    hol_env = os.getenv("HOLIDAYS", "").strip()
-    is_holiday = False
-    if hol_env:
-        try:
-            hols = [h.strip() for h in hol_env.split(",") if h.strip()]
-            is_holiday = ts_dt.strftime("%Y-%m-%d") in hols
-        except Exception:
-            is_holiday = False
-    is_weekend = _is_weekend(ts_dt)
-
-    # prepare writing helper
-    def _write_ot_rows(rows):
-        try:
-            SUM_TAB = os.getenv("OT_SUM_TAB", "Driver_OT_Calculated")
-            ws = open_worksheet(SUM_TAB)
-            headers = ['Date', 'Driver', 'Start Time', 'End Time', 'OT hours', 'OT type', 'Note']
-            ensure_sheet_headers_match(ws, headers)
-            for r in rows:
-                try:
-                    ws.append_row(r, value_input_option='USER_ENTERED')
-                except Exception:
-                    try:
-                        ws.append_row(r)
-                    except Exception:
-                        logger.exception("Failed to append OT calc row %s", r)
-        except Exception:
-            logger.exception("Failed writing OT calc rows")
-
-    morning_ot = 0.0; evening_ot = 0.0; weekend_ot = 0.0
-    rows_to_write = []
-
-    if action == "IN":
-        if not is_weekend and not is_holiday:
-            t7 = ts_dt.replace(hour=7, minute=0, second=0, microsecond=0)
-            if ts_dt < t7:
-                end_morning = t7
-                morning_ot = round((end_morning - ts_dt).total_seconds() / 3600.0, 2)
-                if morning_ot > 0:
-                    row = [ts_dt.date().strftime("%Y-%m-%d"), driver, ts_dt.strftime("%H:%M:%S"), "08:00:00", f"{morning_ot:.2f}", "", "Morning OT on clock in"]
-                    rows_to_write.append(row)
-    else:
-        # OUT
-        start_dt = None
-        if last and len(last) > O_IDX_TIME:
-            try:
-                start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                start_dt = None
-        if start_dt is None:
-            start_dt = ts_dt.replace(hour=0, minute=0, second=0)
-
-        if is_weekend or is_holiday:
-            if start_dt.date() != ts_dt.date():
-                midnight = start_dt.replace(hour=23, minute=59, second=59)
-                ot1 = round((midnight - start_dt).total_seconds() / 3600.0, 2)
-                row1 = [start_dt.date().strftime("%Y-%m-%d"), driver, start_dt.strftime("%H:%M:%S"), midnight.strftime("%H:%M:%S"), f"{ot1:.2f}", "", "Weekend OT"]
-                rows_to_write.append(row1)
-                zero = ts_dt.replace(hour=0, minute=0, second=0)
-                ot2 = round((ts_dt - zero).total_seconds() / 3600.0, 2)
-                row2 = [ts_dt.date().strftime("%Y-%m-%d"), driver, zero.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), f"{ot2:.2f}", "", "Weekend OT"]
-                rows_to_write.append(row2)
-                weekend_ot = round(ot1 + ot2, 2)
-            else:
-                ot = round((ts_dt - start_dt).total_seconds() / 3600.0, 2)
-                row = [start_dt.date().strftime("%Y-%m-%d"), driver, start_dt.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), f"{ot:.2f}", "", "Weekend OT"]
-                rows_to_write.append(row)
-                weekend_ot = ot
-        else:
-            t1830 = ts_dt.replace(hour=18, minute=30, second=0, microsecond=0)
-            t18 = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-            if ts_dt > t1830:
-                evening_ot = round((ts_dt - t18).total_seconds() / 3600.0, 2)
-                row = [ts_dt.date().strftime("%Y-%m-%d"), driver, "18:00:00", ts_dt.strftime("%H:%M:%S"), f"{evening_ot:.2f}", "", "Evening OT"]
-                rows_to_write.append(row)
-
-    total_ot = round(morning_ot + evening_ot + weekend_ot, 2)
-    if rows_to_write:
-        _write_ot_rows(rows_to_write)
-
-    if total_ot > 0:
-        parts = []
-        if morning_ot > 0:
-            parts.append(f"Morning OT : {morning_ot:.2f} hour(s).")
-        if evening_ot > 0:
-            parts.append(f"Evening OT : {evening_ot:.2f} hour(s).")
-        if weekend_ot > 0:
-            parts.append(f"Weekend OT: {weekend_ot:.2f} hour(s).")
-        parts_text = ' '.join(parts)
-        time_str = ts_dt.strftime("%H:%M")
-        verb = "clocked in at" if action == "IN" else "clocked out at"
-        msg = f"Driver {driver} {verb} {time_str}. {parts_text}"
-        try:
-            await query.edit_message_text(msg)
-        except Exception:
-            try:
-                await query.message.reply_text(msg)
-            except Exception:
-                logger.exception("Failed to send OT receipt message")
-    else:
-        # No OT -> original recorded message
-        msg = f"Recorded **{action}** for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}"
-        try:
-            await query.edit_message_text(msg)
-        except Exception:
-            try:
-                await query.message.reply_text(msg)
-            except Exception:
-                logger.exception("Failed to send recorded message")
 
 async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
