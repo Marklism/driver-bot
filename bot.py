@@ -2446,14 +2446,9 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # Removed early-return so merged summary is sent immediately.
+                    # Restore correct logic: only send summary on 4th cycle
                     if (cur_cycle % 4) != 0:
-                        try:
-                            context.user_data.pop("pending_mission", None)
-                        except Exception:
-                            pass
-                        # previously returned here; now continue to send summary immediately
-                    # We're on the second loop; proceed to prepare and send summary.
+                        return
                     # Simple de-duplication: skip if we've sent one very recently.
                     if "last_merge_sent" not in chat_data:
                         chat_data["last_merge_sent"] = {}
