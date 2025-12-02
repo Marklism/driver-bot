@@ -2040,50 +2040,110 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
 
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
-            
-if res.get("merged"):
+            if res.get("merged"):
 
                 try:
-                    # Persist merged event to a dedicated sheet so counts survive restarts.
-                    MERGED_TAB = os.getenv("MERGED_TAB", "Merged_Events")
-                    try:
-                        mw = open_worksheet(MERGED_TAB)
-                        try:
-                            ensure_sheet_headers_match(mw, ["Date","Driver","Plate","EndTS"])
-                        except Exception:
-                            pass
-                        try:
-                            mw.append_row([_now_dt().strftime(DATE_FMT), username, plate, end_ts], value_input_option="USER_ENTERED")
-                        except Exception:
-                            logger.exception("Failed to append merged event to %s", MERGED_TAB)
-                    except Exception:
-                        logger.exception("Failed to open merged events sheet %s", MERGED_TAB)
+                    # TWO-LOOP MISSION LOGIC:
+                    # Track mission cycles in context.chat_data per driver+plate.
+                    chat_data = context.chat_data
+                    if "mission_cycle" not in chat_data:
+                        chat_data["mission_cycle"] = {}
+                    key_cycle = f"mission_cycle|{username}|{plate}"
+                    cur_cycle = chat_data["mission_cycle"].get(key_cycle, 0) + 1
+                    chat_data["mission_cycle"][key_cycle] = cur_cycle
+                    logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
-                    # Count persisted merged events for this driver+plate
-                    merged_count = 0
-                    try:
-                        mvals = open_worksheet(MERGED_TAB).get_all_values()
-                        if mvals:
-                            sidx = 1 if any("date" in c.lower() for c in mvals[0] if c) else 0
-                            for r in mvals[sidx:]:
-                                rd = str(r[1]).strip() if len(r) > 1 else ""
-                                rp = str(r[2]).strip() if len(r) > 2 else ""
-                                if rd == username and rp == plate:
-                                    merged_count += 1
-                    except Exception:
-                        logger.exception("Failed to count merged events in %s", MERGED_TAB)
-
-                    # Only send the summary when we've reached the 4th merged event (i.e. 4 segments completed)
-                    if (merged_count % 4) != 0:
+                    # Only send the full merged roundtrip summary on the second loop (even-numbered cycle).
+                    if (cur_cycle % 2) != 0:
+                        # First loop finished — do not send summary yet. Clear pending mission and return.
                         try:
                             context.user_data.pop("pending_mission", None)
                         except Exception:
                             pass
                         return
+                    # We're on the second loop; proceed to prepare and send summary.
+                    # Simple de-duplication: skip if we've sent one very recently.
+                    if "last_merge_sent" not in chat_data:
+                        chat_data["last_merge_sent"] = {}
+                    last_map = chat_data["last_merge_sent"]
 
-                except Exception:
-                    logger.exception("Merged notify persistence logic failure")
-month_label = month_start.strftime("%Y-%m")
+                    nowdt = _now_dt()
+                    key = f"{username}|{plate}"
+                    last_time = last_map.get(key)
+
+                    skip_seconds = 60
+                    if last_time:
+                        try:
+                            if isinstance(last_time, str):
+                                lt = datetime.fromisoformat(last_time)
+                            else:
+                                lt = last_time
+                            if (nowdt - lt).total_seconds() < skip_seconds:
+                                logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
+                                # Reset cycle so future attempts can run normally.
+                                chat_data["mission_cycle"][key_cycle] = 0
+                                try:
+                                    context.user_data.pop("pending_mission", None)
+                                except Exception:
+                                    pass
+                                return
+                        except Exception:
+                            pass
+
+                    month_start = datetime(nowdt.year, nowdt.month, 1)
+                    if nowdt.month == 12:
+                        month_end = datetime(nowdt.year + 1, 1, 1)
+                    else:
+                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+
+                    counts = count_roundtrips_per_driver_month(month_start, month_end)
+                    d_month = counts.get(username, 0)
+                    year_start = datetime(nowdt.year, 1, 1)
+                    counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
+                    d_year = counts_year.get(username, 0)
+
+                    plate_counts_month = 0
+                    plate_counts_year = 0
+                    try:
+                        vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                        # normalize the plate we compare against
+                        target_plate = str(plate).strip()
+                        # compute explicit month_end and year_end (reuse month_start, year_start defined earlier)
+                        try:
+                            # month_end already computed above in surrounding code; guard if missing
+                            month_end = month_end
+                        except Exception:
+                            if nowdt.month == 12:
+                                month_end = datetime(nowdt.year + 1, 1, 1)
+                            else:
+                                month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+                        year_end = datetime(nowdt.year + 1, 1, 1)
+
+                        for r in vals_all[sidx:]:
+                            # Defensive: ensure row length and normalize values
+                            r = _ensure_row_length(r, M_MANDATORY_COLS)
+                            rpl = str(r[M_IDX_PLATE]).strip() if len(r) > M_IDX_PLATE else ""
+                            rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
+                            rstart = str(r[M_IDX_START]).strip() if len(r) > M_IDX_START else ""
+                            # Compare normalized plates (case-insensitive if you prefer: .upper())
+                            if not rpl:
+                                continue
+                            if rpl != target_plate:
+                                continue
+                            if rrt != "yes":
+                                continue
+                            # parse and count within ranges
+                            sdt = parse_ts(rstart)
+                            if not sdt:
+                                continue
+                            if month_start <= sdt < month_end:
+                                plate_counts_month += 1
+                            if year_start <= sdt < year_end:
+                                plate_counts_year += 1
+                    except Exception:
+                        logger.exception("Failed to compute plate roundtrip counts for merged notify")
+
+                    month_label = month_start.strftime("%Y-%m")
                     msg = t(user_lang, "roundtrip_merged_notify",
                             driver=username, d_month=d_month, month=month_label,
                             d_year=d_year, year=nowdt.year,
