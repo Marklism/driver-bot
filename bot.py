@@ -899,80 +899,6 @@ def open_worksheet(tab: str = ""):
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
         return sh.sheet1
 
-
-# --- BEGIN: Bot state persistence to Google Sheets (mission_cycle) ---
-def save_mission_cycles_to_sheet(cycles: dict):
-    """Save mission_cycle mapping (dict) as JSON into a small sheet (Bot_State)."""
-    try:
-        tab = os.getenv("BOT_STATE_TAB", "Bot_State")
-        ws = open_worksheet(tab)
-        # ensure headers
-        ensure_sheet_headers_match(ws, ["Key", "Value"])
-        val = json.dumps(cycles)
-        # try to find existing row with Key == "mission_cycle"
-        vals = ws.get_all_values()
-        start_idx = 1 if vals and any("Key".lower() in c.lower() for c in vals[0] if c) else 0
-        found = False
-        for i,r in enumerate(vals[start_idx:], start_idx):
-            if len(r) > 0 and str(r[0]).strip() == "mission_cycle":
-                # update column B
-                try:
-                    ws.update_cell(i+1, 2, val)
-                except Exception:
-                    # fallback: delete+insert
-                    existing = _ensure_row_length(r, 2)
-                    existing[1] = val
-                    try:
-                        ws.delete_rows(i+1)
-                    except Exception:
-                        pass
-                    try:
-                        ws.insert_row(existing, i+1)
-                    except Exception:
-                        pass
-                found = True
-                break
-        if not found:
-            try:
-                ws.insert_row(["mission_cycle", val], index=start_idx+1)
-            except Exception:
-                try:
-                    ws.append_row(["mission_cycle", val])
-                except Exception:
-                    logger.exception("Failed to append mission cycles row")
-    except Exception:
-        logger.exception("Failed to save mission cycles to sheet")
-
-
-def load_mission_cycles_from_sheet() -> dict:
-    """Load mission_cycle mapping from Bot_State sheet. Returns dict."""
-    out = {}
-    try:
-        tab = os.getenv("BOT_STATE_TAB", "Bot_State")
-        ws = open_worksheet(tab)
-        vals = ws.get_all_values()
-        if not vals or len(vals) < 2:
-            return out
-        start_idx = 1 if any("Key".lower() in c.lower() for c in vals[0] if c) else 0
-        for r in vals[start_idx:]:
-            if len(r) > 0 and str(r[0]).strip() == "mission_cycle":
-                try:
-                    v = r[1] if len(r) > 1 else ""
-                    if v:
-                        out = json.loads(v)
-                        if isinstance(out, dict):
-                            return out
-                except Exception:
-                    logger.exception("Failed to parse mission cycles JSON from sheet")
-                break
-    except Exception:
-        logger.exception("Failed to load mission cycles from sheet")
-    return out
-
-# Cache loaded cycles at module level to avoid repeated reads until explicitly saved.
-_LOADED_MISSION_CYCLES = load_mission_cycles_from_sheet()
-# --- END: Bot state persistence ---
-
 async def process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user):
     """Helper to append leave row with Leave Days, check duplicates and exclude weekends/holidays."""
     try:
@@ -2514,16 +2440,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # Track mission cycles in context.chat_data per driver+plate.
                     chat_data = context.chat_data
                     if "mission_cycle" not in chat_data:
-                        # initialize from persisted sheet cache if available
-                        chat_data["mission_cycle"] = dict(_LOADED_MISSION_CYCLES) if isinstance(_LOADED_MISSION_CYCLES, dict) else {}
-
+                        chat_data["mission_cycle"] = {}
                     key_cycle = f"mission_cycle|{username}|{plate}"
                     cur_cycle = chat_data["mission_cycle"].get(key_cycle, 0) + 1
                     chat_data["mission_cycle"][key_cycle] = cur_cycle
-                    try:
-                        save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
-                    except Exception:
-                        logger.exception("Failed to persist mission_cycle after update")
                     logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
                     # Restore correct logic: only send summary on 4th cycle
@@ -2549,10 +2469,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 logger.info("Skipping duplicate merged notification for %s (within %ds)", key, skip_seconds)
                                 # Reset cycle so future attempts can run normally.
                                 chat_data["mission_cycle"][key_cycle] = 0
-                            try:
-                                save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
-                            except Exception:
-                                logger.exception("Failed to persist mission_cycle after reset")
                                 try:
                                     context.user_data.pop("pending_mission", None)
                                 except Exception:
@@ -2626,10 +2542,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             last_map[key] = nowdt.isoformat()
                             chat_data["last_merge_sent"] = last_map
                             chat_data["mission_cycle"][key_cycle] = 0
-                            try:
-                                save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
-                            except Exception:
-                                logger.exception("Failed to persist mission_cycle after reset")
                         except Exception:
                             logger.exception("Failed to persist last_merge_sent timestamp or reset cycle")
                     except Exception:
@@ -2748,6 +2660,14 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+    # TWO-LOOP MISSION LOGIC: only send merged summary on second cycle
+    chat_data = context.chat_data
+    if "mission_cycle" not in chat_data:
+        chat_data["mission_cycle"] = {}
+    key_cycle = f"mission_cycle|{username}|{plate}"
+    cur_cycle = chat_data["mission_cycle"].get(key_cycle, 0) + 1
+    chat_data["mission_cycle"][key_cycle] = cur_cycle
+    logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
 
     # If it's the first (odd) cycle, skip sending summary now (clear pending and return)
     if (cur_cycle % 4) != 0:
