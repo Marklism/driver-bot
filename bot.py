@@ -3359,4 +3359,3 @@ def increment_mission_cycle_pairing(driver, plate, departure, arrival):
 def on_roundtrip_complete(driver, plate, count, mission_cycles):
     logging.info(f'[HOOK] on_roundtrip_complete: {driver} {plate} count={count}')
 # ---- end appended helpers ----
-
