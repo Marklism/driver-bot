@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-
+from __future__ import annotations
+# bot_fixed_merged.py
+# Merged bot that integrates bot_helpers_fixed for mission cycle state and OT calculation.
+# This is a self-contained, deployable bot.py. Adapt the command handlers to your UI as needed.
 
 # --- START AUTO-INSERT: Bot-state safe guards (DO NOT DUPLICATE) ---
 # Ensure mission cycles global exists early to avoid NameError at import/startup.
@@ -59,10 +62,6 @@ try:
 except Exception:
     _STARTUP_LOADED = {}
 # --- END AUTO-INSERT ---
-from __future__ import annotations
-# bot_fixed_merged.py
-# Merged bot that integrates bot_helpers_fixed for mission cycle state and OT calculation.
-# This is a self-contained, deployable bot.py. Adapt the command handlers to your UI as needed.
 
 import os
 import logging
