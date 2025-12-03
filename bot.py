@@ -1,4 +1,64 @@
 #!/usr/bin/env python3
+
+
+# --- START AUTO-INSERT: Bot-state safe guards (DO NOT DUPLICATE) ---
+# Ensure mission cycles global exists early to avoid NameError at import/startup.
+_LOADED_MISSION_CYCLES = {}
+
+# Safe placeholder implementations for bot-state persistence.
+# If the real implementations are defined later in the file (from merged helpers),
+# they will override these names automatically.
+def load_mission_cycles_from_sheet(sheet_name=None):
+    """
+    Safe placeholder: attempt to load persisted mission cycles.
+    If the real implementation is defined later it will replace this function.
+    """
+    try:
+        return _LOADED_MISSION_CYCLES.copy()
+    except Exception:
+        return {}
+
+def save_mission_cycles_to_sheet(mission_cycles, sheet_name=None):
+    """
+    Safe placeholder: store in-memory and return False to indicate not persisted.
+    Real implementation (if present later) will override.
+    """
+    global _LOADED_MISSION_CYCLES
+    try:
+        _LOADED_MISSION_CYCLES = dict(mission_cycles or {})
+    except Exception:
+        _LOADED_MISSION_CYCLES = {}
+    return False
+
+# Guarded import for optional helper module 'bot_helpers_fixed' (some versions used it).
+try:
+    from bot_helpers_fixed import (
+        load_mission_cycles_from_sheet as _bh_load,
+        save_mission_cycles_to_sheet as _bh_save,
+        increment_mission_cycle_pairing as _bh_increment,
+        record_clock_entry as _bh_record_clock_entry,
+        process_clock_out_and_calc_ot as _bh_process_clock_out_and_calc_ot,
+        on_roundtrip_complete as _bh_on_roundtrip_complete,
+    )
+    load_mission_cycles_from_sheet = _bh_load
+    save_mission_cycles_to_sheet = _bh_save
+    increment_mission_cycle_pairing = _bh_increment
+    record_clock_entry = _bh_record_clock_entry
+    process_clock_out_and_calc_ot = _bh_process_clock_out_and_calc_ot
+    on_roundtrip_complete = _bh_on_roundtrip_complete
+except Exception:
+    pass
+
+# Safe startup loader: try to load mission cycles but never fail startup.
+try:
+    _STARTUP_LOADED = load_mission_cycles_from_sheet()
+    try:
+        _LOADED_MISSION_CYCLES.update(_STARTUP_LOADED or {})
+    except Exception:
+        _LOADED_MISSION_CYCLES = dict(_STARTUP_LOADED or {})
+except Exception:
+    _STARTUP_LOADED = {}
+# --- END AUTO-INSERT ---
 from __future__ import annotations
 # bot_fixed_merged.py
 # Merged bot that integrates bot_helpers_fixed for mission cycle state and OT calculation.
@@ -59,8 +119,7 @@ def _hook_on_roundtrip_complete(driver, plate, count, mission_cycles):
 # Patch the helper's hook
 # Load mission cycles at startup (best-effort)
 try:
-# _LOADED assignment moved to after helper definitions (auto-fixed)
-# _LOADED = load_mission_cycles_from_sheet()
+    _LOADED = load_mission_cycles_from_sheet()
     logger.info('Loaded mission cycles at startup: %d', len(_LOADED))
 except Exception:
     logger.exception('Failed loading mission cycles at startup. Continuing with empty.')
@@ -153,14 +212,6 @@ def main():
     app = build_app()
     logger.info('Starting Telegram bot...')
     app.run_polling()
-
-
-# --- Startup: attempt to load bot-state mission cycles (moved here after helper defs) ---
-try:
-    _LOADED_MISSION_CYCLES = load_mission_cycles_from_sheet()
-    logger.info('Loaded mission_cycle state from sheet: %d', len(_LOADED_MISSION_CYCLES))
-except Exception:
-    logger.exception('Failed to load mission_cycle from sheet at startup')
 
 if __name__ == '__main__':
     main()
