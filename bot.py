@@ -57,9 +57,13 @@ def _hook_on_roundtrip_complete(driver, plate, count, mission_cycles):
         logger.exception('Failed in hook scheduling for roundtrip notification.')
 
 # Patch the helper's hook
-# Load mission cycles placeholder (will load after functions are defined)
-_LOADED = {}
-logger.info('Mission cycles placeholder initialized (will load later).')
+# Load mission cycles at startup (best-effort)
+try:
+# _LOADED assignment moved to after helper definitions (auto-fixed)
+# _LOADED = load_mission_cycles_from_sheet()
+    logger.info('Loaded mission cycles at startup: %d', len(_LOADED))
+except Exception:
+    logger.exception('Failed loading mission cycles at startup. Continuing with empty.')
 
 # --- Telegram command handlers ---
 
@@ -149,6 +153,14 @@ def main():
     app = build_app()
     logger.info('Starting Telegram bot...')
     app.run_polling()
+
+
+# --- Startup: attempt to load bot-state mission cycles (moved here after helper defs) ---
+try:
+    _LOADED_MISSION_CYCLES = load_mission_cycles_from_sheet()
+    logger.info('Loaded mission_cycle state from sheet: %d', len(_LOADED_MISSION_CYCLES))
+except Exception:
+    logger.exception('Failed to load mission_cycle from sheet at startup')
 
 if __name__ == '__main__':
     main()
@@ -3343,15 +3355,3 @@ def on_roundtrip_complete(driver, plate, count, mission_cycles):
     logging.info(f'[HOOK] on_roundtrip_complete: {driver} {plate} count={count}')
 # ---- end appended helpers ----
 
-
-
-# --- Post-definition startup: load mission cycles from sheet if available ---
-try:
-    if 'load_mission_cycles_from_sheet' in globals():
-        _LOADED_MISSION_CYCLES = load_mission_cycles_from_sheet()
-        logging.getLogger('driver-bot').info('Loaded mission cycles at startup: %d', len(_LOADED_MISSION_CYCLES))
-    else:
-        _LOADED_MISSION_CYCLES = {}
-        logging.getLogger('driver-bot').info('load_mission_cycles_from_sheet not defined; using in-memory mission cycles.')
-except Exception:
-    logging.getLogger('driver-bot').exception('Failed loading mission cycles at startup; using in-memory.')
