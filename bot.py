@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 # bot_fixed_merged.py
 # Merged bot that integrates bot_helpers_fixed for mission cycle state and OT calculation.
