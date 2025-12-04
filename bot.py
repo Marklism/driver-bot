@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from telegram import Bot, BotCommand
 """
 Merged Driver Bot — usage notes (auto-inserted)
@@ -21,7 +22,6 @@ def check_deployment_requirements():
     Deployment check: prints warnings about missing environment variables and missing optional imports.
     This runs at startup (inside main) to give clearer logs on Railway.
     """
-    import os, sys
     required_env = ["BOT_TOKEN", "SHEET_ID", "GOOGLE_CREDS_B64"]
     missing = [v for v in required_env if not os.getenv(v)]
     if missing:
@@ -413,7 +413,6 @@ except Exception:
 
 # --- END: Inserted OT & Clock functionality ---
 #!/usr/bin/env python3
-import os
 import json
 import base64
 import logging
