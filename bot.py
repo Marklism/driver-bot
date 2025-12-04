@@ -52,7 +52,7 @@ from typing import Optional, Dict, List, Any
 OT_HEADERS = ["Date", "Driver", "Action", "Timestamp", "ClockType", "Note"]
 
 # OT per-shift summary tab for calculated OT
-OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT record")
+OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
 OT_RECORD_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning OT", "Evening OT", "Note"]
 
 # OT holidays configuration: default includes 2025-12-29; extend via OT_HOLIDAYS or HOLIDAYS env vars
