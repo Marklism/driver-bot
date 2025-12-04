@@ -1036,25 +1036,35 @@ def _missions_header_fix_if_needed(ws):
         logger.exception("Error checking/fixing missions header.")
 
 def open_worksheet(tab: str = ""):
+    """Open a worksheet with minimal header enforcement and wrap it in WorksheetProxy.
 
-    # Wrap returned worksheet with WorksheetProxy to add queueing/caching.
+    This central helper applies:
+    - GoogleApiQueue for all sheet operations
+    - Lightweight header checks/creation using HEADERS_BY_TAB
+    """
+
     def _wrap_ws(ws):
         try:
             return WorksheetProxy(ws)
         except Exception:
-            return _wrap_ws(ws)
+            # If proxying somehow fails, fall back to raw worksheet
+            return ws
+
     gc = get_gspread_client()
     sh = gc.open(GOOGLE_SHEET_NAME)
+
     def _create_tab(name: str, headers: Optional[List[str]] = None):
         try:
             cols = max(12, len(headers) if headers else 12)
             ws_new = sh.add_worksheet(title=name, rows="2000", cols=str(cols))
             if headers:
+                # Header row – queued via proxy, but it's a one‑time write anyway
                 ws_new.insert_row(headers, index=1)
-            return ws_new
+            return _wrap_ws(ws_new)
         except Exception:
+            # If sheet already exists or another error, just get existing
             try:
-                return sh.worksheet(name)
+                return _wrap_ws(sh.worksheet(name))
             except Exception:
                 raise
 
@@ -1067,7 +1077,7 @@ def open_worksheet(tab: str = ""):
                 ensure_sheet_headers_match(ws, template)
             if tab == MISSIONS_TAB:
                 _missions_header_fix_if_needed(ws)
-            return ws
+            return _wrap_ws(ws)
         except Exception:
             headers = HEADERS_BY_TAB.get(tab)
             return _create_tab(tab, headers=headers)
@@ -1078,10 +1088,12 @@ def open_worksheet(tab: str = ""):
                 if GOOGLE_SHEET_TAB in HEADERS_BY_TAB:
                     ensure_sheet_has_headers_conservative(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
                     ensure_sheet_headers_match(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
-                return ws
+                return _wrap_ws(ws)
             except Exception:
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
-        return sh.sheet1
+        # Default to first sheet, wrapped
+        return _wrap_ws(sh.sheet1)
+
 
 async def process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user):
     """Helper to append leave row with Leave Days, check duplicates and exclude weekends/holidays."""
