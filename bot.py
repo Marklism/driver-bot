@@ -3399,6 +3399,53 @@ def register_ui_handlers(application):
     except Exception:
         logger.exception("Could not schedule set_my_commands.")
 
+    # Additionally, ensure commands are visible in all group chats by setting group-scope commands.
+    async def _set_group_cmds():
+        try:
+            # Import scopes lazily to avoid breaking older telegram libraries.
+            try:
+                from telegram import BotCommandScopeAllGroupChats
+            except Exception:
+                BotCommandScopeAllGroupChats = None
+            cmds = [
+                BotCommand("start_trip", "Start a trip (select plate)"),
+                BotCommand("end_trip", "End a trip (select plate)"),
+                BotCommand("menu", "Open trip menu"),
+                BotCommand("mission", "Quick mission menu"),
+                BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
+                BotCommand("leave", "Record leave (admin)"),
+                BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
+            ]
+            if BotCommandScopeAllGroupChats is not None:
+                await application.bot.set_my_commands(cmds, scope=BotCommandScopeAllGroupChats())
+            else:
+                # Fallback: set as default scope again (harmless override).
+                await application.bot.set_my_commands(cmds)
+        except Exception:
+            logger.exception("Failed to set group-scope bot commands.")
+
+    # Schedule group-scope command setup as well.
+    try:
+        import asyncio as _asyncio_groups
+        _loop_g = None
+        try:
+            _loop_g = _asyncio_groups.get_running_loop()
+        except Exception:
+            try:
+                _loop_g = _asyncio_groups.get_event_loop()
+            except Exception:
+                _loop_g = None
+        if _loop_g and hasattr(_loop_g, "create_task"):
+            _loop_g.create_task(_set_group_cmds())
+        else:
+            try:
+                if hasattr(application, "create_task"):
+                    application.create_task(_set_group_cmds())
+            except Exception:
+                logger.exception("Could not schedule group set_my_commands.")
+    except Exception:
+        logger.exception("Could not schedule group set_my_commands.")
+
 def ensure_env():
     if not BOT_TOKEN:
         raise RuntimeError(t(DEFAULT_LANG, "no_bot_token"))
