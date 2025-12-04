@@ -2486,6 +2486,16 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
+    # Legacy mission end callback from old menus: "mission_end|{plate}"
+    if data.startswith("mission_end|") and not data.startswith("mission_end_plate|"):
+        try:
+            _, legacy_plate = data.split("|", 1)
+        except Exception:
+            await q.edit_message_text(t(user_lang, "invalid_sel"))
+            return
+        # Normalize to new-style callback so existing handler works
+        data = f"mission_end_now|{legacy_plate}"
+
     if data.startswith("mission_depart|"):
         parts = data.split("|")
         if len(parts) < 3:
