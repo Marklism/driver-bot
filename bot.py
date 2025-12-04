@@ -96,7 +96,10 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
     ws = open_worksheet(OT_TAB)
 
     # Ensure headers exist
-    ensure_sheet_headers_match(OT_TAB, OT_HEADERS)
+    try:
+        ensure_sheet_headers_match(ws, OT_HEADERS)
+    except Exception:
+        pass
 
     row = [
         dt.strftime("%Y-%m-%d"),
@@ -881,6 +884,8 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
 
 # Ensure OT summary tab has headers
 HEADERS_BY_TAB.setdefault(OT_SUMMARY_TAB, OT_SUMMARY_HEADERS)
+HEADERS_BY_TAB.setdefault(OT_TAB, OT_HEADERS)
+
 
 
 TR = {
@@ -1471,7 +1476,8 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                                 # Only treat as merged (and notify) when we actually deleted the secondary row
                 # and the primary row has return start and return end recorded (i.e. full roundtrip completed).
                 has_return_info = bool(return_start and return_end)
-                merged_flag = True if (found_pair or deleted_secondary) and has_return_info else False
+                # Treat as merged whenever roundtrip info is written on primary row
+                merged_flag = True if has_return_info else False
 
                 return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
