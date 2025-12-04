@@ -51,10 +51,6 @@ from typing import Optional, Dict, List, Any
 # Added OT Table headers
 OT_HEADERS = ["Date", "Driver", "Action", "Timestamp", "ClockType", "Note"]
 
-# OT per-shift summary tab for calculated OT
-OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
-OT_RECORD_HEADERS = ["Date", "Driver", "Start Time", "End Time", "OT hours", "OT type", "Note"]
-
 # Various column indices
 M_IDX_ID = 0
 M_IDX_GID = 1
@@ -100,10 +96,7 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
     ws = open_worksheet(OT_TAB)
 
     # Ensure headers exist
-    try:
-        ensure_sheet_headers_match(ws, OT_HEADERS)
-    except Exception:
-        logger.exception("Failed to ensure OT_TAB headers")
+    ensure_sheet_headers_match(OT_TAB, OT_HEADERS)
 
     row = [
         dt.strftime("%Y-%m-%d"),
@@ -192,11 +185,14 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         hols = set()
     is_holiday = ts_dt.strftime("%Y-%m-%d") in hols
     is_weekend = _is_weekend(ts_dt)
+    # _write_ot_rows implementation moved to top-level
 
+    
     rows_to_write = []
     morning_ot = 0.0
     evening_ot = 0.0
     weekend_ot = 0.0
+    notes = []
 
     if action == "IN":
         # Morning OT rule: only count on weekdays, not holidays, and between 04:00 and 07:00
@@ -218,7 +214,10 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             except Exception:
                 start_dt = None
 
-        if start_dt is not None:
+        if start_dt is None:
+            # no start found, nothing to compute
+            pass
+        else:
             # If weekend or holiday for the start date -> whole shift counts as OT (single row)
             if _is_weekend(start_dt) or (start_dt.strftime("%Y-%m-%d") in hols):
                 total = round((ts_dt - start_dt).total_seconds() / 3600.0, 2) if ts_dt >= start_dt else round(((ts_dt + timedelta(days=1)) - start_dt).total_seconds() / 3600.0, 2)
@@ -240,7 +239,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                         if ev > 0:
                             rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, evening_start.strftime("%H:%M:%S"), day1_end.strftime("%H:%M:%S"), str(ev), "Evening", "Cross-midnight part day1"])
                     # day2: from 00:00 to ts_dt
-                    day2_start = datetime.combine(ts_dt.date(), dtime(0, 0, 0))
+                    day2_start = datetime.combine(ts_dt.date(), dtime(0,0,0))
                     # for day2, if it's weekend/holiday count fully, else if after 00:00 and before 04:00 count as early OT
                     if _is_weekend(day2_start) or (day2_start.strftime("%Y-%m-%d") in hols):
                         ev2 = round((ts_dt - day2_start).total_seconds() / 3600.0, 2)
@@ -258,55 +257,29 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                         evening_ot = round((ts_dt - t18).total_seconds() / 3600.0, 2)
                         if evening_ot > 0:
                             rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, "18:00:00", ts_dt.strftime("%H:%M:%S"), str(evening_ot), "Evening", "Clock Out evening OT"])
+                    # also handle OUT between 0:00 and 4:00 same-day unlikely since same-day implies no cross midnight
 
     # write summary rows if any
-    total_ot = 0.0
-    is_weekend_or_holiday_shift = False
     if rows_to_write:
-        # compute total OT from rows being written
-        for r in rows_to_write:
-            try:
-                total_ot += float(r[4])
-            except Exception:
-                continue
-            if len(r) > 5 and str(r[5]).strip() == "Weekend/Holiday":
-                is_weekend_or_holiday_shift = True
         try:
             _write_ot_rows(rows_to_write)
         except Exception:
             logger.exception("Failed to write OT summary rows")
 
-    # also accumulate from direct variables for display
-    if morning_ot > 0 or evening_ot > 0 or weekend_ot > 0:
-        if total_ot <= 0:
-            total_ot = max(morning_ot + evening_ot + weekend_ot, 0.0)
-
-    # prepare reply message text
+    # prepare reply message: only include parts that are >0
     parts = []
     if morning_ot > 0:
-        parts.append(f"Morning OT: {morning_ot} hour(s).")
+        parts.append(f"Morning OT : {morning_ot} hour(s).")
     if evening_ot > 0:
-        parts.append(f"Evening OT: {evening_ot} hour(s).")
+        parts.append(f"Evening OT : {evening_ot} hour(s).")
     if weekend_ot > 0:
         parts.append(f"Weekend OT: {weekend_ot} hour(s).")
 
-    chat = query.message.chat if query.message else None
-
-    # Send group notification when OT > 0
-    if total_ot > 0 and chat is not None:
-        try:
-            if is_weekend_or_holiday_shift and action == "OUT":
-                notif = f"Driver {driver}: OT today: {total_ot:.2f} hour(s)."
-            else:
-                notif = f"Driver {driver}: OT: {total_ot:.2f} hour(s)."
-            await context.bot.send_message(chat_id=chat.id, text=notif)
-        except Exception:
-            logger.exception("Failed to send OT notification message")
-
     if parts:
+        # single-line receipt similar to your requested format
         summary = " ".join(parts)
         try:
-            await query.edit_message_text(f"Driver {driver} clocked {'in' if action == 'IN' else 'out'} at {ts_dt.strftime('%H:%M')}. {summary}")
+            await query.edit_message_text(f"Driver {driver} clocked {'in' if action=='IN' else 'out'} at {ts_dt.strftime('%H:%M')}. {summary}")
         except Exception:
             try:
                 await query.edit_message_text(f"Recorded {action} for {driver} at {rec[3]}")
@@ -318,6 +291,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text(f"Recorded {action} for {driver} at {rec[3]}")
         except Exception:
             pass
+
 async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
@@ -608,14 +582,13 @@ def save_mission_cycles_to_sheet(mdict):
 def _write_ot_rows(rows):
     logger.info("Entering _write_ot_rows")
     try:
-        # Prefer explicit OT_RECORD_TAB; fall back to legacy OT_SUM_TAB or default "OT Record"
-        tab_name = os.getenv("OT_RECORD_TAB") or os.getenv("OT_SUM_TAB") or "OT Record"
-        ws = open_worksheet(tab_name)
-        headers = OT_RECORD_HEADERS
+        SUM_TAB = os.getenv("OT_SUM_TAB", "Driver_OT_Calculated")
+        ws = open_worksheet(SUM_TAB)
+        headers = ['Date', 'Driver', 'Start Time', 'End Time', 'OT hours', 'OT type', 'Note']
         try:
             ensure_sheet_headers_match(ws, headers)
         except Exception:
-            logger.exception("Failed to ensure OT record headers")
+            pass
         for r in rows:
             try:
                 ws.append_row(r, value_input_option='USER_ENTERED')
@@ -3047,10 +3020,42 @@ async def delete_command_message(update: Update, context: ContextTypes.DEFAULT_T
 async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle Clock In / Clock Out buttons with callback_data 'clock_in' or 'clock_out'.
-    Delegate to clock_callback_handler so OT rows and notifications are generated.
+    Calls record_clock_entry(driver, action) and edits the message to confirm.
     """
     try:
-        await clock_callback_handler(update, context)
+        query = update.callback_query
+        await query.answer()
+        user = query.from_user or update.effective_user
+        driver = (user.username or user.first_name or "unknown").strip()
+        data = (query.data or "").strip().lower()
+        if data == "clock_in":
+            action = "IN"
+        elif data == "clock_out":
+            action = "OUT"
+        else:
+            action = None
+
+        if not action:
+            try:
+                await query.edit_message_text("Invalid clock action.")
+            except Exception:
+                pass
+            return
+
+        try:
+            rec = record_clock_entry(driver, action)
+            ts = rec[3] if len(rec) > 3 else now_str()
+            msg = f"Recorded **{action}** for {driver} at {ts}"
+        except Exception as e:
+            msg = f"Failed to record clock entry: {e}"
+
+        try:
+            await query.edit_message_text(msg)
+        except Exception:
+            try:
+                await query.message.reply_text(msg)
+            except Exception:
+                pass
     except Exception:
         logger.exception("Error in handle_clock_button")
 
