@@ -2536,7 +2536,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             _, legacy_plate = data.split("|", 1)
         except Exception:
-            await q.edit_message_text(t(user_lang, "invalid_sel"))
+            logger.warning("legacy mission_end callback invalid: %s", data)
             return
         # Normalize to new-style callback so existing handler works
         data = f"mission_end_now|{legacy_plate}"
@@ -2575,7 +2575,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending = context.user_data.get("pending_mission") or {}
             plate = pending.get("plate")
             if not plate:
-                await q.edit_message_text(t(user_lang, "invalid_sel"))
+                logger.warning("mission_end_now callback without plate and no pending_mission: %s", data)
                 return
         else:
             _, plate = data.split("|", 1)
