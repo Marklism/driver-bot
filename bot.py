@@ -2614,7 +2614,8 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
                 key_cycle = f"mission_cycle|{username}|{plate}"
-                cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 0) + 1
+                # Seed first merged roundtrip as cycle=2 so summary is sent after completing one full PP↔SHV roundtrip
+                cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 1) + 1
                 context.chat_data.setdefault("mission_cycle", {})[key_cycle] = cur_cycle
                 logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
                 # persist immediately (best-effort)
@@ -3142,6 +3143,7 @@ def _append_ot_summary_for_last_shift(driver: str, last_action: str) -> None:
     """
     Compute OT according to user rules and append a single row into OT_SUMMARY_TAB.
     Does not touch any existing clock or OT logic.
+    Returns a small dict with OT info for notification, or None if no OT.
     """
     try:
         ws_clock = open_worksheet(OT_TAB)
@@ -3223,7 +3225,7 @@ def _append_ot_summary_for_last_shift(driver: str, last_action: str) -> None:
                 ws_summary.append_row(row)
             except Exception:
                 pass
-        return
+        return {"total": total_hours, "category": "weekend_holiday", "is_weekend": bool(is_weekend), "is_holiday": bool(is_holiday)}
 
     # Weekday rules (150%)
     morning_ot = 0.0
@@ -3265,12 +3267,12 @@ def _append_ot_summary_for_last_shift(driver: str, last_action: str) -> None:
             ws_summary.append_row(row)
         except Exception:
             pass
-
-
+    total = max(morning_ot + evening_ot, 0.0)
+    return {"total": total, "category": "weekday", "morning": morning_ot, "evening": evening_ot}
 async def ot_clock_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Passive OT summary handler for clock_in/clock_out buttons.
-    It does not edit any messages and only writes into OT_SUMMARY_TAB.
+    Writes into OT_SUMMARY_TAB and optionally sends OT notifications to the chat.
     """
     try:
         query = update.callback_query
@@ -3287,7 +3289,41 @@ async def ot_clock_summary_handler(update: Update, context: ContextTypes.DEFAULT
         if not user:
             return
         driver = (user.username or user.first_name or "unknown").strip()
-        _append_ot_summary_for_last_shift(driver, last_action)
+        info = _append_ot_summary_for_last_shift(driver, last_action)
+        # info is a dict from _append_ot_summary_for_last_shift with OT details, or None
+        if not info:
+            return
+        try:
+            total = float(info.get("total", 0.0))
+        except Exception:
+            total = 0.0
+        if total <= 0:
+            return
+
+        chat = query.message.chat if query.message else None
+        if not chat:
+            return
+
+        category = str(info.get("category") or "").lower()
+        is_weekend = bool(info.get("is_weekend"))
+        is_holiday = bool(info.get("is_holiday"))
+
+        # Weekday (Mon–Fri, non-holiday): notify on both IN and OUT when OT is produced
+        if category == "weekday" or (not is_weekend and not is_holiday):
+            text = f"Driver {driver}: OT: {total:.2f} hour(s)."
+        else:
+            # Weekend / holiday OT: notify only on clock OUT with 'OT today'
+            if last_action != "OUT":
+                return
+            text = f"Driver {driver}: OT today: {total:.2f} hour(s)."
+
+        try:
+            await context.bot.send_message(chat_id=chat.id, text=text)
+        except Exception:
+            try:
+                await query.message.reply_text(text)
+            except Exception:
+                pass
     except Exception:
         try:
             logger.exception("Error in ot_clock_summary_handler")
