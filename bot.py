@@ -631,8 +631,8 @@ def save_mission_cycles_to_sheet(mdict):
 def _write_ot_rows(rows):
     logger.info("Entering _write_ot_rows")
     try:
-        # Prefer explicit OT_RECORD_TAB; fall back to legacy OT_SUM_TAB or default "OT Record"
-        tab_name = os.getenv("OT_RECORD_TAB") or os.getenv("OT_SUM_TAB") or "OT Record"
+        # Prefer the configured OT_RECORD_TAB; fall back to legacy OT_SUM_TAB or default "OT record"
+        tab_name = OT_RECORD_TAB or os.getenv("OT_SUM_TAB") or "OT record"
         ws = open_worksheet(tab_name)
         headers = OT_RECORD_HEADERS
         try:
@@ -2521,7 +2521,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("mission_start_plate|"):
         parts = data.split("|", 1)
         if len(parts) < 2:
-            await q.edit_message_text("Invalid selection.")
+            logger.warning("mission_start_plate callback missing plate: %s", data)
             return
         _, plate = parts
         # show departure choices
@@ -2544,7 +2544,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("mission_end_plate|"):
         parts = data.split("|", 1)
         if len(parts) < 2:
-            await q.edit_message_text("Invalid selection.")
+            logger.warning("mission_end_plate callback missing plate: %s", data)
             return
         _, plate = parts
         context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": username}
@@ -2556,7 +2556,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("mission_depart|"):
         parts = data.split("|")
         if len(parts) < 3:
-            await q.edit_message_text("Invalid selection.")
+            logger.warning("mission_depart callback missing fields: %s", data)
             return
         _, dep, plate = parts
         context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
