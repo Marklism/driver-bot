@@ -465,29 +465,6 @@ try:
 except Exception:
     HOLIDAYS = set()
 
-# Fixed OT holiday list for 2025-2026 (used only for OT summary calculations)
-_OT_FIXED_HOLIDAYS = {
-    "2025-12-29",
-    "2026-01-01",
-    "2026-01-07",
-    "2026-02-16", "2026-02-17", "2026-02-18",
-    "2026-03-08", "2026-03-09",
-    "2026-04-14", "2026-04-15", "2026-04-16",
-    "2026-05-01",
-    "2026-05-05",
-    "2026-05-14",
-    "2026-06-18",
-    "2026-09-24",
-    "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13",
-    "2026-10-15",
-    "2026-10-29",
-    "2026-11-09",
-    "2026-11-23", "2026-11-24", "2026-11-25",
-    "2026-12-29",
-}
-
-OT_HOLIDAYS = set(HOLIDAYS) | _OT_FIXED_HOLIDAYS
-
 SUPPORTED_LANGS = ("en", "km")
 
 RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
@@ -500,10 +477,6 @@ LEAVE_TAB = os.getenv("LEAVE_TAB", "Driver_Leave")
 # OT tab name (created if missing)
 OT_TAB = os.getenv('OT_TAB', 'Driver_OT')
 OT_HEADERS = ['Date', 'Driver', 'Action', 'Timestamp', 'ClockType', 'Note']
-
-# New OT summary tab (auto-created) for rules-based OT overview
-OT_SUMMARY_TAB = os.getenv("OT_SUMMARY_TAB", "Driver_OT_Summary")
-OT_SUMMARY_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning OT", "Evening OT", "Note"]
 
 MAINT_TAB = os.getenv("MAINT_TAB", "Vehicle_Maintenance")
 EXPENSE_TAB = os.getenv("EXPENSE_TAB", "Trip_Expenses")
@@ -882,11 +855,8 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     ODO_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Notes"],
 }
 
-# Ensure OT summary tab has headers
-HEADERS_BY_TAB.setdefault(OT_SUMMARY_TAB, OT_SUMMARY_HEADERS)
+# Ensure OT tab has canonical headers
 HEADERS_BY_TAB.setdefault(OT_TAB, OT_HEADERS)
-
-
 
 TR = {
     "en": {
@@ -1476,8 +1446,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                                 # Only treat as merged (and notify) when we actually deleted the secondary row
                 # and the primary row has return start and return end recorded (i.e. full roundtrip completed).
                 has_return_info = bool(return_start and return_end)
-                # Treat as merged whenever roundtrip info is written on primary row
-                merged_flag = True if has_return_info else False
+                merged_flag = True if (found_pair or deleted_secondary) and has_return_info else False
 
                 return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
@@ -2523,16 +2492,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    # Legacy mission end callback from old menus: "mission_end|{plate}"
-    if data.startswith("mission_end|") and not data.startswith("mission_end_plate|"):
-        try:
-            _, legacy_plate = data.split("|", 1)
-        except Exception:
-            await q.edit_message_text(t(user_lang, "invalid_sel"))
-            return
-        # Normalize to new-style callback so existing handler works
-        data = f"mission_end_now|{legacy_plate}"
-
     if data.startswith("mission_depart|"):
         parts = data.split("|")
         if len(parts) < 3:
@@ -2614,8 +2573,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
                 key_cycle = f"mission_cycle|{username}|{plate}"
-                # Seed first merged roundtrip as cycle=2 so summary is sent after completing one full PP↔SHV roundtrip
-                cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 1) + 1
+                cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 0) + 1
                 context.chat_data.setdefault("mission_cycle", {})[key_cycle] = cur_cycle
                 logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
                 # persist immediately (best-effort)
@@ -2804,10 +2762,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
             return
-
-    # Prevent spurious "Invalid selection" after mission_end_now handlers
-    if data.startswith("mission_end_now|") or data == "mission_end_now":
-        return
 
     await q.edit_message_text(t(user_lang, "invalid_sel"))
 
@@ -3069,268 +3023,6 @@ async def delete_command_message(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         pass
 
-
-# ---------- OT summary helpers (rules-based, non-intrusive) ----------
-
-def _get_ot_summary_ws():
-    """Open or create the OT summary worksheet with proper headers."""
-    try:
-        ws = open_worksheet(OT_SUMMARY_TAB)
-        try:
-            ensure_sheet_headers_match(ws, OT_SUMMARY_HEADERS)
-        except Exception:
-            pass
-        return ws
-    except Exception:
-        try:
-            logger.exception("Failed to open OT summary worksheet")
-        except Exception:
-            pass
-        return None
-
-
-def _parse_clock_ts(ts: str) -> Optional[datetime]:
-    try:
-        return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return None
-
-
-def _ensure_shift_order(start_dt: datetime, end_dt: datetime) -> tuple[datetime, datetime]:
-    """Ensure end_dt is not before start_dt (allow cross-midnight by +1 day)."""
-    if end_dt < start_dt:
-        end_dt = end_dt + timedelta(days=1)
-    return start_dt, end_dt
-
-
-def _is_ot_weekend(start_dt: datetime, end_dt: datetime) -> bool:
-    """Treat as weekend OT when both endpoints fall on Sat/Sun."""
-    try:
-        return start_dt.weekday() >= 5 and end_dt.weekday() >= 5
-    except Exception:
-        return False
-
-
-def _is_ot_holiday(dt: datetime) -> bool:
-    try:
-        return dt.strftime("%Y-%m-%d") in OT_HOLIDAYS
-    except Exception:
-        return False
-
-
-def _already_recorded_ot(ws, driver: str, start_dt: datetime, end_dt: datetime) -> bool:
-    """Avoid duplicate rows for the same driver & shift."""
-    try:
-        vals = ws.get_all_values()
-    except Exception:
-        return False
-    if not vals or len(vals) < 2:
-        return False
-    key_start = start_dt.strftime("%Y-%m-%d %H:%M:%S")
-    key_end = end_dt.strftime("%Y-%m-%d %H:%M:%S")
-    for row in vals[1:]:
-        if len(row) < 4:
-            continue
-        name = (row[0] or "").strip()
-        s = (row[2] or "").strip()
-        e = (row[3] or "").strip()
-        if name == driver and s == key_start and e == key_end:
-            return True
-    return False
-
-
-def _append_ot_summary_for_last_shift(driver: str, last_action: str) -> None:
-    """
-    Compute OT according to user rules and append a single row into OT_SUMMARY_TAB.
-    Does not touch any existing clock or OT logic.
-    Returns a small dict with OT info for notification, or None if no OT.
-    """
-    try:
-        ws_clock = open_worksheet(OT_TAB)
-    except Exception:
-        return
-    try:
-        vals = ws_clock.get_all_values()
-    except Exception:
-        return
-    if not vals or len(vals) < 2:
-        return
-
-    # Collect rows for this driver (skip header)
-    driver_rows = []
-    for idx, row in enumerate(vals[1:], start=2):
-        if len(row) <= max(O_IDX_DRIVER, O_IDX_TIME, O_IDX_ACTION):
-            continue
-        if (row[O_IDX_DRIVER] or "").strip() != driver:
-            continue
-        driver_rows.append((idx, row))
-    if not driver_rows:
-        return
-
-    last_idx, last_row = driver_rows[-1]
-    action = (last_row[O_IDX_ACTION] or "").strip().upper()
-    if action != last_action:
-        # last sheet action doesn't match this callback's action; skip to avoid mistakes
-        return
-
-    end_ts_str = (last_row[O_IDX_TIME] or "").strip()
-    end_dt = _parse_clock_ts(end_ts_str)
-    if not end_dt:
-        return
-
-    # find previous entry for this driver (start of shift)
-    start_dt = None
-    for idx, row in reversed(driver_rows[:-1]):
-        ts_str = (row[O_IDX_TIME] or "").strip()
-        cand = _parse_clock_ts(ts_str)
-        if not cand:
-            continue
-        start_dt = cand
-        break
-    if not start_dt:
-        # no start -> cannot determine shift; skip
-        return
-
-    start_dt, end_dt = _ensure_shift_order(start_dt, end_dt)
-
-    ws_summary = _get_ot_summary_ws()
-    if not ws_summary:
-        return
-
-    if _already_recorded_ot(ws_summary, driver, start_dt, end_dt):
-        return
-
-    # Weekend / holiday full OT (200%)
-    is_weekend = _is_ot_weekend(start_dt, end_dt)
-    is_holiday = _is_ot_holiday(start_dt)
-    if is_weekend or is_holiday:
-        total_hours = max((end_dt - start_dt).total_seconds() / 3600.0, 0.0)
-        if total_hours <= 0:
-            return
-        note = "Weekend OT" if is_weekend and not is_holiday else "Holiday OT" if is_holiday and not is_weekend else "Weekend & Holiday OT"
-        row = [
-            driver,
-            "200%",
-            start_dt.strftime("%Y-%m-%d %H:%M:%S"),
-            end_dt.strftime("%Y-%m-%d %H:%M:%S"),
-            start_dt.strftime("%Y-%m-%d"),
-            f"{total_hours:.2f}",
-            "",
-            note,
-        ]
-        try:
-            ws_summary.append_row(row, value_input_option="USER_ENTERED")
-        except Exception:
-            try:
-                ws_summary.append_row(row)
-            except Exception:
-                pass
-        return {"total": total_hours, "category": "weekend_holiday", "is_weekend": bool(is_weekend), "is_holiday": bool(is_holiday)}
-
-    # Weekday rules (150%)
-    morning_ot = 0.0
-    evening_ot = 0.0
-
-    # Rule 1: OUT between 00:00 and 04:00 -> OT = end - 00:00
-    if last_action == "OUT" and dtime(0, 0) <= end_dt.time() < dtime(4, 0):
-        midnight = end_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        morning_ot += max((end_dt - midnight).total_seconds() / 3600.0, 0.0)
-
-    # Rule 2/3: IN between 04:00 and 07:00 -> OT = 08:00 - start
-    if start_dt.time() > dtime(4, 0) and start_dt.time() < dtime(7, 0):
-        eight = start_dt.replace(hour=8, minute=0, second=0, microsecond=0)
-        morning_ot += max((eight - start_dt).total_seconds() / 3600.0, 0.0)
-
-    # Rule 4/5: OUT >= 18:30 -> OT = end - 18:00
-    if last_action == "OUT" and end_dt.time() >= dtime(18, 30):
-        six_pm = end_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-        evening_ot += max((end_dt - six_pm).total_seconds() / 3600.0, 0.0)
-
-    if morning_ot <= 0 and evening_ot <= 0:
-        # no OT for this shift
-        return
-
-    row = [
-        driver,
-        "150%",
-        start_dt.strftime("%Y-%m-%d %H:%M:%S"),
-        end_dt.strftime("%Y-%m-%d %H:%M:%S"),
-        start_dt.strftime("%Y-%m-%d"),
-        f"{morning_ot:.2f}" if morning_ot > 0 else "",
-        f"{evening_ot:.2f}" if evening_ot > 0 else "",
-        "Weekday OT",
-    ]
-    try:
-        ws_summary.append_row(row, value_input_option="USER_ENTERED")
-    except Exception:
-        try:
-            ws_summary.append_row(row)
-        except Exception:
-            pass
-    total = max(morning_ot + evening_ot, 0.0)
-    return {"total": total, "category": "weekday", "morning": morning_ot, "evening": evening_ot}
-async def ot_clock_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Passive OT summary handler for clock_in/clock_out buttons.
-    Writes into OT_SUMMARY_TAB and optionally sends OT notifications to the chat.
-    """
-    try:
-        query = update.callback_query
-        if not query or not (query.data or "").lower().startswith("clock_"):
-            return
-        data = (query.data or "").strip().lower()
-        if data == "clock_in":
-            last_action = "IN"
-        elif data == "clock_out":
-            last_action = "OUT"
-        else:
-            return
-        user = query.from_user or update.effective_user
-        if not user:
-            return
-        driver = (user.username or user.first_name or "unknown").strip()
-        info = _append_ot_summary_for_last_shift(driver, last_action)
-        # info is a dict from _append_ot_summary_for_last_shift with OT details, or None
-        if not info:
-            return
-        try:
-            total = float(info.get("total", 0.0))
-        except Exception:
-            total = 0.0
-        if total <= 0:
-            return
-
-        chat = query.message.chat if query.message else None
-        if not chat:
-            return
-
-        category = str(info.get("category") or "").lower()
-        is_weekend = bool(info.get("is_weekend"))
-        is_holiday = bool(info.get("is_holiday"))
-
-        # Weekday (Mon–Fri, non-holiday): notify on both IN and OUT when OT is produced
-        if category == "weekday" or (not is_weekend and not is_holiday):
-            text = f"Driver {driver}: OT: {total:.2f} hour(s)."
-        else:
-            # Weekend / holiday OT: notify only on clock OUT with 'OT today'
-            if last_action != "OUT":
-                return
-            text = f"Driver {driver}: OT today: {total:.2f} hour(s)."
-
-        try:
-            await context.bot.send_message(chat_id=chat.id, text=text)
-        except Exception:
-            try:
-                await query.message.reply_text(text)
-            except Exception:
-                pass
-    except Exception:
-        try:
-            logger.exception("Error in ot_clock_summary_handler")
-        except Exception:
-            pass
-
-# ---------- end OT summary helpers ----------
 async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle Clock In / Clock Out buttons with callback_data 'clock_in' or 'clock_out'.
@@ -3387,8 +3079,6 @@ def register_ui_handlers(application):
     application.add_handler(CallbackQueryHandler(plate_callback))
     # Clock In/Out buttons handler
     application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
-    # OT summary writer (non-intrusive; runs after main clock handler)
-    application.add_handler(CallbackQueryHandler(ot_clock_summary_handler, pattern=r"^clock_(in|out)$"))
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
@@ -3434,53 +3124,6 @@ def register_ui_handlers(application):
                 logger.exception("Could not schedule set_my_commands.")
     except Exception:
         logger.exception("Could not schedule set_my_commands.")
-
-    # Additionally, ensure commands are visible in all group chats by setting group-scope commands.
-    async def _set_group_cmds():
-        try:
-            # Import scopes lazily to avoid breaking older telegram libraries.
-            try:
-                from telegram import BotCommandScopeAllGroupChats
-            except Exception:
-                BotCommandScopeAllGroupChats = None
-            cmds = [
-                BotCommand("start_trip", "Start a trip (select plate)"),
-                BotCommand("end_trip", "End a trip (select plate)"),
-                BotCommand("menu", "Open trip menu"),
-                BotCommand("mission", "Quick mission menu"),
-                BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
-                BotCommand("leave", "Record leave (admin)"),
-                BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
-            ]
-            if BotCommandScopeAllGroupChats is not None:
-                await application.bot.set_my_commands(cmds, scope=BotCommandScopeAllGroupChats())
-            else:
-                # Fallback: set as default scope again (harmless override).
-                await application.bot.set_my_commands(cmds)
-        except Exception:
-            logger.exception("Failed to set group-scope bot commands.")
-
-    # Schedule group-scope command setup as well.
-    try:
-        import asyncio as _asyncio_groups
-        _loop_g = None
-        try:
-            _loop_g = _asyncio_groups.get_running_loop()
-        except Exception:
-            try:
-                _loop_g = _asyncio_groups.get_event_loop()
-            except Exception:
-                _loop_g = None
-        if _loop_g and hasattr(_loop_g, "create_task"):
-            _loop_g.create_task(_set_group_cmds())
-        else:
-            try:
-                if hasattr(application, "create_task"):
-                    application.create_task(_set_group_cmds())
-            except Exception:
-                logger.exception("Could not schedule group set_my_commands.")
-    except Exception:
-        logger.exception("Could not schedule group set_my_commands.")
 
 def ensure_env():
     if not BOT_TOKEN:
