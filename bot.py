@@ -96,10 +96,7 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
     ws = open_worksheet(OT_TAB)
 
     # Ensure headers exist
-    try:
-        ensure_sheet_headers_match(ws, OT_HEADERS)
-    except Exception:
-        pass
+    ensure_sheet_headers_match(OT_TAB, OT_HEADERS)
 
     row = [
         dt.strftime("%Y-%m-%d"),
