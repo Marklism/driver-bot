@@ -52,8 +52,19 @@ from typing import Optional, Dict, List, Any
 OT_HEADERS = ["Date", "Driver", "Action", "Timestamp", "ClockType", "Note"]
 
 # OT per-shift summary tab for calculated OT
-OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
-OT_RECORD_HEADERS = ["Date", "Driver", "Start Time", "End Time", "OT hours", "OT type", "Note"]
+OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT record")
+OT_RECORD_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning OT", "Evening OT", "Note"]
+
+# OT holidays configuration: default includes 2025-12-29; extend via OT_HOLIDAYS or HOLIDAYS env vars
+OT_HOLIDAYS = {"2025-12-29"}
+_env_h = os.getenv("OT_HOLIDAYS") or os.getenv("HOLIDAYS", "")
+for _h in _env_h.split(","):
+    _h = _h.strip()
+    if _h:
+        OT_HOLIDAYS.add(_h)
+
+def _is_holiday(dt: datetime) -> bool:
+    return dt.strftime("%Y-%m-%d") in OT_HOLIDAYS
 
 # Various column indices
 M_IDX_ID = 0
@@ -169,155 +180,168 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
     return round(total_ot, 2)
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Unified Clock In/Out + OT calculation handler.
+
+    Rules (Mon–Fri, non-holiday):
+      1) If action=OUT and 00:00 <= ts < 04:00 → OT = ts - 00:00 (same day)  (morning OT)
+      2) If action=IN and 04:00 < ts < 07:00 → OT = 08:00 - ts              (morning OT)
+      3) If action=IN and ts >= 07:00      → no OT
+      4) If action=OUT and ts < 18:30      → no OT
+      5) If action=OUT and ts >= 18:30     → OT = ts - 18:00                (evening OT)
+
+    Weekend (Sat 00:00 – Sun 23:59) and holidays:
+      6) For a shift (IN → OUT) fully on weekend/holiday → OT = end - start (200%)
+         (Clock IN: no message; Clock OUT: record & notify "OT today: X hour(s)")
+    """
     query = update.callback_query
     await query.answer()
 
     user = update.effective_user
     driver = user.username or user.first_name
+    chat = query.message.chat if query.message else None
 
-    # get last entry before toggling (may be None)
+    # previous entry for this driver
     last = get_last_clock_entry(driver)
     now_in = last is None or (len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "OUT")
-
     action = "IN" if now_in else "OUT"
+
+    # record raw clock
     rec = record_clock_entry(driver, action)
 
     # parse timestamp
     try:
-        ts_dt = datetime.strptime(rec[3], "%Y-%m-%d %H:%M:%S")
+        ts_dt = datetime.strptime(rec[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
     except Exception:
         ts_dt = _now_dt()
 
-    # determine weekend/holiday
-    try:
-        hols = {h.strip() for h in os.getenv("HOLIDAYS", "").split(",") if h.strip()}
-    except Exception:
-        hols = set()
-    is_holiday = ts_dt.strftime("%Y-%m-%d") in hols
     is_weekend = _is_weekend(ts_dt)
+    is_holiday = _is_holiday(ts_dt)
+    is_normal_weekday = (not is_weekend) and (not is_holiday)
 
-    rows_to_write = []
-    morning_ot = 0.0
-    evening_ot = 0.0
-    weekend_ot = 0.0
+    morning_hours = 0.0
+    evening_hours = 0.0
+    total_ot = 0.0
+    ot_type = ""
+    note = ""
+    should_notify = False
+    weekday_msg = True  # False → use "OT today: X" wording
 
-    if action == "IN":
-        # Morning OT rule: only count on weekdays, not holidays, and between 04:00 and 07:00
-        if (not is_weekend) and (not is_holiday):
+    # Helper: append one OT record row
+    def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
+        try:
+            tab_name = OT_RECORD_TAB
+            ws = open_worksheet(tab_name)
+            try:
+                ensure_sheet_headers_match(ws, OT_RECORD_HEADERS)
+            except Exception:
+                pass
+            day_str = (start_dt or end_dt).strftime("%Y-%m-%d") if (start_dt or end_dt) else ""
+            row = [
+                driver,                      # Name
+                ot_type_str,                 # Type 150% / 200%
+                start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
+                end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
+                day_str,
+                f"{morning_h:.2f}" if morning_h > 0 else "",
+                f"{evening_h:.2f}" if evening_h > 0 else "",
+                note_str,
+            ]
+            try:
+                ws.append_row(row, value_input_option="USER_ENTERED")
+            except Exception:
+                ws.append_row(row)
+        except Exception:
+            logger.exception("Failed to append OT record row for %s", driver)
+
+    # --- Normal weekdays OT rules ---
+    if is_normal_weekday:
+        if action == "IN":
+            # Rule 2: IN between (04:00, 07:00)
             t4 = ts_dt.replace(hour=4, minute=0, second=0, microsecond=0)
             t7 = ts_dt.replace(hour=7, minute=0, second=0, microsecond=0)
-            if t4 <= ts_dt < t7:
+            if t4 < ts_dt < t7:
                 end_morning = ts_dt.replace(hour=8, minute=0, second=0, microsecond=0)
-                morning_ot = round((end_morning - ts_dt).total_seconds() / 3600.0, 2)
-                if morning_ot > 0:
-                    rows_to_write.append([ts_dt.strftime("%Y-%m-%d"), driver, ts_dt.strftime("%H:%M:%S"), "08:00:00", str(morning_ot), "Morning", "Clock In morning OT"])
-    else:
-        # action == OUT
-        start_dt = None
-        if last and len(last) > O_IDX_TIME:
-            try:
-                start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                start_dt = None
+                morning_hours = max((end_morning - ts_dt).total_seconds() / 3600.0, 0)
+                total_ot = round(morning_hours, 2)
+                if total_ot > 0:
+                    ot_type = "150%"
+                    note = "Weekday morning OT (Clock In)"
+                    append_ot_record(ts_dt, end_morning, total_ot, 0.0, ot_type, note)
+                    should_notify = True
+        else:
+            # action == OUT
+            h = ts_dt.hour + ts_dt.minute / 60.0
+            # Rule 1: OUT between [00:00, 04:00)
+            if 0 <= h < 4:
+                start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                morning_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
+                total_ot = round(morning_hours, 2)
+                if total_ot > 0:
+                    ot_type = "150%"
+                    note = "Weekday early-morning OT (after midnight)"
+                    append_ot_record(start_dt, ts_dt, total_ot, 0.0, ot_type, note)
+                    should_notify = True
+            # Rule 5: OUT >= 18:30
+            elif ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
+                start_dt = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+                evening_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
+                total_ot = round(evening_hours, 2)
+                if total_ot > 0:
+                    ot_type = "150%"
+                    note = "Weekday evening OT"
+                    append_ot_record(start_dt, ts_dt, 0.0, total_ot, ot_type, note)
+                    should_notify = True
 
-        if start_dt is not None:
-            # If weekend or holiday for the start date -> whole shift counts as OT (single row)
-            if _is_weekend(start_dt) or (start_dt.strftime("%Y-%m-%d") in hols):
-                total = round((ts_dt - start_dt).total_seconds() / 3600.0, 2) if ts_dt >= start_dt else round(((ts_dt + timedelta(days=1)) - start_dt).total_seconds() / 3600.0, 2)
-                weekend_ot = total if total > 0 else 0.0
-                if weekend_ot > 0:
-                    rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, start_dt.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), str(weekend_ot), "Weekend/Holiday", "Clock Out weekend OT"])
-            else:
-                # normal weekday: compute evening OT if any (>=18:30)
-                t18 = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-                t1830 = ts_dt.replace(hour=18, minute=30, second=0, microsecond=0)
-                # handle crossing midnight: if end date != start date, split into two parts
-                if ts_dt.date() != start_dt.date():
-                    # day1: from start_dt to 23:59:59 of start_dt.date()
-                    day1_end = datetime.combine(start_dt.date(), dtime(23, 59, 59))
-                    # compute evening part for day1
-                    evening_start = max(start_dt, start_dt.replace(hour=18, minute=0, second=0, microsecond=0))
-                    if day1_end > evening_start and day1_end > start_dt:
-                        ev = round((day1_end - evening_start).total_seconds() / 3600.0, 2)
-                        if ev > 0:
-                            rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, evening_start.strftime("%H:%M:%S"), day1_end.strftime("%H:%M:%S"), str(ev), "Evening", "Cross-midnight part day1"])
-                    # day2: from 00:00 to ts_dt
-                    day2_start = datetime.combine(ts_dt.date(), dtime(0, 0, 0))
-                    if _is_weekend(day2_start) or (day2_start.strftime("%Y-%m-%d") in hols):
-                        ev2 = round((ts_dt - day2_start).total_seconds() / 3600.0, 2)
-                        if ev2 > 0:
-                            rows_to_write.append([day2_start.strftime("%Y-%m-%d"), driver, day2_start.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), str(ev2), "Weekend/Holiday", "Cross-midnight part day2"])
-                    else:
-                        if day2_start <= ts_dt < day2_start.replace(hour=4, minute=0, second=0, microsecond=0):
-                            ev2 = round((ts_dt - day2_start).total_seconds() / 3600.0, 2)
-                            if ev2 > 0:
-                                rows_to_write.append([day2_start.strftime("%Y-%m-%d"), driver, day2_start.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), str(ev2), "EarlyMorning", "Cross-midnight early OT"])
+    # --- Weekend / Holiday OT rules ---
+    else:
+        # Only act on OUT; IN just records time
+        if action == "OUT":
+            start_dt = None
+            if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
+                try:
+                    start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    start_dt = None
+            if start_dt is not None:
+                # Full shift as OT
+                if ts_dt < start_dt:
+                    ts_dt_adj = ts_dt + timedelta(days=1)
                 else:
-                    # same-day: evening OT if ts_dt >= 18:30
-                    if ts_dt >= t1830:
-                        evening_ot = round((ts_dt - t18).total_seconds() / 3600.0, 2)
-                        if evening_ot > 0:
-                            rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, "18:00:00", ts_dt.strftime("%H:%M:%S"), str(evening_ot), "Evening", "Clock Out evening OT"])
+                    ts_dt_adj = ts_dt
+                dur = max((ts_dt_adj - start_dt).total_seconds() / 3600.0, 0)
+                total_ot = round(dur, 2)
+                if total_ot > 0:
+                    ot_type = "200%"
+                    note = "Weekend/Holiday full-shift OT"
+                    append_ot_record(start_dt, ts_dt_adj, 0.0, total_ot, ot_type, note)
+                    should_notify = True
+                    weekday_msg = False  # use 'OT today' wording
 
-    total_ot = 0.0
-    is_weekend_or_holiday_shift = False
-    if rows_to_write:
-        for r in rows_to_write:
-            try:
-                total_ot += float(r[4])
-            except Exception:
-                continue
-            if len(r) > 5 and str(r[5]).strip() == "Weekend/Holiday":
-                is_weekend_or_holiday_shift = True
+    # --- Notifications & user feedback ---
+    if should_notify and total_ot > 0 and chat is not None:
         try:
-            _write_ot_rows(rows_to_write)
-        except Exception:
-            try:
-                logger.exception("Failed to write OT summary rows")
-            except Exception:
-                pass
-
-    if morning_ot > 0 or evening_ot > 0 or weekend_ot > 0:
-        if total_ot <= 0:
-            total_ot = max(morning_ot + evening_ot + weekend_ot, 0.0)
-
-    parts = []
-    if morning_ot > 0:
-        parts.append(f"Morning OT: {morning_ot} hour(s).")
-    if evening_ot > 0:
-        parts.append(f"Evening OT: {evening_ot} hour(s).")
-    if weekend_ot > 0:
-        parts.append(f"Weekend OT: {weekend_ot} hour(s).")
-
-    chat = query.message.chat if query.message else None
-
-    if total_ot > 0 and chat is not None:
-        try:
-            if is_weekend_or_holiday_shift and action == "OUT":
-                notif_text = f"Driver {driver}: OT today: {total_ot:.2f} hour(s)."
+            if weekday_msg:
+                msg = f"Driver {driver}: OT: {total_ot:.2f} hour(s)."
             else:
-                notif_text = f"Driver {driver}: OT: {total_ot:.2f} hour(s)."
-            await context.bot.send_message(chat_id=chat.id, text=notif_text)
+                msg = f"Driver {driver}: OT today: {total_ot:.2f} hour(s)."
+            await context.bot.send_message(chat_id=chat.id, text=msg)
         except Exception:
-            try:
-                logger.exception("Failed to send OT notification")
-            except Exception:
-                pass
+            logger.exception("Failed to send OT notification")
 
-    if parts:
-        summary = " ".join(parts)
-        try:
-            await query.edit_message_text(f"Driver {driver} clocked {'in' if action=='IN' else 'out'} at {ts_dt.strftime('%H:%M')}. {summary}")
-        except Exception:
-            try:
-                await query.edit_message_text(f"Recorded {action} for {driver} at {rec[3]}")
-            except Exception:
-                pass
-    else:
-        try:
-            await query.edit_message_text(f"Recorded {action} for {driver} at {rec[3]}")
-        except Exception:
-            pass
+    # Edit the inline-button message as a confirmation
+    try:
+        if total_ot > 0:
+            await query.edit_message_text(
+                f"Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}. OT: {total_ot:.2f} hour(s)."
+            )
+        else:
+            await query.edit_message_text(
+                f"Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}."
+            )
+    except Exception:
+        # Fallback: ignore edit errors
+        pass
 async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
