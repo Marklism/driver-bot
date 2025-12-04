@@ -51,6 +51,10 @@ from typing import Optional, Dict, List, Any
 # Added OT Table headers
 OT_HEADERS = ["Date", "Driver", "Action", "Timestamp", "ClockType", "Note"]
 
+# New OT record summary tab (per-shift OT rows)
+OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT record")
+OT_RECORD_HEADERS = ["Date", "Driver", "Start Time", "End Time", "OT hours", "OT type", "Note"]
+
 # Various column indices
 M_IDX_ID = 0
 M_IDX_GID = 1
@@ -96,10 +100,7 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
     ws = open_worksheet(OT_TAB)
 
     # Ensure headers exist
-    try:
-        ensure_sheet_headers_match(ws, OT_HEADERS)
-    except Exception:
-        pass
+    ensure_sheet_headers_match(OT_TAB, OT_HEADERS)
 
     row = [
         dt.strftime("%Y-%m-%d"),
@@ -585,9 +586,10 @@ def save_mission_cycles_to_sheet(mdict):
 def _write_ot_rows(rows):
     logger.info("Entering _write_ot_rows")
     try:
-        SUM_TAB = os.getenv("OT_SUM_TAB", "Driver_OT_Calculated")
-        ws = open_worksheet(SUM_TAB)
-        headers = ['Date', 'Driver', 'Start Time', 'End Time', 'OT hours', 'OT type', 'Note']
+        # Prefer explicit OT_RECORD_TAB name; fall back to OT_SUM_TAB or default "OT record"
+        tab_name = os.getenv("OT_RECORD_TAB") or os.getenv("OT_SUM_TAB") or "OT record"
+        ws = open_worksheet(tab_name)
+        headers = OT_RECORD_HEADERS
         try:
             ensure_sheet_headers_match(ws, headers)
         except Exception:
@@ -855,8 +857,9 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     ODO_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Notes"],
 }
 
-# Ensure OT tab has canonical headers
+# Ensure OT tabs have canonical headers
 HEADERS_BY_TAB.setdefault(OT_TAB, OT_HEADERS)
+HEADERS_BY_TAB.setdefault(OT_RECORD_TAB, OT_RECORD_HEADERS)
 
 TR = {
     "en": {
