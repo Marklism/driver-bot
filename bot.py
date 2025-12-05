@@ -3342,3 +3342,32 @@ if __name__ == "__main__":
     
     main()
 main()
+# === In-memory override for mission cycle persistence ===
+# We deliberately avoid any Google Sheets I/O for mission_cycle state
+# to reduce API usage and prevent OAuth scope issues. The mission
+# cycle information is kept only in memory for the lifetime of the
+# bot process.
+
+_MISSION_CYCLE_STORE = {}
+
+
+def load_mission_cycles_from_sheet():
+    """Return current in-memory mission cycle mapping.
+
+    This overrides the earlier implementation that read from Google
+    Sheets. The return value is a shallow copy so callers can't
+    accidentally mutate the internal store without calling the
+    save helper.
+    """
+    return dict(_MISSION_CYCLE_STORE)
+
+
+def save_mission_cycles_to_sheet(mission_cycles):
+    """Update the in-memory mission cycle mapping.
+
+    This overrides the earlier implementation that wrote to Google
+    Sheets. It simply keeps everything in process memory.
+    """
+    _MISSION_CYCLE_STORE.clear()
+    _MISSION_CYCLE_STORE.update(mission_cycles or {})
+
