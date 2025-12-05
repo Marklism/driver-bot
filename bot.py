@@ -2840,6 +2840,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
      # Prevent spurious "Invalid selection" after mission_end_now handlers
      if data.startswith("mission_end_now|") or data == "mission_end_now":
          return
+         
      await q.edit_message_text(t(user_lang, "invalid_sel"))
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
