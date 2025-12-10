@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 from telegram import Bot, BotCommand
 """
 Merged Driver Bot — usage notes (auto-inserted)
@@ -22,6 +21,7 @@ def check_deployment_requirements():
     Deployment check: prints warnings about missing environment variables and missing optional imports.
     This runs at startup (inside main) to give clearer logs on Railway.
     """
+    import os, sys
     required_env = ["BOT_TOKEN", "SHEET_ID", "GOOGLE_CREDS_B64"]
     missing = [v for v in required_env if not os.getenv(v)]
     if missing:
@@ -50,21 +50,6 @@ from typing import Optional, Dict, List, Any
 # --- BEGIN: Inserted OT & Clock functionality (from Bot(包含OT和打卡).txt) ---
 # Added OT Table headers
 OT_HEADERS = ["Date", "Driver", "Action", "Timestamp", "ClockType", "Note"]
-
-# OT per-shift summary tab for calculated OT
-OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
-OT_RECORD_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning OT", "Evening OT", "Note"]
-
-# OT holidays configuration: default includes 2025-12-29; extend via OT_HOLIDAYS or HOLIDAYS env vars
-OT_HOLIDAYS = {"2025-12-29"}
-_env_h = os.getenv("OT_HOLIDAYS") or os.getenv("HOLIDAYS", "")
-for _h in _env_h.split(","):
-    _h = _h.strip()
-    if _h:
-        OT_HOLIDAYS.add(_h)
-
-def _is_holiday(dt: datetime) -> bool:
-    return dt.strftime("%Y-%m-%d") in OT_HOLIDAYS
 
 # Various column indices
 M_IDX_ID = 0
@@ -111,13 +96,7 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
     ws = open_worksheet(OT_TAB)
 
     # Ensure headers exist
-    try:
-        ensure_sheet_headers_match(ws, OT_HEADERS)
-    except Exception:
-        try:
-            logger.exception("Failed to ensure/update OT_TAB headers")
-        except Exception:
-            pass
+    ensure_sheet_headers_match(OT_TAB, OT_HEADERS)
 
     row = [
         dt.strftime("%Y-%m-%d"),
@@ -180,168 +159,139 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
     return round(total_ot, 2)
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Unified Clock In/Out + OT calculation handler.
-
-    Rules (Mon–Fri, non-holiday):
-      1) If action=OUT and 00:00 <= ts < 04:00 → OT = ts - 00:00 (same day)  (morning OT)
-      2) If action=IN and 04:00 < ts < 07:00 → OT = 08:00 - ts              (morning OT)
-      3) If action=IN and ts >= 07:00      → no OT
-      4) If action=OUT and ts < 18:30      → no OT
-      5) If action=OUT and ts >= 18:30     → OT = ts - 18:00                (evening OT)
-
-    Weekend (Sat 00:00 – Sun 23:59) and holidays:
-      6) For a shift (IN → OUT) fully on weekend/holiday → OT = end - start (200%)
-         (Clock IN: no message; Clock OUT: record & notify "OT today: X hour(s)")
-    """
     query = update.callback_query
     await query.answer()
 
     user = update.effective_user
     driver = user.username or user.first_name
-    chat = query.message.chat if query.message else None
 
-    # previous entry for this driver
+    # get last entry before toggling (may be None)
     last = get_last_clock_entry(driver)
     now_in = last is None or (len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "OUT")
-    action = "IN" if now_in else "OUT"
 
-    # record raw clock
+    action = "IN" if now_in else "OUT"
     rec = record_clock_entry(driver, action)
 
     # parse timestamp
     try:
-        ts_dt = datetime.strptime(rec[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+        ts_dt = datetime.strptime(rec[3], "%Y-%m-%d %H:%M:%S")
     except Exception:
         ts_dt = _now_dt()
 
+    # determine weekend/holiday
+    try:
+        hols = {h.strip() for h in os.getenv("HOLIDAYS", "").split(",") if h.strip()}
+    except Exception:
+        hols = set()
+    is_holiday = ts_dt.strftime("%Y-%m-%d") in hols
     is_weekend = _is_weekend(ts_dt)
-    is_holiday = _is_holiday(ts_dt)
-    is_normal_weekday = (not is_weekend) and (not is_holiday)
+    # _write_ot_rows implementation moved to top-level
 
-    morning_hours = 0.0
-    evening_hours = 0.0
-    total_ot = 0.0
-    ot_type = ""
-    note = ""
-    should_notify = False
-    weekday_msg = True  # False → use "OT today: X" wording
+    
+    rows_to_write = []
+    morning_ot = 0.0
+    evening_ot = 0.0
+    weekend_ot = 0.0
+    notes = []
 
-    # Helper: append one OT record row
-    def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
-        try:
-            tab_name = OT_RECORD_TAB
-            ws = open_worksheet(tab_name)
-            try:
-                ensure_sheet_headers_match(ws, OT_RECORD_HEADERS)
-            except Exception:
-                pass
-            day_str = (start_dt or end_dt).strftime("%Y-%m-%d") if (start_dt or end_dt) else ""
-            row = [
-                driver,                      # Name
-                ot_type_str,                 # Type 150% / 200%
-                start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
-                end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
-                day_str,
-                f"{morning_h:.2f}" if morning_h > 0 else "",
-                f"{evening_h:.2f}" if evening_h > 0 else "",
-                note_str,
-            ]
-            try:
-                ws.append_row(row, value_input_option="USER_ENTERED")
-            except Exception:
-                ws.append_row(row)
-        except Exception:
-            logger.exception("Failed to append OT record row for %s", driver)
-
-    # --- Normal weekdays OT rules ---
-    if is_normal_weekday:
-        if action == "IN":
-            # Rule 2: IN between (04:00, 07:00)
+    if action == "IN":
+        # Morning OT rule: only count on weekdays, not holidays, and between 04:00 and 07:00
+        if (not is_weekend) and (not is_holiday):
             t4 = ts_dt.replace(hour=4, minute=0, second=0, microsecond=0)
             t7 = ts_dt.replace(hour=7, minute=0, second=0, microsecond=0)
-            if t4 < ts_dt < t7:
+            if t4 <= ts_dt < t7:
                 end_morning = ts_dt.replace(hour=8, minute=0, second=0, microsecond=0)
-                morning_hours = max((end_morning - ts_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(morning_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday morning OT (Clock In)"
-                    append_ot_record(ts_dt, end_morning, total_ot, 0.0, ot_type, note)
-                    should_notify = True
-        else:
-            # action == OUT
-            h = ts_dt.hour + ts_dt.minute / 60.0
-            # Rule 1: OUT between [00:00, 04:00)
-            if 0 <= h < 4:
-                start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                morning_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(morning_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday early-morning OT (after midnight)"
-                    append_ot_record(start_dt, ts_dt, total_ot, 0.0, ot_type, note)
-                    should_notify = True
-            # Rule 5: OUT >= 18:30
-            elif ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
-                start_dt = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-                evening_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(evening_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday evening OT"
-                    append_ot_record(start_dt, ts_dt, 0.0, total_ot, ot_type, note)
-                    should_notify = True
-
-    # --- Weekend / Holiday OT rules ---
+                morning_ot = round((end_morning - ts_dt).total_seconds() / 3600.0, 2)
+                if morning_ot > 0:
+                    rows_to_write.append([ts_dt.strftime("%Y-%m-%d"), driver, ts_dt.strftime("%H:%M:%S"), "08:00:00", str(morning_ot), "Morning", "Clock In morning OT"])
     else:
-        # Only act on OUT; IN just records time
-        if action == "OUT":
-            start_dt = None
-            if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
-                try:
-                    start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    start_dt = None
-            if start_dt is not None:
-                # Full shift as OT
-                if ts_dt < start_dt:
-                    ts_dt_adj = ts_dt + timedelta(days=1)
-                else:
-                    ts_dt_adj = ts_dt
-                dur = max((ts_dt_adj - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(dur, 2)
-                if total_ot > 0:
-                    ot_type = "200%"
-                    note = "Weekend/Holiday full-shift OT"
-                    append_ot_record(start_dt, ts_dt_adj, 0.0, total_ot, ot_type, note)
-                    should_notify = True
-                    weekday_msg = False  # use 'OT today' wording
+        # action == OUT
+        # find matching start time from last (the 'last' variable should be the previous IN entry)
+        start_dt = None
+        if last and len(last) > O_IDX_TIME:
+            try:
+                start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                start_dt = None
 
-    # --- Notifications & user feedback ---
-    if should_notify and total_ot > 0 and chat is not None:
-        try:
-            if weekday_msg:
-                msg = f"Driver {driver}: OT: {total_ot:.2f} hour(s)."
-            else:
-                msg = f"Driver {driver}: OT today: {total_ot:.2f} hour(s)."
-            await context.bot.send_message(chat_id=chat.id, text=msg)
-        except Exception:
-            logger.exception("Failed to send OT notification")
-
-    # Edit the inline-button message as a confirmation
-    try:
-        if total_ot > 0:
-            await query.edit_message_text(
-                f"Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}. OT: {total_ot:.2f} hour(s)."
-            )
+        if start_dt is None:
+            # no start found, nothing to compute
+            pass
         else:
-            await query.edit_message_text(
-                f"Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}."
-            )
-    except Exception:
-        # Fallback: ignore edit errors
-        pass
+            # If weekend or holiday for the start date -> whole shift counts as OT (single row)
+            if _is_weekend(start_dt) or (start_dt.strftime("%Y-%m-%d") in hols):
+                total = round((ts_dt - start_dt).total_seconds() / 3600.0, 2) if ts_dt >= start_dt else round(((ts_dt + timedelta(days=1)) - start_dt).total_seconds() / 3600.0, 2)
+                weekend_ot = total if total > 0 else 0.0
+                if weekend_ot > 0:
+                    rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, start_dt.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), str(weekend_ot), "Weekend/Holiday", "Clock Out weekend OT"])
+            else:
+                # normal weekday: compute evening OT if any (>=18:30)
+                t18 = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+                t1830 = ts_dt.replace(hour=18, minute=30, second=0, microsecond=0)
+                # handle crossing midnight: if end date != start date, split into two parts
+                if ts_dt.date() != start_dt.date():
+                    # day1: from start_dt to 23:59:59 of start_dt.date()
+                    day1_end = datetime.combine(start_dt.date(), dtime(23, 59, 59))
+                    # compute evening part for day1
+                    evening_start = max(start_dt, start_dt.replace(hour=18, minute=0, second=0, microsecond=0))
+                    if day1_end > evening_start and day1_end > start_dt:
+                        ev = round((day1_end - evening_start).total_seconds() / 3600.0, 2)
+                        if ev > 0:
+                            rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, evening_start.strftime("%H:%M:%S"), day1_end.strftime("%H:%M:%S"), str(ev), "Evening", "Cross-midnight part day1"])
+                    # day2: from 00:00 to ts_dt
+                    day2_start = datetime.combine(ts_dt.date(), dtime(0,0,0))
+                    # for day2, if it's weekend/holiday count fully, else if after 00:00 and before 04:00 count as early OT
+                    if _is_weekend(day2_start) or (day2_start.strftime("%Y-%m-%d") in hols):
+                        ev2 = round((ts_dt - day2_start).total_seconds() / 3600.0, 2)
+                        if ev2 > 0:
+                            rows_to_write.append([day2_start.strftime("%Y-%m-%d"), driver, day2_start.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), str(ev2), "Weekend/Holiday", "Cross-midnight part day2"])
+                    else:
+                        # early-morning OT (0:00-4:00) counting rule for OUT between 0:00 and 4:00
+                        if day2_start <= ts_dt < day2_start.replace(hour=4, minute=0, second=0, microsecond=0):
+                            ev2 = round((ts_dt - day2_start).total_seconds() / 3600.0, 2)
+                            if ev2 > 0:
+                                rows_to_write.append([day2_start.strftime("%Y-%m-%d"), driver, day2_start.strftime("%H:%M:%S"), ts_dt.strftime("%H:%M:%S"), str(ev2), "EarlyMorning", "Cross-midnight early OT"])
+                else:
+                    # same-day: evening OT if ts_dt >= 18:30
+                    if ts_dt >= t1830:
+                        evening_ot = round((ts_dt - t18).total_seconds() / 3600.0, 2)
+                        if evening_ot > 0:
+                            rows_to_write.append([start_dt.strftime("%Y-%m-%d"), driver, "18:00:00", ts_dt.strftime("%H:%M:%S"), str(evening_ot), "Evening", "Clock Out evening OT"])
+                    # also handle OUT between 0:00 and 4:00 same-day unlikely since same-day implies no cross midnight
+
+    # write summary rows if any
+    if rows_to_write:
+        try:
+            _write_ot_rows(rows_to_write)
+        except Exception:
+            logger.exception("Failed to write OT summary rows")
+
+    # prepare reply message: only include parts that are >0
+    parts = []
+    if morning_ot > 0:
+        parts.append(f"Morning OT : {morning_ot} hour(s).")
+    if evening_ot > 0:
+        parts.append(f"Evening OT : {evening_ot} hour(s).")
+    if weekend_ot > 0:
+        parts.append(f"Weekend OT: {weekend_ot} hour(s).")
+
+    if parts:
+        # single-line receipt similar to your requested format
+        summary = " ".join(parts)
+        try:
+            await query.edit_message_text(f"Driver {driver} clocked {'in' if action=='IN' else 'out'} at {ts_dt.strftime('%H:%M')}. {summary}")
+        except Exception:
+            try:
+                await query.edit_message_text(f"Recorded {action} for {driver} at {rec[3]}")
+            except Exception:
+                pass
+    else:
+        # default short confirmation (no OT)
+        try:
+            await query.edit_message_text(f"Recorded {action} for {driver} at {rec[3]}")
+        except Exception:
+            pass
+
 async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
@@ -437,6 +387,7 @@ except Exception:
 
 # --- END: Inserted OT & Clock functionality ---
 #!/usr/bin/env python3
+import os
 import json
 import base64
 import logging
@@ -511,6 +462,29 @@ try:
 except Exception:
     HOLIDAYS = set()
 
+# Fixed OT holiday list for 2025-2026 (used only for OT summary calculations)
+_OT_FIXED_HOLIDAYS = {
+    "2025-12-29",
+    "2026-01-01",
+    "2026-01-07",
+    "2026-02-16", "2026-02-17", "2026-02-18",
+    "2026-03-08", "2026-03-09",
+    "2026-04-14", "2026-04-15", "2026-04-16",
+    "2026-05-01",
+    "2026-05-05",
+    "2026-05-14",
+    "2026-06-18",
+    "2026-09-24",
+    "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13",
+    "2026-10-15",
+    "2026-10-29",
+    "2026-11-09",
+    "2026-11-23", "2026-11-24", "2026-11-25",
+    "2026-12-29",
+}
+
+OT_HOLIDAYS = set(HOLIDAYS) | _OT_FIXED_HOLIDAYS
+
 SUPPORTED_LANGS = ("en", "km")
 
 RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
@@ -523,6 +497,10 @@ LEAVE_TAB = os.getenv("LEAVE_TAB", "Driver_Leave")
 # OT tab name (created if missing)
 OT_TAB = os.getenv('OT_TAB', 'Driver_OT')
 OT_HEADERS = ['Date', 'Driver', 'Action', 'Timestamp', 'ClockType', 'Note']
+
+# New OT summary tab (auto-created) for rules-based OT overview
+OT_SUMMARY_TAB = os.getenv("OT_SUMMARY_TAB", "Driver_OT_Summary")
+OT_SUMMARY_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning OT", "Evening OT", "Note"]
 
 MAINT_TAB = os.getenv("MAINT_TAB", "Vehicle_Maintenance")
 EXPENSE_TAB = os.getenv("EXPENSE_TAB", "Trip_Expenses")
@@ -631,17 +609,13 @@ def save_mission_cycles_to_sheet(mdict):
 def _write_ot_rows(rows):
     logger.info("Entering _write_ot_rows")
     try:
-        # Prefer the configured OT_RECORD_TAB; fall back to legacy OT_SUM_TAB or default "OT record"
-        tab_name = OT_RECORD_TAB or os.getenv("OT_SUM_TAB") or "OT record"
-        ws = open_worksheet(tab_name)
-        headers = OT_RECORD_HEADERS
+        SUM_TAB = os.getenv("OT_SUM_TAB", "Driver_OT_Calculated")
+        ws = open_worksheet(SUM_TAB)
+        headers = ['Date', 'Driver', 'Start Time', 'End Time', 'OT hours', 'OT type', 'Note']
         try:
             ensure_sheet_headers_match(ws, headers)
         except Exception:
-            try:
-                logger.exception("Failed to ensure/update OT record headers")
-            except Exception:
-                pass
+            pass
         for r in rows:
             try:
                 ws.append_row(r, value_input_option='USER_ENTERED')
@@ -905,9 +879,9 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     ODO_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Notes"],
 }
 
-# Ensure OT-related tabs have canonical headers
-HEADERS_BY_TAB.setdefault(OT_TAB, OT_HEADERS)
-HEADERS_BY_TAB.setdefault(OT_RECORD_TAB, OT_RECORD_HEADERS)
+# Ensure OT summary tab has headers
+HEADERS_BY_TAB.setdefault(OT_SUMMARY_TAB, OT_SUMMARY_HEADERS)
+
 
 TR = {
     "en": {
@@ -1036,35 +1010,25 @@ def _missions_header_fix_if_needed(ws):
         logger.exception("Error checking/fixing missions header.")
 
 def open_worksheet(tab: str = ""):
-    """Open a worksheet with minimal header enforcement and wrap it in WorksheetProxy.
 
-    This central helper applies:
-    - GoogleApiQueue for all sheet operations
-    - Lightweight header checks/creation using HEADERS_BY_TAB
-    """
-
+    # Wrap returned worksheet with WorksheetProxy to add queueing/caching.
     def _wrap_ws(ws):
         try:
             return WorksheetProxy(ws)
         except Exception:
-            # If proxying somehow fails, fall back to raw worksheet
-            return ws
-
+            return _wrap_ws(ws)
     gc = get_gspread_client()
     sh = gc.open(GOOGLE_SHEET_NAME)
-
     def _create_tab(name: str, headers: Optional[List[str]] = None):
         try:
             cols = max(12, len(headers) if headers else 12)
             ws_new = sh.add_worksheet(title=name, rows="2000", cols=str(cols))
             if headers:
-                # Header row – queued via proxy, but it's a one‑time write anyway
                 ws_new.insert_row(headers, index=1)
-            return _wrap_ws(ws_new)
+            return ws_new
         except Exception:
-            # If sheet already exists or another error, just get existing
             try:
-                return _wrap_ws(sh.worksheet(name))
+                return sh.worksheet(name)
             except Exception:
                 raise
 
@@ -1077,7 +1041,7 @@ def open_worksheet(tab: str = ""):
                 ensure_sheet_headers_match(ws, template)
             if tab == MISSIONS_TAB:
                 _missions_header_fix_if_needed(ws)
-            return _wrap_ws(ws)
+            return ws
         except Exception:
             headers = HEADERS_BY_TAB.get(tab)
             return _create_tab(tab, headers=headers)
@@ -1088,12 +1052,10 @@ def open_worksheet(tab: str = ""):
                 if GOOGLE_SHEET_TAB in HEADERS_BY_TAB:
                     ensure_sheet_has_headers_conservative(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
                     ensure_sheet_headers_match(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
-                return _wrap_ws(ws)
+                return ws
             except Exception:
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
-        # Default to first sheet, wrapped
-        return _wrap_ws(sh.sheet1)
-
+        return sh.sheet1
 
 async def process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user):
     """Helper to append leave row with Leave Days, check duplicates and exclude weekends/holidays."""
@@ -2533,7 +2495,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("mission_start_plate|"):
         parts = data.split("|", 1)
         if len(parts) < 2:
-            logger.warning("mission_start_plate callback missing plate: %s", data)
+            await q.edit_message_text("Invalid selection.")
             return
         _, plate = parts
         # show departure choices
@@ -2543,20 +2505,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
-        # Legacy mission end callback from old menus: "mission_end|{plate}"
-    if data.startswith("mission_end|") and not data.startswith("mission_end_plate|"):
-        try:
-            _, legacy_plate = data.split("|", 1)
-        except Exception:
-            logger.warning("legacy mission_end callback invalid: %s", data)
-            return
-        # Normalize to new-style callback so existing handler works
-        data = f"mission_end_now|{legacy_plate}"
-
     if data.startswith("mission_end_plate|"):
         parts = data.split("|", 1)
         if len(parts) < 2:
-            logger.warning("mission_end_plate callback missing plate: %s", data)
+            await q.edit_message_text("Invalid selection.")
             return
         _, plate = parts
         context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": username}
@@ -2565,10 +2517,20 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
         return
 
+    # Legacy mission end callback from old menus: "mission_end|{plate}"
+    if data.startswith("mission_end|") and not data.startswith("mission_end_plate|"):
+        try:
+            _, legacy_plate = data.split("|", 1)
+        except Exception:
+            await q.edit_message_text(t(user_lang, "invalid_sel"))
+            return
+        # Normalize to new-style callback so existing handler works
+        data = f"mission_end_now|{legacy_plate}"
+
     if data.startswith("mission_depart|"):
         parts = data.split("|")
         if len(parts) < 3:
-            logger.warning("mission_depart callback missing fields: %s", data)
+            await q.edit_message_text("Invalid selection.")
             return
         _, dep, plate = parts
         context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
@@ -2587,7 +2549,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending = context.user_data.get("pending_mission") or {}
             plate = pending.get("plate")
             if not plate:
-                logger.warning("mission_end_now callback without plate and no pending_mission: %s", data)
+                await q.edit_message_text(t(user_lang, "invalid_sel"))
                 return
         else:
             _, plate = data.split("|", 1)
@@ -2835,7 +2797,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
             return
-
 
     # Prevent spurious "Invalid selection" after mission_end_now handlers
     if data.startswith("mission_end_now|") or data == "mission_end_now":
@@ -3101,13 +3062,272 @@ async def delete_command_message(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         pass
 
-async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+# ---------- OT summary helpers (rules-based, non-intrusive) ----------
+
+def _get_ot_summary_ws():
+    """Open or create the OT summary worksheet with proper headers."""
+    try:
+        ws = open_worksheet(OT_SUMMARY_TAB)
+        try:
+            ensure_sheet_headers_match(ws, OT_SUMMARY_HEADERS)
+        except Exception:
+            pass
+        return ws
+    except Exception:
+        try:
+            logger.exception("Failed to open OT summary worksheet")
+        except Exception:
+            pass
+        return None
+
+
+def _parse_clock_ts(ts: str) -> Optional[datetime]:
+    try:
+        return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _ensure_shift_order(start_dt: datetime, end_dt: datetime) -> tuple[datetime, datetime]:
+    """Ensure end_dt is not before start_dt (allow cross-midnight by +1 day)."""
+    if end_dt < start_dt:
+        end_dt = end_dt + timedelta(days=1)
+    return start_dt, end_dt
+
+
+def _is_ot_weekend(start_dt: datetime, end_dt: datetime) -> bool:
+    """Treat as weekend OT when both endpoints fall on Sat/Sun."""
+    try:
+        return start_dt.weekday() >= 5 and end_dt.weekday() >= 5
+    except Exception:
+        return False
+
+
+def _is_ot_holiday(dt: datetime) -> bool:
+    try:
+        return dt.strftime("%Y-%m-%d") in OT_HOLIDAYS
+    except Exception:
+        return False
+
+
+def _already_recorded_ot(ws, driver: str, start_dt: datetime, end_dt: datetime) -> bool:
+    """Avoid duplicate rows for the same driver & shift."""
+    try:
+        vals = ws.get_all_values()
+    except Exception:
+        return False
+    if not vals or len(vals) < 2:
+        return False
+    key_start = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+    key_end = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+    for row in vals[1:]:
+        if len(row) < 4:
+            continue
+        name = (row[0] or "").strip()
+        s = (row[2] or "").strip()
+        e = (row[3] or "").strip()
+        if name == driver and s == key_start and e == key_end:
+            return True
+    return False
+
+
+def _append_ot_summary_for_last_shift(driver: str, last_action: str) -> None:
     """
-    Handle Clock In / Clock Out buttons by delegating to clock_callback_handler,
-    so OT records and notifications are generated without breaking existing features.
+    Compute OT according to user rules and append a single row into OT_SUMMARY_TAB.
+    Does not touch any existing clock or OT logic.
     """
     try:
-        await clock_callback_handler(update, context)
+        ws_clock = open_worksheet(OT_TAB)
+    except Exception:
+        return
+    try:
+        vals = ws_clock.get_all_values()
+    except Exception:
+        return
+    if not vals or len(vals) < 2:
+        return
+
+    # Collect rows for this driver (skip header)
+    driver_rows = []
+    for idx, row in enumerate(vals[1:], start=2):
+        if len(row) <= max(O_IDX_DRIVER, O_IDX_TIME, O_IDX_ACTION):
+            continue
+        if (row[O_IDX_DRIVER] or "").strip() != driver:
+            continue
+        driver_rows.append((idx, row))
+    if not driver_rows:
+        return
+
+    last_idx, last_row = driver_rows[-1]
+    action = (last_row[O_IDX_ACTION] or "").strip().upper()
+    if action != last_action:
+        # last sheet action doesn't match this callback's action; skip to avoid mistakes
+        return
+
+    end_ts_str = (last_row[O_IDX_TIME] or "").strip()
+    end_dt = _parse_clock_ts(end_ts_str)
+    if not end_dt:
+        return
+
+    # find previous entry for this driver (start of shift)
+    start_dt = None
+    for idx, row in reversed(driver_rows[:-1]):
+        ts_str = (row[O_IDX_TIME] or "").strip()
+        cand = _parse_clock_ts(ts_str)
+        if not cand:
+            continue
+        start_dt = cand
+        break
+    if not start_dt:
+        # no start -> cannot determine shift; skip
+        return
+
+    start_dt, end_dt = _ensure_shift_order(start_dt, end_dt)
+
+    ws_summary = _get_ot_summary_ws()
+    if not ws_summary:
+        return
+
+    if _already_recorded_ot(ws_summary, driver, start_dt, end_dt):
+        return
+
+    # Weekend / holiday full OT (200%)
+    is_weekend = _is_ot_weekend(start_dt, end_dt)
+    is_holiday = _is_ot_holiday(start_dt)
+    if is_weekend or is_holiday:
+        total_hours = max((end_dt - start_dt).total_seconds() / 3600.0, 0.0)
+        if total_hours <= 0:
+            return
+        note = "Weekend OT" if is_weekend and not is_holiday else "Holiday OT" if is_holiday and not is_weekend else "Weekend & Holiday OT"
+        row = [
+            driver,
+            "200%",
+            start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            start_dt.strftime("%Y-%m-%d"),
+            f"{total_hours:.2f}",
+            "",
+            note,
+        ]
+        try:
+            ws_summary.append_row(row, value_input_option="USER_ENTERED")
+        except Exception:
+            try:
+                ws_summary.append_row(row)
+            except Exception:
+                pass
+        return
+
+    # Weekday rules (150%)
+    morning_ot = 0.0
+    evening_ot = 0.0
+
+    # Rule 1: OUT between 00:00 and 04:00 -> OT = end - 00:00
+    if last_action == "OUT" and dtime(0, 0) <= end_dt.time() < dtime(4, 0):
+        midnight = end_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        morning_ot += max((end_dt - midnight).total_seconds() / 3600.0, 0.0)
+
+    # Rule 2/3: IN between 04:00 and 07:00 -> OT = 08:00 - start
+    if start_dt.time() > dtime(4, 0) and start_dt.time() < dtime(7, 0):
+        eight = start_dt.replace(hour=8, minute=0, second=0, microsecond=0)
+        morning_ot += max((eight - start_dt).total_seconds() / 3600.0, 0.0)
+
+    # Rule 4/5: OUT >= 18:30 -> OT = end - 18:00
+    if last_action == "OUT" and end_dt.time() >= dtime(18, 30):
+        six_pm = end_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+        evening_ot += max((end_dt - six_pm).total_seconds() / 3600.0, 0.0)
+
+    if morning_ot <= 0 and evening_ot <= 0:
+        # no OT for this shift
+        return
+
+    row = [
+        driver,
+        "150%",
+        start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        start_dt.strftime("%Y-%m-%d"),
+        f"{morning_ot:.2f}" if morning_ot > 0 else "",
+        f"{evening_ot:.2f}" if evening_ot > 0 else "",
+        "Weekday OT",
+    ]
+    try:
+        ws_summary.append_row(row, value_input_option="USER_ENTERED")
+    except Exception:
+        try:
+            ws_summary.append_row(row)
+        except Exception:
+            pass
+
+
+async def ot_clock_summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Passive OT summary handler for clock_in/clock_out buttons.
+    It does not edit any messages and only writes into OT_SUMMARY_TAB.
+    """
+    try:
+        query = update.callback_query
+        if not query or not (query.data or "").lower().startswith("clock_"):
+            return
+        data = (query.data or "").strip().lower()
+        if data == "clock_in":
+            last_action = "IN"
+        elif data == "clock_out":
+            last_action = "OUT"
+        else:
+            return
+        user = query.from_user or update.effective_user
+        if not user:
+            return
+        driver = (user.username or user.first_name or "unknown").strip()
+        _append_ot_summary_for_last_shift(driver, last_action)
+    except Exception:
+        try:
+            logger.exception("Error in ot_clock_summary_handler")
+        except Exception:
+            pass
+
+# ---------- end OT summary helpers ----------
+async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle Clock In / Clock Out buttons with callback_data 'clock_in' or 'clock_out'.
+    Calls record_clock_entry(driver, action) and edits the message to confirm.
+    """
+    try:
+        query = update.callback_query
+        await query.answer()
+        user = query.from_user or update.effective_user
+        driver = (user.username or user.first_name or "unknown").strip()
+        data = (query.data or "").strip().lower()
+        if data == "clock_in":
+            action = "IN"
+        elif data == "clock_out":
+            action = "OUT"
+        else:
+            action = None
+
+        if not action:
+            try:
+                await query.edit_message_text("Invalid clock action.")
+            except Exception:
+                pass
+            return
+
+        try:
+            rec = record_clock_entry(driver, action)
+            ts = rec[3] if len(rec) > 3 else now_str()
+            msg = f"Recorded **{action}** for {driver} at {ts}"
+        except Exception as e:
+            msg = f"Failed to record clock entry: {e}"
+
+        try:
+            await query.edit_message_text(msg)
+        except Exception:
+            try:
+                await query.message.reply_text(msg)
+            except Exception:
+                pass
     except Exception:
         logger.exception("Error in handle_clock_button")
 
@@ -3125,6 +3345,8 @@ def register_ui_handlers(application):
     application.add_handler(CallbackQueryHandler(plate_callback))
     # Clock In/Out buttons handler
     application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
+    # OT summary writer (non-intrusive; runs after main clock handler)
+    application.add_handler(CallbackQueryHandler(ot_clock_summary_handler, pattern=r"^clock_(in|out)$"))
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
@@ -3342,31 +3564,205 @@ if __name__ == "__main__":
     
     main()
 main()
-# === In-memory override for mission cycle persistence ===
-# We deliberately avoid any Google Sheets I/O for mission_cycle state
-# to reduce API usage and prevent OAuth scope issues. The mission
-# cycle information is kept only in memory for the lifetime of the
-# bot process.
-
-_MISSION_CYCLE_STORE = {}
 
 
-def load_mission_cycles_from_sheet():
-    """Return current in-memory mission cycle mapping.
 
-    This overrides the earlier implementation that read from Google
-    Sheets. The return value is a shallow copy so callers can't
-    accidentally mutate the internal store without calling the
-    save helper.
+# --- OT Summary sheet writer & monthly scheduled job (injected) ---
+from datetime import datetime, timedelta, time as _dtime
+
+def _get_window_for_now(dt=None):
+    now = dt or _now_dt()
+    year = now.year
+    month = now.month
+    candidate_end = datetime(year, month, 16, 4, 0, 0)
+    if now >= candidate_end:
+        # window_start is previous month 16th 04:00
+        if month == 1:
+            ws_year = year - 1
+            ws_month = 12
+        else:
+            ws_year = year
+            ws_month = month - 1
+        window_start = datetime(ws_year, ws_month, 16, 4, 0, 0)
+        window_end = candidate_end
+    else:
+        # use previous month's candidate_end as window_end, and previous-previous as start
+        if month == 1:
+            prev_year = year - 1
+            prev_month = 12
+        else:
+            prev_year = year
+            prev_month = month - 1
+        window_end = datetime(prev_year, prev_month, 16, 4, 0, 0)
+        if prev_month == 1:
+            ps_year = prev_year - 1
+            ps_month = 12
+        else:
+            ps_year = prev_year
+            ps_month = prev_month - 1
+        window_start = datetime(ps_year, ps_month, 16, 4, 0, 0)
+    return window_start, window_end
+
+def generate_driver_ot_summary_sheet(window_start, window_end):
+    """Aggregate OT_RECORD_TAB between window_start (inclusive) and window_end (exclusive)
+    and write per-driver rows into a sheet titled: Driver OT Summary (YYYY-MM-DD to YYYY-MM-DD).
+    Columns: Name, Type, Start Date, End Date, Day, Morning OT, Evening OT, Total OT, Note
     """
-    return dict(_MISSION_CYCLE_STORE)
+    try:
+        title = f"Driver OT Summary ({window_start.date()} to {(window_end - timedelta(seconds=1)).date()})"
+        # read OT record rows
+        try:
+            ws_ot = open_worksheet(OT_RECORD_TAB)
+            rows = ws_ot.get_all_values()
+        except Exception:
+            rows = []
+        header = ['Name', 'Type', 'Start Date', 'End Date', 'Day', 'Morning OT', 'Evening OT', 'Total OT', 'Note']
+        # aggregate per driver
+        agg = {}
+        if rows and len(rows) > 1:
+            for r in rows[1:]:
+                try:
+                    name = r[0] if len(r)>0 else ''
+                    typ = r[1] if len(r)>1 else ''
+                    s = r[2] if len(r)>2 else ''
+                    e = r[3] if len(r)>3 else ''
+                    day = r[4] if len(r)>4 else ''
+                    morn = float(r[5]) if len(r)>5 and r[5] else 0.0
+                    eve = float(r[6]) if len(r)>6 and r[6] else 0.0
+                    note = r[7] if len(r)>7 else ''
+                    # parse start datetime to check window
+                    st = None
+                    try:
+                        st = datetime.strptime(s, '%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        try:
+                            st = datetime.strptime(s, '%Y-%m-%d')
+                        except Exception:
+                            st = None
+                    if st is None:
+                        continue
+                    if not (window_start <= st < window_end):
+                        continue
+                    if name not in agg:
+                        agg[name] = {'Type': typ, 'Start': s, 'End': e, 'Day': day, 'Morning': 0.0, 'Evening': 0.0, 'Note': note}
+                    agg[name]['Morning'] += morn
+                    agg[name]['Evening'] += eve
+                    # update start/end range
+                    try:
+                        cur_s = datetime.strptime(agg[name]['Start'], '%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        cur_s = st
+                    try:
+                        cur_e = datetime.strptime(agg[name]['End'], '%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        cur_e = st
+                    if st < cur_s:
+                        agg[name]['Start'] = s
+                    # update end to max
+                    try:
+                        ed = datetime.strptime(e, '%Y-%m-%d %H:%M:%S')
+                        if ed > cur_e:
+                            agg[name]['End'] = e
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
+        # write to sheet (create or clear existing)
+        try:
+            sh = open_worksheet(GOOGLE_SHEET_NAME, return_spreadsheet=True)
+            try:
+                ws_summary = sh.worksheet(title)
+            except Exception:
+                # create
+                try:
+                    ws_summary = _create_tab(sh, title, headers=header)
+                except Exception:
+                    ws_summary = sh.add_worksheet(title=title, rows=100, cols=len(header))
+                    try:
+                        ws_summary.append_row(header)
+                    except Exception:
+                        pass
+            # clear and write header & rows
+            try:
+                ws_summary.clear()
+            except Exception:
+                pass
+            try:
+                ws_summary.append_row(header, value_input_option='USER_ENTERED')
+            except Exception:
+                try:
+                    ws_summary.append_row(header)
+                except Exception:
+                    pass
+            for name, data in sorted(agg.items()):
+                total = round((data.get('Morning',0.0) or 0.0) + (data.get('Evening',0.0) or 0.0), 2)
+                row = [name, data.get('Type',''), data.get('Start',''), data.get('End',''), data.get('Day',''), f"{data.get('Morning',0.0):.2f}", f"{data.get('Evening',0.0):.2f}", f"{total:.2f}", data.get('Note','')]
+                try:
+                    ws_summary.append_row(row, value_input_option='USER_ENTERED')
+                except Exception:
+                    try:
+                        ws_summary.append_row(row)
+                    except Exception:
+                        pass
+            return True
+        except Exception:
+            try:
+                logger.exception('Failed writing summary sheet %s', title)
+            except Exception:
+                pass
+            return False
+    except Exception:
+        try:
+            logger.exception('generate_driver_ot_summary_sheet failed')
+        except Exception:
+            pass
+        return False
 
-
-def save_mission_cycles_to_sheet(mission_cycles):
-    """Update the in-memory mission cycle mapping.
-
-    This overrides the earlier implementation that wrote to Google
-    Sheets. It simply keeps everything in process memory.
-    """
-    _MISSION_CYCLE_STORE.clear()
-    _MISSION_CYCLE_STORE.update(mission_cycles or {})
+async def _monthly_ot_summary_job(context):
+    """Job runs daily at 04:05 but will only act when day == 16.
+    It will generate the Driver OT Summary sheet for the window that just ended
+    (previous month 16th 04:00 to this month 16th 04:00) and send a brief message to SUMMARY_CHAT_ID."""
+    try:
+        now = _now_dt()
+        if now.day != 16:
+            return
+        window_start, window_end = _get_window_for_now(now)
+        ok = generate_driver_ot_summary_sheet(window_start, window_end)
+        title = f"Driver OT Summary ({window_start.date()} to {(window_end - timedelta(seconds=1)).date()})"
+        try:
+            ws = open_worksheet(title)
+            vals = ws.get_all_values()
+        except Exception:
+            vals = []
+        msg_lines = [f"Driver OT Summary generated: {title}", ""]
+        total_all = 0.0
+        if vals and len(vals) > 1:
+            for r in vals[1:]:
+                try:
+                    name = r[0] if len(r)>0 else ''
+                    morn = float(r[5]) if len(r)>5 and r[5] else 0.0
+                    eve = float(r[6]) if len(r)>6 and r[6] else 0.0
+                    tot = morn + eve
+                    total_all += tot
+                    msg_lines.append(f"{name}: {round(tot,2)} hour(s)")
+                except Exception:
+                    continue
+        msg_lines.append(" ")
+        msg_lines.append(f"Grand total OT: {round(total_all,2)} hour(s)")
+        msg = "\\n".join(msg_lines)
+        summary_chat = os.getenv('SUMMARY_CHAT_ID')
+        if summary_chat:
+            try:
+                context.bot.send_message(chat_id=int(summary_chat), text=msg)
+            except Exception:
+                try:
+                    context.bot.send_message(chat_id=summary_chat, text=msg)
+                except Exception:
+                    logger.exception('Failed to send monthly OT summary message')
+        return
+    except Exception:
+        try:
+            logger.exception('monthly ot summary job failed')
+        except Exception:
+            pass
+# --- END injected code ---
