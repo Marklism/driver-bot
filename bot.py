@@ -3604,10 +3604,10 @@ def _get_window_for_now(dt=None):
     return window_start, window_end
 
 def generate_driver_ot_summary_sheet(window_start, window_end):
-    \"\"\"Aggregate OT_RECORD_TAB between window_start (inclusive) and window_end (exclusive)
+    """Aggregate OT_RECORD_TAB between window_start (inclusive) and window_end (exclusive)
     and write per-driver rows into a sheet titled: Driver OT Summary (YYYY-MM-DD to YYYY-MM-DD).
     Columns: Name, Type, Start Date, End Date, Day, Morning OT, Evening OT, Total OT, Note
-    \"\"\"
+    """
     try:
         title = f\"Driver OT Summary ({window_start.date()} to {(window_end - timedelta(seconds=1)).date()})\"
         # read OT record rows
@@ -3719,9 +3719,9 @@ def generate_driver_ot_summary_sheet(window_start, window_end):
         return False
 
 async def _monthly_ot_summary_job(context):
-    \"\"\"Job runs daily at 04:05 but will only act when day == 16.
+    """Job runs daily at 04:05 but will only act when day == 16.
     It will generate the Driver OT Summary sheet for the window that just ended
-    (previous month 16th 04:00 to this month 16th 04:00) and send a brief message to SUMMARY_CHAT_ID.\"\"\"
+    (previous month 16th 04:00 to this month 16th 04:00) and send a brief message to SUMMARY_CHAT_ID."""
     try:
         now = _now_dt()
         if now.day != 16:
