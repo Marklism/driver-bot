@@ -3554,4 +3554,27 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
     except Exception as e:
         sheet_result = f"error: {e}"
     # build reply text
-    lines = [f"OT Summary {window_start.date()} → {window_end.date()} ({window_start.year})", ""]\n    if driver_totals:\n        for drv, hrs in sorted(driver_totals.items(), key=lambda x: x[0]):\n            lines.append(f"{drv}\t{hrs:.2f}")\n    else:\n        lines.append("No records found in window.")\n    lines.append("")\n    lines.append(f"Sheet result: {sheet_result}")\n    text = "\\n".join(lines)\n    try:\n        await update.effective_chat.send_message(text)\n    except Exception:\n        try:\n            await update.message.reply_text(text)\n        except Exception:\n            pass\n\n# Register command handler if application exists\ntry:\n    application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))\nexcept Exception:\n    pass\n# === END: OT Summary integration ===
+    lines = [f"OT Summary {window_start.date()} → {window_end.date()} ({window_start.year})", ""]
+    if driver_totals:
+        for drv, hrs in sorted(driver_totals.items(), key=lambda x: x[0]):
+            lines.append(f"{drv}\t{hrs:.2f}")
+    else:
+        lines.append("No records found in window.")
+    lines.append("")
+    lines.append(f"Sheet result: {sheet_result}")
+    text = "\
+".join(lines)
+    try:
+        await update.effective_chat.send_message(text)
+    except Exception:
+        try:
+            await update.message.reply_text(text)
+        except Exception:
+            pass
+
+# Register command handler if application exists
+try:
+    application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))
+except Exception:
+    pass
+# === END: OT Summary integration ===
