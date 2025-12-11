@@ -2658,7 +2658,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         pass
                 # A merged roundtrip was just detected -> compute and send summary immediately
-undtrip is complete (outbound + return)
+# roundtrip is complete (outbound + return)
                 try:
                     nowdt = _now_dt()
                     month_start = datetime(nowdt.year, nowdt.month, 1)
@@ -3367,6 +3367,9 @@ def save_mission_cycles_to_sheet(mission_cycles):
     """
     _MISSION_CYCLE_STORE.clear()
     _MISSION_CYCLE_STORE.update(mission_cycles or {})
+
+
+
 
 
 # === BEGIN: OT Summary integration (added) ===
