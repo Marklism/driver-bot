@@ -85,10 +85,6 @@ OT_HEADERS = ["Date", "Driver", "Action", "Timestamp", "ClockType", "Note"]
 
 # OT per-shift summary tab for calculated OT
 OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
-
-# Configuration constants
-EVENING_CUTOFF = (18, 30)  # hour, minute for evening OT cutoff (HH,MM)
-
 OT_HOLIDAYS_2026 = ['2026-01-01', '2026-01-07', '2026-02-16', '2026-02-17', '2026-02-18', '2026-03-08', '2026-03-09', '2026-04-14', '2026-04-15', '2026-04-16', '2026-05-01', '2026-05-05', '2026-05-14', '2026-06-18', '2026-09-24', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-15', '2026-10-29', '2026-11-09', '2026-11-23', '2026-11-24', '2026-11-25', '2026-12-29']
 
 OT_RECORD_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning OT", "Evening OT", "Note"]
@@ -214,19 +210,7 @@ def compute_ot_for_shift(start_dt, end_dt, is_holiday=False, holiday_dates=None,
     """
     try:
         if holiday_dates is None:
-            # primary: load from Holidays sheet; fallback: built-in 2026 list
             holiday_dates = set()
-            try:
-                sheet_hols = load_holidays_from_sheet()
-                if sheet_hols:
-                    holiday_dates.update(sheet_hols)
-                else:
-                    holiday_dates.update(OT_HOLIDAYS_2026 if 'OT_HOLIDAYS_2026' in globals() else [])
-            except Exception:
-                try:
-                    holiday_dates.update(OT_HOLIDAYS_2026 if 'OT_HOLIDAYS_2026' in globals() else [])
-                except Exception:
-                    pass
         # merge built-in 2026 holidays
         try:
             holiday_dates.update([d for d in OT_HOLIDAYS_2026])
@@ -256,7 +240,7 @@ def compute_ot_for_shift(start_dt, end_dt, is_holiday=False, holiday_dates=None,
                 # morning OT window 00:00-07:00 counts partially; evening window 18:00-23:59 counts partially
                 # We'll approximate by counting any time outside 07:00-18:00 as OT (configurable rules can be added)
                 morning_cut = datetime.datetime.combine(cur.date(), datetime.time(7,0,tzinfo=cur.tzinfo))
-                evening_cut = datetime.datetime.combine(cur.date(), datetime.time(EVENING_CUTOFF[0], EVENING_CUTOFF[1], tzinfo=cur.tzinfo))
+                evening_cut = datetime.datetime.combine(cur.date(), datetime.time(18,30,tzinfo=cur.tzinfo))
                 # morning segment
                 if cur < morning_cut:
                     seg_end = min(nxt, morning_cut)
