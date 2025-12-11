@@ -3414,7 +3414,7 @@ def _collect_ot_records_in_window(window_start: datetime, window_end: datetime):
         vals = ws.get_all_values()
     except Exception:
         try:
-            logger.exception(\"Failed to open OT_TAB for OT summary collection\")
+            logger.exception("Failed to open OT_TAB for OT summary collection")
         except Exception:
             pass
         return []
@@ -3429,11 +3429,11 @@ def _collect_ot_records_in_window(window_start: datetime, window_end: datetime):
             if not ts_s:
                 continue
             try:
-                ts = datetime.strptime(ts_s, \"%Y-%m-%d %H:%M:%S\")
+                ts = datetime.strptime(ts_s, "%Y-%m-%d %H:%M:%S")
             except Exception:
                 continue
             if window_start <= ts <= window_end:
-                out.append({\"driver\": drv, \"timestamp\": ts, \"event\": act})
+                out.append({"driver": drv, "timestamp": ts, "event": act})
         except Exception:
             continue
     return out
@@ -3443,17 +3443,17 @@ def compute_driver_ot_hours_from_records(records, window_start, window_end):
     drivers = {}
     per = {}
     for r in records:
-        d = r.get(\"driver\") or \"Unknown\"
-        per.setdefault(d, []).append((r.get(\"timestamp\"), r.get(\"event\")))
+        d = r.get("driver") or "Unknown"
+        per.setdefault(d, []).append((r.get("timestamp"), r.get("event")))
     totals = {}
     for drv, events in per.items():
         events.sort(key=lambda x: x[0])
         total = timedelta(0)
         in_time = None
         for ts, ev in events:
-            if ev and str(ev).upper().strip() == \"IN\":
+            if ev and str(ev).upper().strip() == "IN":
                 in_time = ts
-            elif ev and str(ev).upper().strip() == \"OUT\":
+            elif ev and str(ev).upper().strip() == "OUT":
                 if in_time:
                     total += (ts - in_time)
                     in_time = None
@@ -3467,14 +3467,14 @@ def compute_driver_ot_hours_from_records(records, window_start, window_end):
 
 def ensure_ot_summary_sheet_exists(spreadsheet):
     """Ensure a worksheet titled 'OT Summary' exists; create with headers if missing."""
-    title = os.getenv(\"OT_SUMMARY_TAB\") or \"OT Summary\"
+    title = os.getenv("OT_SUMMARY_TAB") or "OT Summary"
     try:
         ws = spreadsheet.worksheet(title)
     except Exception:
         # create sheet
         try:
             ws = spreadsheet.add_worksheet(title=title, rows=1000, cols=10)
-            ws.append_row([\"Driver\", \"Total OT Hours\", \"Window Start\", \"Window End\"])
+            ws.append_row(["Driver", "Total OT Hours", "Window Start", "Window End"])
         except Exception as e:
             raise
     return ws
@@ -3484,8 +3484,8 @@ def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datet
     try:
         gc = _get_gspread_client()
         # prefer explicit sheet name env vars
-        sheet_name = os.getenv(\"GOOGLE_SHEET_NAME\") or os.getenv(\"GOOGLE_SHEET_TAB\") or None
-        sheet_id = os.getenv(\"SHEET_ID\") or os.getenv(\"SPREADSHEET_ID\") or None
+        sheet_name = os.getenv("GOOGLE_SHEET_NAME") or os.getenv("GOOGLE_SHEET_TAB") or None
+        sheet_id = os.getenv("SHEET_ID") or os.getenv("SPREADSHEET_ID") or None
         if sheet_name:
             sh = gc.open(sheet_name)
         elif sheet_id:
@@ -3494,31 +3494,31 @@ def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datet
             sh = gc.open(GOOGLE_SHEET_NAME)
         ws = None
         try:
-            ws = sh.worksheet(os.getenv(\"OT_SUMMARY_TAB\") or \"OT Summary\")
+            ws = sh.worksheet(os.getenv("OT_SUMMARY_TAB") or "OT Summary")
         except Exception:
             ws = ensure_ot_summary_sheet_exists(sh)
         # prepare rows sorted by driver
         rows = []
-        for drv in sorted(driver_totals.keys(), key=lambda s: s or \"\"):
+        for drv in sorted(driver_totals.keys(), key=lambda s: s or ""):
             rows.append([drv, round(driver_totals[drv], 2), window_start.isoformat(), window_end.isoformat()])
         # clear existing body and write
         try:
             # write header if missing
             vals = ws.get_all_values()
             if not vals or len(vals) == 0:
-                ws.append_row([\"Driver\", \"Total OT Hours\", \"Window Start\", \"Window End\"], value_input_option=\"USER_ENTERED\")
+                ws.append_row(["Driver", "Total OT Hours", "Window Start", "Window End"], value_input_option="USER_ENTERED")
             # clear from A2:D1000 (best-effort)
             try:
-                ws.batch_clear([\"A2:D1000\"])
+                ws.batch_clear(["A2:D1000"])
             except Exception:
                 pass
             if rows:
-                ws.update(\"A2:D{}\".format(len(rows)+1), rows, value_input_option=\"USER_ENTERED\")
+                ws.update("A2:D{}".format(len(rows)+1), rows, value_input_option="USER_ENTERED")
         except Exception:
             # fallback: append rows
             for r in rows:
                 try:
-                    ws.append_row(r, value_input_option=\"USER_ENTERED\")
+                    ws.append_row(r, value_input_option="USER_ENTERED")
                 except Exception:
                     try:
                         ws.append_row(r)
@@ -3527,7 +3527,7 @@ def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datet
         return True
     except Exception as e:
         try:
-            logger.exception(\"Failed to update OT Summary sheet: %s\", e)
+            logger.exception("Failed to update OT Summary sheet: %s", e)
         except Exception:
             pass
         return False
@@ -3550,8 +3550,8 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
     sheet_result = None
     try:
         ok = update_ot_summary_sheet(driver_totals, window_start, window_end)
-        sheet_result = \"updated\" if ok else \"failed\"
+        sheet_result = "updated" if ok else "failed"
     except Exception as e:
-        sheet_result = f\"error: {e}\"
+        sheet_result = f"error: {e}"
     # build reply text
-    lines = [f\"OT Summary {window_start.date()} → {window_end.date()} ({window_start.year})\", \"\"]\n    if driver_totals:\n        for drv, hrs in sorted(driver_totals.items(), key=lambda x: x[0]):\n            lines.append(f\"{drv}\t{hrs:.2f}\")\n    else:\n        lines.append(\"No records found in window.\")\n    lines.append(\"\")\n    lines.append(f\"Sheet result: {sheet_result}\")\n    text = \"\\n\".join(lines)\n    try:\n        await update.effective_chat.send_message(text)\n    except Exception:\n        try:\n            await update.message.reply_text(text)\n        except Exception:\n            pass\n\n# Register command handler if application exists\ntry:\n    application.add_handler(CommandHandler(\"ot_summary_summary\", ot_summary_summary_command))\nexcept Exception:\n    pass\n# === END: OT Summary integration ===
+    lines = [f"OT Summary {window_start.date()} → {window_end.date()} ({window_start.year})", ""]\n    if driver_totals:\n        for drv, hrs in sorted(driver_totals.items(), key=lambda x: x[0]):\n            lines.append(f"{drv}\t{hrs:.2f}")\n    else:\n        lines.append("No records found in window.")\n    lines.append("")\n    lines.append(f"Sheet result: {sheet_result}")\n    text = "\\n".join(lines)\n    try:\n        await update.effective_chat.send_message(text)\n    except Exception:\n        try:\n            await update.message.reply_text(text)\n        except Exception:\n            pass\n\n# Register command handler if application exists\ntry:\n    application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))\nexcept Exception:\n    pass\n# === END: OT Summary integration ===
