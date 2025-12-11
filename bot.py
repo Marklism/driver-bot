@@ -45,6 +45,38 @@ except Exception:
     ZoneInfo = None
 from datetime import datetime, timedelta, time as dtime
 
+
+# mission merge helper
+try:
+    from helper_mission_merge import determine_roundtrip_status, is_roundtrip_complete
+except Exception:
+    determine_roundtrip_status = None
+    is_roundtrip_complete = None
+
+
+
+def load_holidays_from_sheet():
+    """Attempt to load holiday dates (YYYY-MM-DD) from a sheet named 'Holidays' if present."""
+    holidays = set()
+    try:
+        ws = None
+        try:
+            ws = open_worksheet("Holidays")
+        except Exception:
+            return holidays
+        vals = ws.get_all_values()
+        for row in vals[1:]:  # skip header
+            if not row:
+                continue
+            d = row[0].strip()
+            if d:
+                holidays.add(d)
+    except Exception:
+        try:
+            logger.exception("Failed loading holidays from sheet")
+        except Exception:
+            pass
+    return holidays
 from typing import Optional, Dict, List, Any
 
 # --- BEGIN: Inserted OT & Clock functionality (from Bot(包含OT和打卡).txt) ---
@@ -53,6 +85,12 @@ OT_HEADERS = ["Date", "Driver", "Action", "Timestamp", "ClockType", "Note"]
 
 # OT per-shift summary tab for calculated OT
 OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
+
+# Configuration constants
+EVENING_CUTOFF = (18, 30)  # hour, minute for evening OT cutoff (HH,MM)
+
+OT_HOLIDAYS_2026 = ['2026-01-01', '2026-01-07', '2026-02-16', '2026-02-17', '2026-02-18', '2026-03-08', '2026-03-09', '2026-04-14', '2026-04-15', '2026-04-16', '2026-05-01', '2026-05-05', '2026-05-14', '2026-06-18', '2026-09-24', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-15', '2026-10-29', '2026-11-09', '2026-11-23', '2026-11-24', '2026-11-25', '2026-12-29']
+
 OT_RECORD_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning OT", "Evening OT", "Note"]
 
 # OT holidays configuration: default includes 2025-12-29; extend via OT_HOLIDAYS or HOLIDAYS env vars
@@ -106,6 +144,7 @@ O_IDX_NOTE = 5
 #  OT SECTION — Clock In/Out + OT Calculation
 # ---------------------------------------------------------
 
+
 def record_clock_entry(driver: str, action: str, note: str = ""):
     dt = _now_dt()
     ws = open_worksheet(OT_TAB)
@@ -119,6 +158,21 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
         except Exception:
             pass
 
+    # Prevent rapid duplicate taps: if last entry for this driver has same action within 5 seconds, ignore
+    try:
+        last = get_last_clock_entry(driver)
+        if last:
+            try:
+                last_ts = parse_datetime_str(last[3]) if isinstance(last[3], str) else last[3]
+                if abs((dt - last_ts).total_seconds()) < 5 and last[2] == action:
+                    logger.info("Duplicate clock entry ignored for %s action %s at %s", driver, action, dt.isoformat())
+                    return last  # ignore duplicate
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    event_id = str(uuid.uuid4())
     row = [
         dt.strftime("%Y-%m-%d"),
         driver,
@@ -126,8 +180,16 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
         dt.strftime("%Y-%m-%d %H:%M:%S"),
         "IN" if action == "IN" else "OUT",
         note,
+        event_id,
+        "FALSE",  # processed flag
     ]
-    ws.append_row(row)
+    try:
+        ws.append_row(row, value_input_option='USER_ENTERED')
+    except Exception:
+        try:
+            ws.append_row(row)
+        except Exception:
+            logger.exception("Failed to append clock entry %s", row)
     return row
 
 def get_last_clock_entry(driver: str):
@@ -144,443 +206,75 @@ def get_last_clock_entry(driver: str):
 def _is_weekend(dt: datetime) -> bool:
     return dt.weekday() >= 5  # 5=Sat,6=Sun
 
-def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool = False):
-    """Return total OT hours for one shift, possibly crossing midnight."""
-    if end_dt < start_dt:
-        end_dt = end_dt + timedelta(days=1)
 
-    total_ot = 0.0
-
-    dt = start_dt
-    while dt < end_dt:
-        next_day = (dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        segment_end = min(next_day, end_dt)
-
-        seg_is_weekend = _is_weekend(dt)
-        seg_is_holiday = is_holiday
-
-        if seg_is_weekend or seg_is_holiday:
-            hours = (segment_end - dt).total_seconds() / 3600
-            total_ot += hours
-        else:
-            t7 = dt.replace(hour=7, minute=0, second=0, microsecond=0)
-            if dt < t7:
-                ot_morning = (min(segment_end, t7) - dt).total_seconds() / 3600
-                total_ot += max(ot_morning, 0)
-
-            t18 = dt.replace(hour=18, minute=0, second=0, microsecond=0)
-            t1830 = dt.replace(hour=18, minute=30, second=0, microsecond=0)
-
-            if segment_end > t1830:
-                ot_evening = (segment_end - t18).total_seconds() / 3600
-                total_ot += max(ot_evening, 0)
-
-        dt = segment_end
-
-    return round(total_ot, 2)
-
-async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def compute_ot_for_shift(start_dt, end_dt, is_holiday=False, holiday_dates=None, tz=None):
+    """Compute OT hours between start_dt and end_dt.
+    Optional: holiday_dates: set of YYYY-MM-DD strings to treat as holidays (if provided).
+    Returns total OT hours (float) and a dict with breakdown.
     """
-    Unified Clock In/Out + OT calculation handler.
-
-    Rules (Mon–Fri, non-holiday):
-      1) If action=OUT and 00:00 <= ts < 04:00 → OT = ts - 00:00 (same day)  (morning OT)
-      2) If action=IN and 04:00 < ts < 07:00 → OT = 08:00 - ts              (morning OT)
-      3) If action=IN and ts >= 07:00      → no OT
-      4) If action=OUT and ts < 18:30      → no OT
-      5) If action=OUT and ts >= 18:30     → OT = ts - 18:00                (evening OT)
-
-    Weekend (Sat 00:00 – Sun 23:59) and holidays:
-      6) For a shift (IN → OUT) fully on weekend/holiday → OT = end - start (200%)
-         (Clock IN: no message; Clock OUT: record & notify "OT today: X hour(s)")
-    """
-    query = update.callback_query
-    await query.answer()
-
-    user = update.effective_user
-    driver = user.username or user.first_name
-    chat = query.message.chat if query.message else None
-
-    # previous entry for this driver
-    last = get_last_clock_entry(driver)
-    now_in = last is None or (len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "OUT")
-    action = "IN" if now_in else "OUT"
-
-    # record raw clock
-    rec = record_clock_entry(driver, action)
-
-    # parse timestamp
     try:
-        ts_dt = datetime.strptime(rec[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        ts_dt = _now_dt()
-
-    is_weekend = _is_weekend(ts_dt)
-    is_holiday = _is_holiday(ts_dt)
-    is_normal_weekday = (not is_weekend) and (not is_holiday)
-
-    morning_hours = 0.0
-    evening_hours = 0.0
-    total_ot = 0.0
-    ot_type = ""
-    note = ""
-    should_notify = False
-    weekday_msg = True  # False → use "OT today: X" wording
-
-    # Helper: append one OT record row
-    def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
-        try:
-            tab_name = OT_RECORD_TAB
-            ws = open_worksheet(tab_name)
+        if holiday_dates is None:
+            # primary: load from Holidays sheet; fallback: built-in 2026 list
+            holiday_dates = set()
             try:
-                ensure_sheet_headers_match(ws, OT_RECORD_HEADERS)
-            except Exception:
-                pass
-            day_str = (start_dt or end_dt).strftime("%Y-%m-%d") if (start_dt or end_dt) else ""
-            row = [
-                driver,                      # Name
-                ot_type_str,                 # Type 150% / 200%
-                start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
-                end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
-                day_str,
-                f"{morning_h:.2f}" if morning_h > 0 else "",
-                f"{evening_h:.2f}" if evening_h > 0 else "",
-                note_str,
-            ]
-            try:
-                ws.append_row(row, value_input_option="USER_ENTERED")
-            except Exception:
-                ws.append_row(row)
-        except Exception:
-            logger.exception("Failed to append OT record row for %s", driver)
-
-    # --- Normal weekdays OT rules ---
-    if is_normal_weekday:
-        if action == "IN":
-            # Rule 2: IN between (04:00, 07:00)
-            t4 = ts_dt.replace(hour=4, minute=0, second=0, microsecond=0)
-            t7 = ts_dt.replace(hour=7, minute=0, second=0, microsecond=0)
-            if t4 < ts_dt < t7:
-                end_morning = ts_dt.replace(hour=8, minute=0, second=0, microsecond=0)
-                morning_hours = max((end_morning - ts_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(morning_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday morning OT (Clock In)"
-                    append_ot_record(ts_dt, end_morning, total_ot, 0.0, ot_type, note)
-                    should_notify = True
-        else:
-            # action == OUT
-            h = ts_dt.hour + ts_dt.minute / 60.0
-            # Rule 1: OUT between [00:00, 04:00)
-            if 0 <= h < 4:
-                start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                morning_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(morning_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday early-morning OT (after midnight)"
-                    append_ot_record(start_dt, ts_dt, total_ot, 0.0, ot_type, note)
-                    should_notify = True
-            # Rule 5: OUT >= 18:30
-            elif ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
-                start_dt = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-                evening_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(evening_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday evening OT"
-                    append_ot_record(start_dt, ts_dt, 0.0, total_ot, ot_type, note)
-                    should_notify = True
-
-    # --- Weekend / Holiday OT rules ---
-    else:
-        # Only act on OUT; IN just records time
-        if action == "OUT":
-            start_dt = None
-            if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
-                try:
-                    start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    start_dt = None
-            if start_dt is not None:
-                # Full shift as OT
-                if ts_dt < start_dt:
-                    ts_dt_adj = ts_dt + timedelta(days=1)
+                sheet_hols = load_holidays_from_sheet()
+                if sheet_hols:
+                    holiday_dates.update(sheet_hols)
                 else:
-                    ts_dt_adj = ts_dt
-                dur = max((ts_dt_adj - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(dur, 2)
-                if total_ot > 0:
-                    ot_type = "200%"
-                    note = "Weekend/Holiday full-shift OT"
-                    append_ot_record(start_dt, ts_dt_adj, 0.0, total_ot, ot_type, note)
-                    should_notify = True
-                    weekday_msg = False  # use 'OT today' wording
-
-    # --- Notifications & user feedback ---
-    if should_notify and total_ot > 0 and chat is not None:
+                    holiday_dates.update(OT_HOLIDAYS_2026 if 'OT_HOLIDAYS_2026' in globals() else [])
+            except Exception:
+                try:
+                    holiday_dates.update(OT_HOLIDAYS_2026 if 'OT_HOLIDAYS_2026' in globals() else [])
+                except Exception:
+                    pass
+        # merge built-in 2026 holidays
         try:
-            if weekday_msg:
-                msg = f"Driver {driver}: OT: {total_ot:.2f} hour(s)."
+            holiday_dates.update([d for d in OT_HOLIDAYS_2026])
+        except Exception:
+            pass
+        total = 0.0
+        breakdown = {'morning': 0.0, 'evening': 0.0, 'weekend': 0.0, 'holiday': 0.0}
+        # normalize to datetimes with tz if provided
+        sd = start_dt
+        ed = end_dt
+        # if end < start, assume end is next day
+        if ed < sd:
+            ed = ed + datetime.timedelta(days=1)
+        cur = sd
+        while cur < ed:
+            nxt = min(ed, cur + datetime.timedelta(days=1))
+            # decide if this day is holiday or weekend
+            day_str = cur.date().isoformat()
+            is_hol = (day_str in holiday_dates) or is_holiday
+            is_weekend = cur.weekday() >= 5
+            duration = (nxt - cur).total_seconds() / 3600.0
+            if is_hol or is_weekend:
+                breakdown['holiday' if is_hol else 'weekend'] += duration
+                total += duration
             else:
-                msg = f"Driver {driver}: OT today: {total_ot:.2f} hour(s)."
-            await context.bot.send_message(chat_id=chat.id, text=msg)
-        except Exception:
-            logger.exception("Failed to send OT notification")
-
-    # Edit the inline-button message as a confirmation
-    try:
-        if total_ot > 0:
-            await query.edit_message_text(
-                f"Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}. OT: {total_ot:.2f} hour(s)."
-            )
-        else:
-            await query.edit_message_text(
-                f"Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}."
-            )
+                # For non-holiday weekdays, split by morning/evening thresholds
+                # morning OT window 00:00-07:00 counts partially; evening window 18:00-23:59 counts partially
+                # We'll approximate by counting any time outside 07:00-18:00 as OT (configurable rules can be added)
+                morning_cut = datetime.datetime.combine(cur.date(), datetime.time(7,0,tzinfo=cur.tzinfo))
+                evening_cut = datetime.datetime.combine(cur.date(), datetime.time(EVENING_CUTOFF[0], EVENING_CUTOFF[1], tzinfo=cur.tzinfo))
+                # morning segment
+                if cur < morning_cut:
+                    seg_end = min(nxt, morning_cut)
+                    hrs = (seg_end - cur).total_seconds() / 3600.0
+                    breakdown['morning'] += hrs
+                    total += hrs
+                # evening segment
+                if nxt > evening_cut:
+                    seg_start = max(cur, evening_cut)
+                    hrs = (nxt - seg_start).total_seconds() / 3600.0
+                    breakdown['evening'] += hrs
+                    total += hrs
+            cur = nxt
+        return round(total, 2), breakdown
     except Exception:
-        # Fallback: ignore edit errors
-        pass
-async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /ot_report [driver] YYYY-MM """
-    args = context.args
-    if not args:
-        await update.message.reply_text("Usage: /ot_report [username] YYYY-MM")
-        return
+        logger.exception("Failed computing OT for shift")
+        return 0.0, {'morning':0.0,'evening':0.0,'weekend':0.0,'holiday':0.0}
 
-    if len(args) == 1:
-        driver = update.effective_user.username
-        ym = args[0]
-    else:
-        driver = args[0]
-        ym = args[1]
-
-    try:
-        year, month = map(int, ym.split("-"))
-        month_start = datetime(year, month, 1)
-        if month == 12:
-            month_end = datetime(year + 1, 1, 1)
-        else:
-            month_end = datetime(year, month + 1, 1)
-    except Exception:
-        await update.message.reply_text("Invalid month format. Use YYYY-MM.")
-        return
-
-    ws = open_worksheet(OT_TAB)
-    vals = ws.get_all_values()
-    if len(vals) <= 1:
-        await update.message.reply_text("No OT records.")
-        return
-
-    records = []
-    for row in vals[1:]:
-        if len(row) < 4:
-            continue
-        d = row[O_IDX_DATE]
-        r_driver = row[O_IDX_DRIVER]
-        ts = row[O_IDX_TIME]
-        if r_driver != driver:
-            continue
-        try:
-            dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            continue
-        if month_start <= dt < month_end:
-            records.append((dt, row))
-
-    if not records:
-        await update.message.reply_text(f"No OT for {driver} in {ym}.")
-        return
-
-    records.sort(key=lambda x: x[0])
-
-    shifts = []
-    pending_start = None
-
-    for dt, row in records:
-        action = row[O_IDX_ACTION]
-        if action == "IN":
-            pending_start = dt
-        elif action == "OUT":
-            if pending_start:
-                shifts.append((pending_start, dt))
-                pending_start = None
-
-    if pending_start:
-        shifts.append((pending_start, month_end))
-
-    total_ot = 0.0
-    detail_lines = []
-
-    for st, ed in shifts:
-        ot = compute_ot_for_shift(st, ed)
-        total_ot += ot
-        detail_lines.append(f"{st} → {ed}: {ot}h")
-
-    result = f"OT Report for {driver} ({ym}):\n"
-    result += "\n".join(detail_lines)
-    result += f"\n\nTotal OT: **{round(total_ot, 2)} hours**"
-
-    await update.message.reply_text(result)
-# ---------------------------------------------------------
-# Driver / Mission / Leave / Finance Helpers
-
-# Register OT handlers (inserted)
-try:
-    # These handlers implement Clock In/Out toggle and OT reporting
-    application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
-    application.add_handler(CommandHandler("ot_report", ot_report_command))
-except Exception:
-    # If application not available at import time, registration will be attempted in register_ui_handlers
-    pass
-
-# --- END: Inserted OT & Clock functionality ---
-#!/usr/bin/env python3
-import json
-import base64
-import logging
-import uuid
-import re
-from datetime import datetime, timedelta, time as dtime
-from typing import Optional, Dict, List, Any
-import urllib.request
-
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-
-try:
-    from zoneinfo import ZoneInfo
-except Exception:
-    ZoneInfo = None
-
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    BotCommand,
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    ForceReply,
-)
-from telegram.constants import ChatAction
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    PicklePersistence,
-)
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("driver-bot")
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GOOGLE_CREDS_BASE64 = os.getenv("GOOGLE_CREDS_BASE64")
-GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH")
-
-PLATE_LIST = os.getenv(
-    "PLATE_LIST",
-    "2BB-3071,2BB-0809,2CI-8066,2CK-8066,2CJ-8066,3H-8066,2AV-6527,2AZ-6828,2AX-4635,2BV-8320",
-)
-GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Driver_Log")
-GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")
-
-_env_tz = os.getenv("LOCAL_TZ")
-if _env_tz is None:
-    LOCAL_TZ = "Asia/Phnom_Penh"
-else:
-    LOCAL_TZ = _env_tz.strip() or None
-
-PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
-DRIVER_PLATE_MAP_JSON = os.getenv("DRIVER_PLATE_MAP", "").strip() or None
-
-SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
-SUMMARY_HOUR = int(os.getenv("SUMMARY_HOUR", "20"))
-SUMMARY_TZ = os.getenv("SUMMARY_TZ", LOCAL_TZ or "Asia/Phnom_Penh")
-
-DEFAULT_LANG = os.getenv("LANG", "en").lower()
-
-# --- Added: Holiday list from environment variable ---
-# Format: HOLIDAYS="2025-12-25,2025-12-31"
-try:
-    _raw_holidays = os.getenv("HOLIDAYS", "") or ""
-    HOLIDAYS = {d.strip() for d in _raw_holidays.split(",") if d.strip()}
-except Exception:
-    HOLIDAYS = set()
-
-SUPPORTED_LANGS = ("en", "km")
-
-RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
-DRIVERS_TAB = os.getenv("DRIVERS_TAB", "Drivers")
-SUMMARY_TAB = os.getenv("SUMMARY_TAB", "Summary")
-MISSIONS_TAB = os.getenv("MISSIONS_TAB", "Missions")
-MISSIONS_REPORT_TAB = os.getenv("MISSIONS_REPORT_TAB", "Missions_Report")
-LEAVE_TAB = os.getenv("LEAVE_TAB", "Driver_Leave")
-
-# OT tab name (created if missing)
-OT_TAB = os.getenv('OT_TAB', 'Driver_OT')
-OT_HEADERS = ['Date', 'Driver', 'Action', 'Timestamp', 'ClockType', 'Note']
-
-MAINT_TAB = os.getenv("MAINT_TAB", "Vehicle_Maintenance")
-EXPENSE_TAB = os.getenv("EXPENSE_TAB", "Trip_Expenses")
-
-# new separate finance tabs
-FUEL_TAB = os.getenv("FUEL_TAB", "Fuel")
-PARKING_TAB = os.getenv("PARKING_TAB", "Parking")
-WASH_TAB = os.getenv("WASH_TAB", "Wash")
-REPAIR_TAB = os.getenv("REPAIR_TAB", "Repair")
-ODO_TAB = os.getenv("ODO_TAB", "Odo")
-
-BOT_ADMINS_DEFAULT = "markpeng1,kmnyy,ClaireRin777"
-
-M_IDX_GUID = 0
-M_IDX_NO = 1
-M_IDX_NAME = 2
-M_IDX_PLATE = 3
-M_IDX_START = 4
-M_IDX_END = 5
-M_IDX_DEPART = 6
-M_IDX_ARRIVAL = 7
-M_IDX_STAFF = 8
-M_IDX_ROUNDTRIP = 9
-M_IDX_RETURN_START = 10
-M_IDX_RETURN_END = 11
-M_MANDATORY_COLS = 12
-
-COL_DATE = 1
-COL_DRIVER = 2
-COL_PLATE = 3
-COL_START = 4
-COL_END = 5
-COL_DURATION = 6
-
-TS_FMT = "%Y-%m-%d %H:%M:%S"
-DATE_FMT = "%Y-%m-%d"
-
-ROUNDTRIP_WINDOW_HOURS = int(os.getenv("ROUNDTRIP_WINDOW_HOURS", "24"))
-
-# --- BEGIN: Google Sheets API queue, caching and Worksheet proxy helpers ---
-import threading
-import queue
-import time
-from typing import Callable, Any, Optional, Dict, Tuple
-
-# --- BEGIN: Bot state persistence to Google Sheets (mission_cycle) ---
-import base64, json, io
-from google.oauth2 import service_account
-import gspread
-
-# --- BEGIN: ENV NAMES NORMALIZATION & Bot-state persistence helpers ---
-import base64, json
-from google.oauth2 import service_account
-import gspread
-if not os.getenv('GOOGLE_CREDS_B64') and os.getenv('GOOGLE_CREDS_BASE64'):
-    os.environ['GOOGLE_CREDS_B64'] = os.getenv('GOOGLE_CREDS_BASE64')
-_GSPREAD_SCOPES = ['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive']
-_LOADED_MISSION_CYCLES = {}
 def _get_gspread_client():
     b64 = os.getenv('GOOGLE_CREDS_B64') or os.getenv('GOOGLE_CREDS_BASE64')
     if not b64:
@@ -628,10 +322,10 @@ def save_mission_cycles_to_sheet(mdict):
 # --- END: ENV NAMES NORMALIZATION & Bot-state persistence helpers ---
 
 # Top-level OT writer (moved out of nested scope to avoid indentation issues)
+
 def _write_ot_rows(rows):
     logger.info("Entering _write_ot_rows")
     try:
-        # Prefer the configured OT_RECORD_TAB; fall back to legacy OT_SUM_TAB or default "OT record"
         tab_name = OT_RECORD_TAB or os.getenv("OT_SUM_TAB") or "OT record"
         ws = open_worksheet(tab_name)
         headers = OT_RECORD_HEADERS
@@ -642,16 +336,49 @@ def _write_ot_rows(rows):
                 logger.exception("Failed to ensure/update OT record headers")
             except Exception:
                 pass
-        for r in rows:
-            try:
-                ws.append_row(r, value_input_option='USER_ENTERED')
-            except Exception:
+        # Use batch update to write rows atomically to reduce API calls and avoid partial writes
+        try:
+            values = [headers] + rows
+            # compute range: columns A.. based on headers length
+            cols = len(headers)
+            last_col = chr(ord('A') + cols - 1) if cols <= 26 else None
+            if last_col:
+                rng = f"A1:{last_col}{len(values)}"
                 try:
-                    ws.append_row(r)
+                    ws.batch_clear([rng])
                 except Exception:
-                    logger.exception("Failed to append OT calc row %s", r)
+                    # fallback to clearing common range
+                    try:
+                        ws.batch_clear(['A2:Z10000'])
+                    except Exception:
+                        pass
+                try:
+                    ws.update(rng, values, value_input_option='USER_ENTERED')
+                except Exception:
+                    # fallback to appending rows if update fails
+                    for r in rows:
+                        try:
+                            ws.append_row(r, value_input_option='USER_ENTERED')
+                        except Exception:
+                            try:
+                                ws.append_row(r)
+                            except Exception:
+                                logger.exception("Failed to append OT calc row %s", r)
+            else:
+                # column count >26: use append fallback
+                for r in rows:
+                    try:
+                        ws.append_row(r, value_input_option='USER_ENTERED')
+                    except Exception:
+                        try:
+                            ws.append_row(r)
+                        except Exception:
+                            logger.exception("Failed to append OT calc row %s", r)
+        except Exception:
+            logger.exception("Failed batch writing OT calc rows - falling back to append")
     except Exception:
         logger.exception("Failed writing OT calc rows")
+
 
 _LOADED_MISSION_CYCLES = {}
 
@@ -1280,7 +1007,7 @@ def record_end_trip(driver: str, plate: str) -> dict:
                     existing[COL_END - 1] = end_ts
                     existing[COL_DURATION - 1] = duration_text
                     try:
-                        ws.delete_rows(row_number)
+                        _mark_secondary_merged(ws, row_number, return_start, return_end)
                     except Exception:
                         logger.exception("Failed to delete row for fallback replacement at %d", row_number)
                     try:
@@ -1375,7 +1102,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     existing[M_IDX_END] = end_ts
                     existing[M_IDX_ARRIVAL] = arrival
                     try:
-                        ws.delete_rows(row_number)
+                        _mark_secondary_merged(ws, row_number, return_start, return_end)
                     except Exception:
                         logger.exception("Failed to delete row for fallback replacement at %d", row_number)
                     try:
@@ -1466,7 +1193,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     existing[M_IDX_RETURN_START] = return_start
                     existing[M_IDX_RETURN_END] = return_end
                     try:
-                        ws.delete_rows(primary_row_number)
+                        _mark_secondary_merged(ws, primary_row_number, return_start, return_end)
                     except Exception:
                         logger.exception("Failed to delete primary row for fallback replacement at %d", primary_row_number)
                     try:
@@ -1484,7 +1211,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                             r_k = _ensure_row_length(all_vals_post[k], M_MANDATORY_COLS)
                             if str(r_k[M_IDX_GUID]).strip() == str(sec_guid).strip():
                                 try:
-                                    ws.delete_rows(k + 1)
+                                    _mark_secondary_merged(ws, k + 1, return_start, return_end)
                                     deleted_secondary = True
                                     break
                                 except Exception:
@@ -1496,7 +1223,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                                     break
                     else:
                         try:
-                            ws.delete_rows(secondary_row_number)
+                            _mark_secondary_merged(ws, secondary_row_number, return_start, return_end)
                         except Exception:
                             try:
                                 ws.update_cell(secondary_row_number, M_IDX_ROUNDTRIP + 1, "Merged")
@@ -1509,13 +1236,26 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                                 # Only treat as merged (and notify) when we actually deleted the secondary row
                 # and the primary row has return start and return end recorded (i.e. full roundtrip completed).
                 has_return_info = bool(return_start and return_end)
-                merged_flag = True if (found_pair or deleted_secondary) and has_return_info else False
+                # Primary-based rule: if the primary record has return_start and return_end, treat as merged (roundtrip complete).
+                merged_flag = True if has_return_info else False
+                logger.info("Mission merge check: primary has_return_info=%s, found_pair=%s, deleted_secondary=%s", has_return_info, bool(found_pair), bool(deleted_secondary))
 
                 return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
     except Exception as e:
         logger.exception("Failed to update mission end: %s", e)
         return {"ok": False, "message": "Failed to write mission end to sheet: " + str(e)}
+
+
+
+def is_roundtrip_complete(primary_row: dict) -> bool:
+    """Return True if a primary mission row dict indicates a completed roundtrip (has return start and end)."""
+    try:
+        rs = primary_row.get('return_start') or primary_row.get('return_start_ts') or primary_row.get('return_start_str')
+        re = primary_row.get('return_end') or primary_row.get('return_end_ts') or primary_row.get('return_end_str')
+        return bool(rs and re)
+    except Exception:
+        return False
 
 def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
     ws = open_worksheet(MISSIONS_TAB)
@@ -3174,19 +2914,11 @@ def ensure_env():
         raise RuntimeError(t(DEFAULT_LANG, "no_bot_token"))
 
 def schedule_daily_summary(application):
-    try:
-        if SUMMARY_CHAT_ID:
-            if ZoneInfo and SUMMARY_TZ:
-                tz = ZoneInfo(SUMMARY_TZ)
-            else:
-                tz = None
-            job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
-            application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
-            logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
-        else:
-            logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
-    except Exception:
-        logger.exception("Failed to schedule daily summary.")
+    # Automatic scheduling disabled — switching to manual send via /send_summary command.
+    logger.info('Automatic daily scheduling disabled; use /send_summary to trigger manually.')
+    return
+
+
 
 def _delete_telegram_webhook(token: str) -> bool:
     try:
@@ -3693,4 +3425,382 @@ except Exception:
         dispatcher.add_handler(CommandHandler("chatid", chatid_command))
     except Exception:
         pass
+# === BEGIN: manual /send_summary command (added) ===
+async def send_summary_command(update, context):
+    """Manually trigger the daily summary and send it to SUMMARY_CHAT_ID or current chat."""
+    try:
+        # Determine target chat id: prefer configured SUMMARY_CHAT_ID, else current chat
+        target_chat = SUMMARY_CHAT_ID if SUMMARY_CHAT_ID else (update.effective_chat.id if getattr(update, 'effective_chat', None) else None)
+        if not target_chat:
+            try:
+                await update.effective_chat.send_message("No SUMMARY_CHAT_ID configured and cannot detect current chat.")
+            except Exception:
+                try:
+                    await update.message.reply_text("No SUMMARY_CHAT_ID configured and cannot detect current chat.")
+                except Exception:
+                    pass
+            return
+        # Build a fake context object similar to Job context expected by send_daily_summary_job
+        class _Ctx: pass
+        job_ctx = _Ctx()
+        job_ctx.job = None
+        job_ctx.chat_id = target_chat
+        job_ctx.application = context.application if hasattr(context, 'application') else None
+        # Call the existing async job function directly
+        try:
+            await send_daily_summary_job(job_ctx, None)
+            try:
+                await update.effective_chat.send_message(f"Manual summary sent to {target_chat}.")
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                await update.effective_chat.send_message(f"Failed to send manual summary: {e}")
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            await update.effective_chat.send_message(f"Error in /send_summary: {e}")
+        except Exception:
+            pass
+
+# Register handler
+try:
+    application.add_handler(CommandHandler("send_summary", send_summary_command))
+except Exception:
+    try:
+        dispatcher.add_handler(CommandHandler("send_summary", send_summary_command))
+    except Exception:
+        pass
+# === END: manual /send_summary command (added) ===
+
+
+# === BEGIN: manual /send_summary command (added) ===
+async def send_summary_command(update, context):
+    """Manually trigger the daily summary and send it to SUMMARY_CHAT_ID or current chat."""
+    try:
+        # Determine target chat id: prefer configured SUMMARY_CHAT_ID, else current chat
+        target_chat = SUMMARY_CHAT_ID if SUMMARY_CHAT_ID else (update.effective_chat.id if getattr(update, 'effective_chat', None) else None)
+        if not target_chat:
+            try:
+                await update.effective_chat.send_message("No SUMMARY_CHAT_ID configured and cannot detect current chat.")
+            except Exception:
+                try:
+                    await update.message.reply_text("No SUMMARY_CHAT_ID configured and cannot detect current chat.")
+                except Exception:
+                    pass
+            return
+        # Build a fake context object similar to Job context expected by send_daily_summary_job
+        class _Ctx: pass
+        job_ctx = _Ctx()
+        job_ctx.job = None
+        job_ctx.chat_id = target_chat
+        job_ctx.application = context.application if hasattr(context, 'application') else None
+        # Call the existing async job function directly
+        try:
+            await send_daily_summary_job(job_ctx, None)
+            try:
+                await update.effective_chat.send_message(f"Manual summary sent to {target_chat}.")
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                await update.effective_chat.send_message(f"Failed to send manual summary: {e}")
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            await update.effective_chat.send_message(f"Error in /send_summary: {e}")
+        except Exception:
+            pass
+
+# Register handler
+try:
+    application.add_handler(CommandHandler("send_summary", send_summary_command))
+except Exception:
+    try:
+        dispatcher.add_handler(CommandHandler("send_summary", send_summary_command))
+    except Exception:
+        pass
+
+
+
+
+# Canonical /chatid command (single implementation)
+async def chatid_command(update, context):
+    """Return the current chat's ID. Safe, non-intrusive command."""
+    try:
+        chat = None
+        if hasattr(update, "effective_chat") and update.effective_chat is not None:
+            chat = update.effective_chat
+        elif hasattr(update, "message") and update.message and update.message.chat:
+            chat = update.message.chat
+        elif hasattr(update, "callback_query") and update.callback_query and update.callback_query.message and update.callback_query.message.chat:
+            chat = update.callback_query.message.chat
+
+        if not chat:
+            try:
+                await update.effective_chat.send_message("Could not determine chat id.")
+            except Exception:
+                try:
+                    await update.message.reply_text("Could not determine chat id.")
+                except Exception:
+                    pass
+            return
+
+        cid = getattr(chat, "id", None)
+        title = getattr(chat, "title", None) or getattr(chat, "username", None) or "this chat"
+        text = f"Chat ID for {title}: {cid}"
+        try:
+            await update.effective_chat.send_message(text)
+        except Exception:
+            try:
+                await update.message.reply_text(text)
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            await update.effective_chat.send_message(f"Error retrieving chat id: {e}")
+        except Exception:
+            try:
+                await update.message.reply_text(f"Error retrieving chat id: {e}")
+            except Exception:
+                pass
+
+# Register canonical handler if possible
+try:
+    application.add_handler(CommandHandler("chatid", chatid_command))
+except Exception:
+    try:
+        dispatcher.add_handler(CommandHandler("chatid", chatid_command))
+    except Exception:
+        pass
+
+
+# === BEGIN: admin-restricted summary commands and help ===
+# ADMIN_USER_IDS can be provided as a comma-separated env var (e.g. "12345,67890")
+# ADMIN_USERNAMES can be provided as a comma-separated env var (e.g. "alice,bob")
+try:
+    ADMIN_USER_IDS = [int(x.strip()) for x in (os.getenv("ADMIN_USER_IDS") or "").split(",") if x.strip()]
+except Exception:
+    ADMIN_USER_IDS = []
+try:
+    ADMIN_USERNAMES = [x.strip().lstrip("@").lower() for x in (os.getenv("ADMIN_USERNAMES") or "").split(",") if x.strip()]
+except Exception:
+    ADMIN_USERNAMES = []
+
+
+def _is_admin(update):
+    try:
+        uid = None
+        uname = None
+        if getattr(update, "effective_user", None):
+            uid = update.effective_user.id
+            uname = getattr(update.effective_user, "username", None)
+        elif getattr(update, "message", None) and update.message.from_user:
+            uid = update.message.from_user.id
+            uname = getattr(update.message.from_user, "username", None)
+
+        # First: if in a group or supergroup, treat chat administrators as admins (strong rule)
+        try:
+            chat = getattr(update, "effective_chat", None) or (getattr(update, "message", None) and update.message.chat)
+            if chat and getattr(chat, "type", "") in ("group", "supergroup"):
+                if uid and application:
+                    try:
+                        member = application.bot.get_chat_member(chat.id, uid)
+                        status = getattr(member, "status", "")
+                        if status in ("administrator", "creator"):
+                            return True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Second: explicit numeric IDs
+        try:
+            if uid and uid in ADMIN_USER_IDS:
+                return True
+        except Exception:
+            pass
+        # Third: explicit usernames
+        try:
+            if uname and uname.lower().lstrip("@") in ADMIN_USERNAMES:
+                return True
+        except Exception:
+            pass
+
+        return False
+    except Exception:
+        return False
+
+    except Exception:
+        return False
+
+# If ADMIN_USERNAMES env var is not set, default to provided admin usernames (lowercased, without @).
+try:
+    if not (os.getenv("ADMIN_USERNAMES") or "").strip() and not (os.getenv("ADMIN_USER_IDS") or "").strip():
+        ADMIN_USERNAMES = ["clairerin777", "kmnyy", "markpeng1"]
+except Exception:
+    pass
+
+# === END: admin-restricted summary commands and help ===
+
+# === END: manual /send_summary command (added) ===
+
 # === END: lightweight /chatid command (added) ===
+
+
+
+# CallbackQuery handler for help buttons (action_chatid, action_example_summary_id)
+async def help_callback_handler(update, context):
+    try:
+        query = update.callback_query
+        if not query:
+            return
+        data = query.data
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        if data == "action_chatid":
+            chat = query.message.chat if query.message else (update.effective_chat if getattr(update, "effective_chat", None) else None)
+            if chat:
+                try:
+                    await query.message.reply_text(f"Chat ID for {chat.title or chat.id}: {chat.id}")
+                except Exception:
+                    try:
+                        await query.answer(text=f"Chat ID: {chat.id}")
+                    except Exception:
+                        pass
+            else:
+                try:
+                    await query.message.reply_text("Could not determine chat id.")
+                except Exception:
+                    pass
+            return
+        if data == "action_example_summary_id":
+            try:
+                await query.message.reply_text("Example to set SUMMARY_CHAT_ID in Railway Variables:\nSUMMARY_CHAT_ID = -1001855126042")
+            except Exception:
+                pass
+            return
+        if data == "action_copy_summary_env":
+            try:
+                user = query.from_user or (update.effective_user if getattr(update, 'effective_user', None) else None)
+                snippet = (
+                    "Railway Variables example:\n"
+                    "BOT_TOKEN = <your-bot-token>\n"
+                    "SHEET_ID = <your-sheet-id>\n"
+                    "GOOGLE_CREDS_B64 = <base64-json-creds>\n"
+                    "SUMMARY_CHAT_ID = -1001855126042\n"
+                    "ADMIN_USERNAMES = clairerin777,kmnyy,markpeng1\n"
+                )
+                if user:
+                    try:
+                        await application.bot.send_message(user.id, snippet)
+                    except Exception:
+                        try:
+                            await query.message.reply_text(snippet)
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        await query.message.reply_text(snippet)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            return
+
+            try:
+                await query.message.reply_text("Example to set SUMMARY_CHAT_ID in Railway Variables:\nSUMMARY_CHAT_ID = -1001855126042")
+            except Exception:
+                pass
+            return
+    except Exception:
+        try:
+            logger.exception("Error in help_callback_handler")
+        except Exception:
+            pass
+
+# Register callback handler
+try:
+    from telegram.ext import CallbackQueryHandler
+    application.add_handler(CallbackQueryHandler(help_callback_handler, pattern="^action_"))
+except Exception:
+    try:
+        dispatcher.add_handler(CallbackQueryHandler(help_callback_handler, pattern="^action_"))
+    except Exception:
+        pass
+
+
+# === BEGIN: admin-only test runner ===
+async def run_tests_command(update, context):
+    """Admin-only: run basic local tests for mission merge logic."""
+    if not _is_admin(update):
+        try:
+            await update.effective_chat.send_message("Unauthorized: only admins can run tests.")
+        except Exception:
+            try:
+                await update.message.reply_text("Unauthorized: only admins can run tests.")
+            except Exception:
+                pass
+        return
+    results = []
+    try:
+        # Test 1: primary with return_start and return_end should be complete
+        p = {'return_start': '2025-12-11 09:00:00', 'return_end': '2025-12-11 12:00:00'}
+        res1 = is_roundtrip_complete(p)
+        results.append(f"Test primary complete: expected True, got {res1}")
+        # Test 2: missing return_end => False
+        p2 = {'return_start': '2025-12-11 09:00:00', 'return_end': ''}
+        res2 = is_roundtrip_complete(p2)
+        results.append(f"Test missing end: expected False, got {res2}")
+    except Exception as e:
+        results.append(f"Exception during tests: {e}")
+    text = "\n".join(results)
+    try:
+        await update.effective_chat.send_message("Test results:\n" + text)
+    except Exception:
+        try:
+            await update.message.reply_text("Test results:\n" + text)
+        except Exception:
+            pass
+
+# register handler
+try:
+    application.add_handler(CommandHandler("run_tests", run_tests_command))
+except Exception:
+    try:
+        dispatcher.add_handler(CommandHandler("run_tests", run_tests_command))
+    except Exception:
+        pass
+# === END: admin-only test runner ===
+
+
+
+
+def _mark_secondary_merged(ws, row_number, return_start=None, return_end=None):
+    """Mark a secondary mission row as merged (do not delete) to preserve audit trail."""
+    try:
+        if not row_number:
+            return False
+        try:
+            ws.update_cell(row_number, M_IDX_ROUNDTRIP + 1, "Merged")
+        except Exception:
+            pass
+        try:
+            ws.update_cell(row_number, M_IDX_RETURN_START + 1, return_start or "")
+        except Exception:
+            pass
+        try:
+            ws.update_cell(row_number, M_IDX_RETURN_END + 1, return_end or "")
+        except Exception:
+            pass
+        return True
+    except Exception:
+        try:
+            logger.exception("Failed to mark secondary merged row in helper for row %s", row_number)
+        except Exception:
+            pass
+        return False
