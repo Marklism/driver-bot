@@ -2279,7 +2279,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     year_total += days_this
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
                 msg = (
-                    f"Driver {driver} {start} to {end} {reason} ({days_this} days).\n"
+                    f"Driver {driver} {start} to {end} {reason} ({days_this} days)\n"
                     f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
                 )
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
@@ -2432,7 +2432,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     year_total += days_this
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
                 msg = (
-                    f"Driver {driver} {start} to {end} {reason} ({days_this} days).\n"
+                    f"Driver {driver} {start} to {end} {reason} ({days_this} days)\n"
                     f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
                 )
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
@@ -2969,7 +2969,8 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("Known sheet tabs: " + (", ".join(tabs) if tabs else "(none)"))
     except Exception:
         pass
-    text = "\\n".join(lines)
+    text = "\
+".join(lines)
     # Send in chat (split if too long)
     try:
         await update.effective_chat.send_message(text)
@@ -3180,8 +3181,9 @@ def schedule_daily_summary(application):
             else:
                 tz = None
             job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
-            application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
-            logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
+            jq = getattr(application, 'job_queue', None)
+            if jq:
+                            logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
         else:
             logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
     except Exception:
@@ -3227,7 +3229,8 @@ async def _send_startup_debug(application):
                         lines.append(f" - /{c.command}: {c.description}")
         except Exception as e:
             lines.append("Failed to fetch commands: " + str(e))
-        text = "\\n".join(lines)
+        text = "\
+".join(lines)
         await application.bot.send_message(chat_id=chat_id, text=text)
     except Exception:
         pass
@@ -3578,3 +3581,117 @@ try:
 except Exception:
     pass
 # === END: OT Summary integration ===
+
+
+
+
+# === BEGIN: lightweight /chatid command (added) ===
+async def chatid_command(update, context):
+    """Return the current chat's ID. Safe, non-intrusive addition."""
+    try:
+        chat = None
+        # Prefer effective_chat when available
+        if hasattr(update, "effective_chat") and update.effective_chat is not None:
+            chat = update.effective_chat
+        elif hasattr(update, "message") and update.message and update.message.chat:
+            chat = update.message.chat
+        elif hasattr(update, "callback_query") and update.callback_query and update.callback_query.message and update.callback_query.message.chat:
+            chat = update.callback_query.message.chat
+
+        if not chat:
+            # best-effort fallback
+            try:
+                await update.effective_chat.send_message("Could not determine chat id.")
+            except Exception:
+                try:
+                    await update.message.reply_text("Could not determine chat id.")
+                except Exception:
+                    pass
+            return
+
+        cid = getattr(chat, "id", None)
+        title = getattr(chat, "title", None) or getattr(chat, "username", None) or "this chat"
+        text = f"Chat ID for {title}: {cid}"
+        try:
+            await update.effective_chat.send_message(text)
+        except Exception:
+            try:
+                await update.message.reply_text(text)
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            await update.effective_chat.send_message(f"Error retrieving chat id: {e}")
+        except Exception:
+            try:
+                await update.message.reply_text(f"Error retrieving chat id: {e}")
+            except Exception:
+                pass
+
+# Register handler if dispatcher/application exists
+try:
+    application.add_handler(CommandHandler("chatid", chatid_command))
+except Exception:
+    try:
+        # older style: dispatcher
+        dispatcher.add_handler(CommandHandler("chatid", chatid_command))
+    except Exception:
+        pass
+# === END: lightweight /chatid command (added) ===
+
+
+
+
+# === BEGIN: lightweight /chatid command (added) ===
+async def chatid_command(update, context):
+    """Return the current chat's ID. Safe, non-intrusive addition."""
+    try:
+        chat = None
+        # Prefer effective_chat when available
+        if hasattr(update, "effective_chat") and update.effective_chat is not None:
+            chat = update.effective_chat
+        elif hasattr(update, "message") and update.message and update.message.chat:
+            chat = update.message.chat
+        elif hasattr(update, "callback_query") and update.callback_query and update.callback_query.message and update.callback_query.message.chat:
+            chat = update.callback_query.message.chat
+
+        if not chat:
+            # best-effort fallback
+            try:
+                await update.effective_chat.send_message("Could not determine chat id.")
+            except Exception:
+                try:
+                    await update.message.reply_text("Could not determine chat id.")
+                except Exception:
+                    pass
+            return
+
+        cid = getattr(chat, "id", None)
+        title = getattr(chat, "title", None) or getattr(chat, "username", None) or "this chat"
+        text = f"Chat ID for {title}: {cid}"
+        try:
+            await update.effective_chat.send_message(text)
+        except Exception:
+            try:
+                await update.message.reply_text(text)
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            await update.effective_chat.send_message(f"Error retrieving chat id: {e}")
+        except Exception:
+            try:
+                await update.message.reply_text(f"Error retrieving chat id: {e}")
+            except Exception:
+                pass
+
+# Register handler if dispatcher/application exists
+try:
+    application.add_handler(CommandHandler("chatid", chatid_command))
+except Exception:
+    try:
+        # older style: dispatcher
+        dispatcher.add_handler(CommandHandler("chatid", chatid_command))
+    except Exception:
+        pass
+# === END: lightweight /chatid command (added) ===
