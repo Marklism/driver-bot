@@ -3376,11 +3376,11 @@ def save_mission_cycles_to_sheet(mission_cycles):
 from datetime import datetime
 
 def compute_window_for_time(now_dt: Optional[datetime] = None):
-    \"\"\"Compute OT window start/end.
+    """Compute OT window start/end.
     Window: 16th 00:00 of month M to 15th 23:59:59 of next month.
     If current time < 16th 04:00 of current month, use previous window.
     Returns (window_start, window_end) as naive datetimes in LOCAL_TZ if available.
-    \"\"\"
+    """
     if now_dt is None:
         now_dt = _now_dt()
     year = now_dt.year
@@ -3408,7 +3408,7 @@ def compute_window_for_time(now_dt: Optional[datetime] = None):
     return window_start, window_end
 
 def _collect_ot_records_in_window(window_start: datetime, window_end: datetime):
-    \"\"\"Read OT_TAB and return list of records (driver, datetime, action) within window.\"\"\"
+    """Read OT_TAB and return list of records (driver, datetime, action) within window."""
     try:
         ws = open_worksheet(OT_TAB)
         vals = ws.get_all_values()
@@ -3439,7 +3439,7 @@ def _collect_ot_records_in_window(window_start: datetime, window_end: datetime):
     return out
 
 def compute_driver_ot_hours_from_records(records, window_start, window_end):
-    \"\"\"Aggregate simple worked-hours from IN/OUT pairs per driver within window (hours float).\"\"\"
+    """Aggregate simple worked-hours from IN/OUT pairs per driver within window (hours float)."""
     drivers = {}
     per = {}
     for r in records:
@@ -3466,7 +3466,7 @@ def compute_driver_ot_hours_from_records(records, window_start, window_end):
     return totals
 
 def ensure_ot_summary_sheet_exists(spreadsheet):
-    \"\"\"Ensure a worksheet titled 'OT Summary' exists; create with headers if missing.\"\"\"
+    """Ensure a worksheet titled 'OT Summary' exists; create with headers if missing."""
     title = os.getenv(\"OT_SUMMARY_TAB\") or \"OT Summary\"
     try:
         ws = spreadsheet.worksheet(title)
@@ -3480,7 +3480,7 @@ def ensure_ot_summary_sheet_exists(spreadsheet):
     return ws
 
 def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datetime, window_end: datetime):
-    \"\"\"Update or create OT Summary tab with totals. Uses existing gspread client helpers.\"\"\"
+    """Update or create OT Summary tab with totals. Uses existing gspread client helpers."""
     try:
         gc = _get_gspread_client()
         # prefer explicit sheet name env vars
@@ -3533,7 +3533,7 @@ def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datet
         return False
 
 async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    \"\"\"Telegram command: /ot_summary_summary [at:ISO] - compute OT totals for current window and update OT Summary tab.\"\"\"
+    """Telegram command: /ot_summary_summary [at:ISO] - compute OT totals for current window and update OT Summary tab."""
     args = context.args or []
     at = None
     if args:
