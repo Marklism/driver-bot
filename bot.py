@@ -2657,11 +2657,8 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.exception("Failed to persist mission_cycle after update")
                     except Exception:
                         pass
-                # Only trigger summary when a full roundtrip is complete (outbound + return)
-                if (cur_cycle % 2) != 0:
-                    # waiting for paired leg
-                    return
-                # Full roundtrip complete -> compute and send summary
+                # A merged roundtrip was just detected -> compute and send summary immediately
+undtrip is complete (outbound + return)
                 try:
                     nowdt = _now_dt()
                     month_start = datetime(nowdt.year, nowdt.month, 1)
@@ -3370,3 +3367,188 @@ def save_mission_cycles_to_sheet(mission_cycles):
     """
     _MISSION_CYCLE_STORE.clear()
     _MISSION_CYCLE_STORE.update(mission_cycles or {})
+
+
+# === BEGIN: OT Summary integration (added) ===
+from datetime import datetime
+
+def compute_window_for_time(now_dt: Optional[datetime] = None):
+    \"\"\"Compute OT window start/end.
+    Window: 16th 00:00 of month M to 15th 23:59:59 of next month.
+    If current time < 16th 04:00 of current month, use previous window.
+    Returns (window_start, window_end) as naive datetimes in LOCAL_TZ if available.
+    \"\"\"
+    if now_dt is None:
+        now_dt = _now_dt()
+    year = now_dt.year
+    month = now_dt.month
+    candidate_start = datetime(year, month, 16, 0, 0, 0)
+    if now_dt < (candidate_start + timedelta(hours=4)):
+        # use previous month
+        if month == 1:
+            prev_month = 12
+            prev_year = year - 1
+        else:
+            prev_month = month - 1
+            prev_year = year
+        window_start = datetime(prev_year, prev_month, 16, 0, 0, 0)
+    else:
+        window_start = candidate_start
+    # window_end is 15th of next month 23:59:59
+    if window_start.month == 12:
+        next_month = 1
+        next_year = window_start.year + 1
+    else:
+        next_month = window_start.month + 1
+        next_year = window_start.year
+    window_end = datetime(next_year, next_month, 15, 23, 59, 59)
+    return window_start, window_end
+
+def _collect_ot_records_in_window(window_start: datetime, window_end: datetime):
+    \"\"\"Read OT_TAB and return list of records (driver, datetime, action) within window.\"\"\"
+    try:
+        ws = open_worksheet(OT_TAB)
+        vals = ws.get_all_values()
+    except Exception:
+        try:
+            logger.exception(\"Failed to open OT_TAB for OT summary collection\")
+        except Exception:
+            pass
+        return []
+    out = []
+    if not vals or len(vals) <= 1:
+        return out
+    for row in vals[1:]:
+        try:
+            drv = row[O_IDX_DRIVER] if len(row) > O_IDX_DRIVER else ""
+            ts_s = row[O_IDX_TIME] if len(row) > O_IDX_TIME else ""
+            act = row[O_IDX_ACTION] if len(row) > O_IDX_ACTION else ""
+            if not ts_s:
+                continue
+            try:
+                ts = datetime.strptime(ts_s, \"%Y-%m-%d %H:%M:%S\")
+            except Exception:
+                continue
+            if window_start <= ts <= window_end:
+                out.append({\"driver\": drv, \"timestamp\": ts, \"event\": act})
+        except Exception:
+            continue
+    return out
+
+def compute_driver_ot_hours_from_records(records, window_start, window_end):
+    \"\"\"Aggregate simple worked-hours from IN/OUT pairs per driver within window (hours float).\"\"\"
+    drivers = {}
+    per = {}
+    for r in records:
+        d = r.get(\"driver\") or \"Unknown\"
+        per.setdefault(d, []).append((r.get(\"timestamp\"), r.get(\"event\")))
+    totals = {}
+    for drv, events in per.items():
+        events.sort(key=lambda x: x[0])
+        total = timedelta(0)
+        in_time = None
+        for ts, ev in events:
+            if ev and str(ev).upper().strip() == \"IN\":
+                in_time = ts
+            elif ev and str(ev).upper().strip() == \"OUT\":
+                if in_time:
+                    total += (ts - in_time)
+                    in_time = None
+                else:
+                    # OUT without IN - skip
+                    pass
+        if in_time:
+            total += (window_end - in_time)
+        totals[drv] = round(total.total_seconds() / 3600.0, 2)
+    return totals
+
+def ensure_ot_summary_sheet_exists(spreadsheet):
+    \"\"\"Ensure a worksheet titled 'OT Summary' exists; create with headers if missing.\"\"\"
+    title = os.getenv(\"OT_SUMMARY_TAB\") or \"OT Summary\"
+    try:
+        ws = spreadsheet.worksheet(title)
+    except Exception:
+        # create sheet
+        try:
+            ws = spreadsheet.add_worksheet(title=title, rows=1000, cols=10)
+            ws.append_row([\"Driver\", \"Total OT Hours\", \"Window Start\", \"Window End\"])
+        except Exception as e:
+            raise
+    return ws
+
+def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datetime, window_end: datetime):
+    \"\"\"Update or create OT Summary tab with totals. Uses existing gspread client helpers.\"\"\"
+    try:
+        gc = _get_gspread_client()
+        # prefer explicit sheet name env vars
+        sheet_name = os.getenv(\"GOOGLE_SHEET_NAME\") or os.getenv(\"GOOGLE_SHEET_TAB\") or None
+        sheet_id = os.getenv(\"SHEET_ID\") or os.getenv(\"SPREADSHEET_ID\") or None
+        if sheet_name:
+            sh = gc.open(sheet_name)
+        elif sheet_id:
+            sh = gc.open_by_key(sheet_id)
+        else:
+            sh = gc.open(GOOGLE_SHEET_NAME)
+        ws = None
+        try:
+            ws = sh.worksheet(os.getenv(\"OT_SUMMARY_TAB\") or \"OT Summary\")
+        except Exception:
+            ws = ensure_ot_summary_sheet_exists(sh)
+        # prepare rows sorted by driver
+        rows = []
+        for drv in sorted(driver_totals.keys(), key=lambda s: s or \"\"):
+            rows.append([drv, round(driver_totals[drv], 2), window_start.isoformat(), window_end.isoformat()])
+        # clear existing body and write
+        try:
+            # write header if missing
+            vals = ws.get_all_values()
+            if not vals or len(vals) == 0:
+                ws.append_row([\"Driver\", \"Total OT Hours\", \"Window Start\", \"Window End\"], value_input_option=\"USER_ENTERED\")
+            # clear from A2:D1000 (best-effort)
+            try:
+                ws.batch_clear([\"A2:D1000\"])
+            except Exception:
+                pass
+            if rows:
+                ws.update(\"A2:D{}\".format(len(rows)+1), rows, value_input_option=\"USER_ENTERED\")
+        except Exception:
+            # fallback: append rows
+            for r in rows:
+                try:
+                    ws.append_row(r, value_input_option=\"USER_ENTERED\")
+                except Exception:
+                    try:
+                        ws.append_row(r)
+                    except Exception:
+                        pass
+        return True
+    except Exception as e:
+        try:
+            logger.exception(\"Failed to update OT Summary sheet: %s\", e)
+        except Exception:
+            pass
+        return False
+
+async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    \"\"\"Telegram command: /ot_summary_summary [at:ISO] - compute OT totals for current window and update OT Summary tab.\"\"\"
+    args = context.args or []
+    at = None
+    if args:
+        try:
+            at = datetime.fromisoformat(args[0])
+        except Exception:
+            at = None
+    now_dt = at or _now_dt()
+    window_start, window_end = compute_window_for_time(now_dt)
+    # collect records from OT_TAB
+    recs = _collect_ot_records_in_window(window_start, window_end)
+    driver_totals = compute_driver_ot_hours_from_records(recs, window_start, window_end)
+    # attempt to update sheet (non-fatal)
+    sheet_result = None
+    try:
+        ok = update_ot_summary_sheet(driver_totals, window_start, window_end)
+        sheet_result = \"updated\" if ok else \"failed\"
+    except Exception as e:
+        sheet_result = f\"error: {e}\"
+    # build reply text
+    lines = [f\"OT Summary {window_start.date()} → {window_end.date()} ({window_start.year})\", \"\"]\n    if driver_totals:\n        for drv, hrs in sorted(driver_totals.items(), key=lambda x: x[0]):\n            lines.append(f\"{drv}\t{hrs:.2f}\")\n    else:\n        lines.append(\"No records found in window.\")\n    lines.append(\"\")\n    lines.append(f\"Sheet result: {sheet_result}\")\n    text = \"\\n\".join(lines)\n    try:\n        await update.effective_chat.send_message(text)\n    except Exception:\n        try:\n            await update.message.reply_text(text)\n        except Exception:\n            pass\n\n# Register command handler if application exists\ntry:\n    application.add_handler(CommandHandler(\"ot_summary_summary\", ot_summary_summary_command))\nexcept Exception:\n    pass\n# === END: OT Summary integration ===
