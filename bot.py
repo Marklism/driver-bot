@@ -1,6 +1,49 @@
 from __future__ import annotations
 import os
 from telegram import Bot, BotCommand
+
+# --- Minimal startup heartbeat and deferred init (non-blocking) ---
+def _startup_heartbeat_print(msg):
+    try:
+        logger.info(msg)
+    except Exception:
+        try:
+            print(msg)
+        except Exception:
+            pass
+
+def _deferred_init():
+    # run lightweight checks in background so startup is not blocked
+    try:
+        _startup_heartbeat_print("STARTUP: deferred init beginning")
+        # attempt to create gspread client (best-effort)
+        try:
+            if 'get_gspread_client' in globals():
+                try:
+                    _ = get_gspread_client()
+                    _startup_heartbeat_print("STARTUP: gspread ok")
+                except Exception as e:
+                    _startup_heartbeat_print("STARTUP: gspread failed (deferred): %s" % (e,))
+        except Exception:
+            pass
+        # try scheduling if function available
+        try:
+            if 'schedule_daily_summary' in globals() and 'application' in globals() and application is not None:
+                try:
+                    schedule_daily_summary(application)
+                    _startup_heartbeat_print("STARTUP: scheduled daily summary (deferred)")
+                except Exception as e:
+                    _startup_heartbeat_print("STARTUP: schedule_daily_summary failed (deferred): %s" % (e,))
+        except Exception:
+            pass
+        _startup_heartbeat_print("STARTUP: deferred init finished")
+    except Exception:
+        try:
+            _startup_heartbeat_print("STARTUP: deferred init crashed")
+        except Exception:
+            pass
+
+# --- end minimal startup helpers ---
 """
 Merged Driver Bot — usage notes (auto-inserted)
 
@@ -3542,6 +3585,21 @@ def main():
         persistence = None
 
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+# Non-blocking deferred init: start background thread
+try:
+    print("STARTUP: application built")
+    import threading as _t
+    try:
+        _t.Thread(target=_deferred_init, daemon=True).start()
+    except Exception:
+        try:
+            print("STARTUP: failed to start deferred init thread")
+        except Exception:
+            pass
+except Exception:
+    pass
+
+
 
 # --- Ensure all handlers are registered to the running application ---
 try:
