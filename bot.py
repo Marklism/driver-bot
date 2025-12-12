@@ -431,6 +431,9 @@ try:
     # These handlers implement Clock In/Out toggle and OT reporting
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
     application.add_handler(CommandHandler("ot_report", ot_report_command))
+    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
+    application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
+
 except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
     pass
@@ -1093,6 +1096,194 @@ def open_worksheet(tab: str = ""):
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
         # Default to first sheet, wrapped
         return _wrap_ws(sh.sheet1)
+
+
+
+
+# === BEGIN: Monthly OT and Mission Reports ===
+def _add_months(year:int, month:int, months:int):
+    y = year + (month - 1 + months) // 12
+    m = (month - 1 + months) % 12 + 1
+    return y, m
+
+def _parse_ym(ym:str):
+    try:
+        parts = ym.split("-")
+        y = int(parts[0]); m = int(parts[1])
+        return y,m
+    except Exception:
+        return None
+
+async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /ot_monthly_report YYYY-MM username
+    Window: YYYY-MM-16 04:00 -> next month 16 04:00
+    """
+    args = context.args
+    if not args or len(args) < 2:
+        await update.effective_chat.send_message("Usage: /ot_monthly_report YYYY-MM username")
+        return
+    ym = args[0]
+    username = args[1]
+    ym_parsed = _parse_ym(ym)
+    if not ym_parsed:
+        await update.effective_chat.send_message("Invalid YYYY-MM")
+        return
+    y,m = ym_parsed
+    start_dt = datetime.datetime(y,m,16,4,0)
+    ny, nm = _add_months(y,m,1)
+    end_dt = datetime.datetime(ny,nm,16,4,0)
+    try:
+        ws = open_worksheet(OT_RECORD_TAB)
+        vals = ws.get_all_values()
+    except Exception:
+        await update.effective_chat.send_message("Failed to open OT records sheet.")
+        return
+    if not vals or len(vals) < 2:
+        await update.effective_chat.send_message("No OT records.")
+        return
+    headers = vals[0]
+    # map headers
+    idx_name = headers.index("Name") if "Name" in headers else 0
+    idx_type = headers.index("Type") if "Type" in headers else 1
+    idx_start = headers.index("Start Date") if "Start Date" in headers else 2
+    idx_morning = headers.index("Morning OT") if "Morning OT" in headers else None
+    idx_evening = headers.index("Evening OT") if "Evening OT" in headers else None
+    # collect
+    entries = {}
+    from datetime import datetime as _dt
+    for row in vals[1:]:
+        try:
+            name = row[idx_name].strip()
+            if name != username:
+                continue
+            typ = row[idx_type].strip()
+            start_raw = row[idx_start].strip() if len(row) > idx_start else ""
+            sd = None
+            try:
+                sd = datetime.datetime.strptime(start_raw, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                try:
+                    sd = datetime.datetime.strptime(start_raw, "%Y-%m-%d")
+                except Exception:
+                    continue
+            if not (start_dt <= sd < end_dt):
+                continue
+            h = 0.0
+            if idx_morning is not None and len(row) > idx_morning:
+                try: h += float(row[idx_morning] or 0)
+                except: pass
+            if idx_evening is not None and len(row) > idx_evening:
+                try: h += float(row[idx_evening] or 0)
+                except: pass
+            entries.setdefault((name,typ), []).append((sd, h))
+        except Exception:
+            continue
+    if not entries:
+        await update.effective_chat.send_message("No OT records in window for user.")
+        return
+    # format message
+    lines=[]
+    for (name,typ), recs in entries.items():
+        recs.sort(key=lambda x: x[0])
+        date_parts = "; ".join([f"{r[0].strftime('%Y-%m-%d %H:%M:%S')} ({r[1]:.2f}h)" for r in recs])
+        total = sum(r[1] for r in recs)
+        lines.append(f"{name}, {typ}, {date_parts}, Total: {total:.2f}h")
+    text = "\n".join(lines)
+    # send as file if too long
+    if len(text) > 4000:
+        bio = io.BytesIO(text.encode("utf-8"))
+        bio.name = f"ot_report_{ym}_{username}.txt"
+        bio.seek(0)
+        await update.effective_chat.send_document(bio)
+    else:
+        await update.effective_chat.send_message(text)
+
+async def mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /mission_monthly_report YYYY-MM username
+    Window: YYYY-MM-01 04:00 -> next month 01 04:00
+    """
+    args = context.args
+    if not args or len(args) < 2:
+        await update.effective_chat.send_message("Usage: /mission_monthly_report YYYY-MM username")
+        return
+    ym = args[0]; username = args[1]
+    ym_parsed = _parse_ym(ym)
+    if not ym_parsed:
+        await update.effective_chat.send_message("Invalid YYYY-MM")
+        return
+    y,m = ym_parsed
+    start_dt = datetime.datetime(y,m,1,4,0)
+    ny,nm = _add_months(y,m,1)
+    end_dt = datetime.datetime(ny,nm,1,4,0)
+    try:
+        ws = open_worksheet(MISSIONS_TAB)
+        vals = ws.get_all_values()
+    except Exception:
+        await update.effective_chat.send_message("Failed to open MISSIONS sheet.")
+        return
+    if not vals or len(vals) < 2:
+        await update.effective_chat.send_message("No mission records.")
+        return
+    headers = vals[0]
+    # use M_IDX_* constants if present else fallback mapping
+    entries=[]
+    for row in vals[1:]:
+        try:
+            rdriver = str(row[M_IDX_DRIVER]).strip() if len(row)>M_IDX_DRIVER else ""
+            if rdriver != username:
+                continue
+            sraw = row[M_IDX_START].strip() if len(row)>M_IDX_START else ""
+            eraw = row[M_IDX_END].strip() if len(row)>M_IDX_END else ""
+            sdt=None; edt=None
+            try:
+                sdt = datetime.datetime.strptime(sraw, "%Y-%m-%d %H:%M:%S")
+            except:
+                try:
+                    sdt = datetime.datetime.strptime(sraw, "%Y-%m-%d")
+                except:
+                    continue
+            try:
+                edt = datetime.datetime.strptime(eraw, "%Y-%m-%d %H:%M:%S")
+            except:
+                try:
+                    edt = datetime.datetime.strptime(eraw, "%Y-%m-%d")
+                except:
+                    continue
+            if not (start_dt <= sdt < end_dt):
+                continue
+            days = (edt.date() - sdt.date()).days + 1
+            # description infer
+            frm = str(row[M_IDX_FROM]).strip().upper() if len(row)>M_IDX_FROM else ""
+            to = str(row[M_IDX_TO]).strip().upper() if len(row)>M_IDX_TO else ""
+            desc = "Unknown"
+            if frm.startswith("PP") and to.startswith("PP"):
+                # PP-...-PP -> SHV mission
+                desc = "SHV mission"
+            elif frm.startswith("SHV") and to.startswith("SHV"):
+                desc = "PP mission"
+            else:
+                # try to infer from route fields
+                if "SHV" in frm or "SHV" in to:
+                    desc = "SHV mission"
+                elif "PP" in frm or "PP" in to:
+                    desc = "PP mission"
+            entries.append((rdriver, sdt.date().isoformat(), edt.date().isoformat(), days, desc))
+        except Exception:
+            continue
+    if not entries:
+        await update.effective_chat.send_message("No missions in window for user.")
+        return
+    # format CSV lines
+    lines = ["Name, Mission Start Date, Mission End Date, Duration(day), Description"]
+    for e in entries:
+        lines.append(f"{e[0]}, {e[1]}, {e[2]}, {e[3]}, {e[4]}")
+    text = "\n".join(lines)
+    bio = io.BytesIO(text.encode("utf-8"))
+    bio.name = f"mission_report_{ym}_{username}.csv"
+    bio.seek(0)
+    await update.effective_chat.send_document(bio)
+# === END: Monthly OT and Mission Reports ===
+
 
 
 async def process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user):
