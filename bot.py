@@ -3885,3 +3885,274 @@ except Exception:
     except Exception:
         pass
 # === END: lightweight /chatid command (added) ===
+
+
+
+
+# === BEGIN: MULTILANG EXTENSION (ADDED) ===
+# Provides per-user language persistence and admin overrides using the Bot_State worksheet.
+# Adds commands: /setlang, /mylang, /forcelang
+# Adds a lightweight sync handler that synchronizes context.user_data['lang'] from persisted store.
+
+SUPPORTED_STORE_PREFIX = "lang:user:"
+SUPPORTED_OVERRIDE_PREFIX = "lang:override:"
+
+# In-memory cache to reduce sheet requests (best-effort, not authoritative across processes)
+_USER_LANG_CACHE = {}
+_OVERRIDE_LANG_CACHE = {}
+
+def _kv_get(key: str) -> str:
+    """Get a stored value from Bot_State worksheet by Key column. Returns empty string if missing."""
+    try:
+        ws = open_bot_state_worksheet()
+        records = ws.get_all_records()
+        for r in records:
+            k = str(r.get("Key") or r.get("key") or "").strip()
+            if k == key:
+                return str(r.get("Value") or r.get("value") or "")
+        return ""
+    except Exception:
+        try:
+            logger.exception("Failed kv_get for %s", key)
+        except Exception:
+            pass
+        return ""
+
+def _kv_set(key: str, value: str) -> bool:
+    """Set a key/value pair in Bot_State worksheet. Overwrites existing key if present."""
+    try:
+        ws = open_bot_state_worksheet()
+        records = ws.get_all_records()
+        found_row = None
+        for idx, r in enumerate(records, start=2):
+            k = str(r.get("Key") or r.get("key") or "").strip()
+            if k == key:
+                found_row = idx
+                break
+        if found_row:
+            ws.update_cell(found_row, 2, str(value))
+        else:
+            ws.append_row([key, str(value)], value_input_option="USER_ENTERED")
+        return True
+    except Exception as e:
+        try:
+            logger.exception("Failed kv_set %s -> %s : %s", key, value, e)
+        except Exception:
+            pass
+        return False
+
+def save_user_lang(username: str, lang: str) -> bool:
+    if not username or not lang:
+        return False
+    key = SUPPORTED_STORE_PREFIX + username
+    ok = _kv_set(key, lang)
+    if ok:
+        _USER_LANG_CACHE[username] = lang
+    return ok
+
+def get_user_lang_stored(username: str) -> str:
+    if not username:
+        return ""
+    if username in _USER_LANG_CACHE:
+        return _USER_LANG_CACHE[username]
+    key = SUPPORTED_STORE_PREFIX + username
+    v = _kv_get(key)
+    if v:
+        _USER_LANG_CACHE[username] = v
+    return v or ""
+
+def set_admin_override(username: str, lang: str) -> bool:
+    if not username:
+        return False
+    key = SUPPORTED_OVERRIDE_PREFIX + username
+    ok = _kv_set(key, lang)
+    if ok:
+        _OVERRIDE_LANG_CACHE[username] = lang
+    return ok
+
+def get_admin_override(username: str) -> str:
+    if not username:
+        return ""
+    if username in _OVERRIDE_LANG_CACHE:
+        return _OVERRIDE_LANG_CACHE[username]
+    key = SUPPORTED_OVERRIDE_PREFIX + username
+    v = _kv_get(key)
+    if v:
+        _OVERRIDE_LANG_CACHE[username] = v
+    return v or ""
+
+def get_effective_lang_for_username(username: str, context=None) -> str:
+    """Resolved language for a username: admin override -> user stored -> context.user_data -> DEFAULT_LANG"""
+    if not username:
+        return DEFAULT_LANG
+    ov = get_admin_override(username)
+    if ov:
+        return ov.lower()
+    st = get_user_lang_stored(username)
+    if st:
+        return st.lower()
+    # fallback to context.user_data if provided (useful when username not yet in sheet)
+    if context is not None:
+        ctx_lang = context.user_data.get("lang") if isinstance(context, type(context)) or hasattr(context, "user_data") else None
+        if ctx_lang:
+            return ctx_lang.lower()
+    return DEFAULT_LANG
+
+# Redefine t to accept either (user_lang, key, ...) OR (update/context, key, ...) in a best-effort manner.
+_old_t = globals().get("t")
+def t(user_lang_or_update, key: str, **kwargs) -> str:
+    # If first argument looks like an Update or has 'effective_user', try to resolve username
+    lang = None
+    try:
+        if hasattr(user_lang_or_update, "effective_user") or hasattr(user_lang_or_update, "message"):
+            # it's likely an Update or Context; prefer to resolve via update + context if provided via kwargs
+            update = user_lang_or_update
+            ctx = kwargs.pop("_context", None)
+            username = None
+            try:
+                username = update.effective_user.username if update and update.effective_user else None
+            except Exception:
+                username = None
+            if username:
+                lang = get_effective_lang_for_username(username, context=ctx)
+        else:
+            # treat as explicit lang string
+            if isinstance(user_lang_or_update, str) and len(user_lang_or_update) <= 3:
+                lang = user_lang_or_update.lower()
+    except Exception:
+        lang = None
+    if not lang:
+        # fallback: try the old t behavior
+        try:
+            return _old_t(user_lang_or_update if isinstance(user_lang_or_update, str) else None, key, **kwargs)
+        except Exception:
+            # last resort
+            lang = DEFAULT_LANG
+    if lang not in SUPPORTED_LANGS:
+        lang = "en"
+    # Try to fetch translation from TR; if missing, fall back to English string then format
+    txt_template = TR.get(lang, TR.get("en", {})).get(key)
+    if txt_template is None:
+        txt_template = TR.get("en", {}).get(key, "")
+    try:
+        return txt_template.format(**kwargs)
+    except Exception:
+        try:
+            return str(txt_template)
+        except Exception:
+            return ""
+
+# Sync handler: ensure context.user_data['lang'] matches persisted/override when user interacts.
+async def sync_user_lang(update, context):
+    try:
+        user = update.effective_user if hasattr(update, "effective_user") else None
+        if not user or not getattr(user, "username", None):
+            return
+        username = user.username
+        eff = get_effective_lang_for_username(username, context=context)
+        cur = context.user_data.get("lang")
+        if cur != eff:
+            context.user_data["lang"] = eff
+    except Exception:
+        try:
+            logger.exception("sync_user_lang failed")
+        except Exception:
+            pass
+    # Do not block other handlers; always return without replying.
+
+# Command: /setlang <lang>
+async def setlang_command(update, context):
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+    args = context.args or []
+    if not args:
+        await update.effective_chat.send_message("Usage: /setlang en|km")
+        return
+    lang = args[0].lower()
+    if lang not in SUPPORTED_LANGS:
+        await update.effective_chat.send_message("Supported langs: " + ", ".join(SUPPORTED_LANGS))
+        return
+    user = update.effective_user
+    username = user.username if user else None
+    if username:
+        ok = save_user_lang(username, lang)
+        context.user_data["lang"] = lang
+        if ok:
+            await update.effective_chat.send_message(t(lang, "lang_set", lang=lang))
+        else:
+            await update.effective_chat.send_message("Failed to persist language setting.")
+    else:
+        await update.effective_chat.send_message("Could not determine your username; cannot persist language.")
+
+# Command: /mylang
+async def mylang_command(update, context):
+    user = update.effective_user
+    username = user.username if user else None
+    if not username:
+        await update.effective_chat.send_message("No username found for your account.")
+        return
+    eff = get_effective_lang_for_username(username, context=context)
+    await update.effective_chat.send_message(f"Your language: {eff}")
+
+# Command: /forcelang <username> <lang>  (admin only)
+async def forcelang_command(update, context):
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+    user = update.effective_user
+    username = user.username if user else None
+    if not username or username not in [u.strip() for u in (os.getenv('BOT_ADMINS_DEFAULT') or BOT_ADMINS_DEFAULT).split(",") if u.strip()]:
+        await update.effective_chat.send_message("❌ You are not an admin for this operation.")
+        return
+    args = context.args or []
+    if not args or len(args) < 2:
+        await update.effective_chat.send_message("Usage: /forcelang <username> <lang>  (e.g. /forcelang markpeng1 km)")
+        return
+    target = args[0].strip()
+    lang = args[1].lower().strip()
+    if lang not in SUPPORTED_LANGS:
+        await update.effective_chat.send_message("Supported langs: " + ", ".join(SUPPORTED_LANGS))
+        return
+    ok = set_admin_override(target, lang)
+    if ok:
+        await update.effective_chat.send_message(f"Set admin override for {target} → {lang}")
+    else:
+        await update.effective_chat.send_message("Failed to set admin override.")
+
+# Register handlers if application object exists (best-effort, non-invasive)
+try:
+    application.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
+    application.add_handler(CommandHandler("setlang", setlang_command))
+    application.add_handler(CommandHandler("mylang", mylang_command))
+    application.add_handler(CommandHandler("forcelang", forcelang_command))
+except Exception:
+    # If 'application' is not yet defined at import time, registration will be attempted in main()
+    pass
+
+# Also attempt to register during main() if register hook available
+try:
+    def register_multilang_handlers(app):
+        try:
+            app.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
+            app.add_handler(CommandHandler("setlang", setlang_command))
+            app.add_handler(CommandHandler("mylang", mylang_command))
+            app.add_handler(CommandHandler("forcelang", forcelang_command))
+        except Exception:
+            pass
+    globals().setdefault("register_multilang_handlers", register_multilang_handlers)
+except Exception:
+    pass
+
+# Ensure Khmer entry exists in TR (placeholder copy of English strings) so user can paste full KH translations later.
+if "km" not in TR:
+    TR["km"] = {}
+for k, v in list(TR.get("en", {}).items()):
+    if k not in TR.get("km", {}):
+        TR["km"][k] = v  # placeholder: copy English (user will replace with full KH translations)
+
+# === END: MULTILANG EXTENSION ===
