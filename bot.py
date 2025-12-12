@@ -1,6 +1,49 @@
 from __future__ import annotations
 import os
 from telegram import Bot, BotCommand
+
+# --- Minimal startup heartbeat and deferred init (non-blocking) ---
+def _startup_heartbeat_print(msg):
+    try:
+        logger.info(msg)
+    except Exception:
+        try:
+            print(msg)
+        except Exception:
+            pass
+
+def _deferred_init():
+    # run lightweight checks in background so startup is not blocked
+    try:
+        _startup_heartbeat_print("STARTUP: deferred init beginning")
+        # attempt to create gspread client (best-effort)
+        try:
+            if 'get_gspread_client' in globals():
+                try:
+                    _ = get_gspread_client()
+                    _startup_heartbeat_print("STARTUP: gspread ok")
+                except Exception as e:
+                    _startup_heartbeat_print("STARTUP: gspread failed (deferred): %s" % (e,))
+        except Exception:
+            pass
+        # try scheduling if function available
+        try:
+            if 'schedule_daily_summary' in globals() and 'application' in globals() and application is not None:
+                try:
+                    schedule_daily_summary(application)
+                    _startup_heartbeat_print("STARTUP: scheduled daily summary (deferred)")
+                except Exception as e:
+                    _startup_heartbeat_print("STARTUP: schedule_daily_summary failed (deferred): %s" % (e,))
+        except Exception:
+            pass
+        _startup_heartbeat_print("STARTUP: deferred init finished")
+    except Exception:
+        try:
+            _startup_heartbeat_print("STARTUP: deferred init crashed")
+        except Exception:
+            pass
+
+# --- end minimal startup helpers ---
 """
 Merged Driver Bot — usage notes (auto-inserted)
 
@@ -3430,21 +3473,36 @@ def ensure_env():
     if not BOT_TOKEN:
         raise RuntimeError(t(DEFAULT_LANG, "no_bot_token"))
 
+
 def schedule_daily_summary(application):
+    """Safely schedule daily summary if JobQueue is available on application.
+    This avoids AttributeError when PTB JobQueue isn't installed or available at build time.
+    If job_queue is None, the function logs a warning and returns without raising."""
     try:
         if SUMMARY_CHAT_ID:
+            # Ensure application has job_queue and run_daily support
+            jq = getattr(application, 'job_queue', None)
+            if jq is None:
+                try:
+                    logger.warning('schedule_daily_summary: application.job_queue is None; skipping scheduled job.')
+                except Exception:
+                    print('schedule_daily_summary: application.job_queue is None; skipping scheduled job.')
+                return
             if ZoneInfo and SUMMARY_TZ:
                 tz = ZoneInfo(SUMMARY_TZ)
             else:
                 tz = None
             job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
-            application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
-            logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
+            # run_daily is expected on JobQueue instances
+            if hasattr(jq, 'run_daily'):
+                jq.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
+                logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
+            else:
+                logger.warning('schedule_daily_summary: application.job_queue exists but has no run_daily; skipping.')
         else:
             logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
     except Exception:
-        logger.exception("Failed to schedule daily summary.")
-
+        logger.exception("Failed to schedule daily summary (safe wrapper).")
 def _delete_telegram_webhook(token: str) -> bool:
     try:
         url = f"https://api.telegram.org/bot{token}/deleteWebhook"
@@ -3542,6 +3600,56 @@ def main():
         persistence = None
 
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+# Non-blocking deferred init: start background thread
+try:
+    print("STARTUP: application built")
+    import threading as _t
+    try:
+        _t.Thread(target=_deferred_init, daemon=True).start()
+    except Exception:
+        try:
+            print("STARTUP: failed to start deferred init thread")
+        except Exception:
+            pass
+except Exception:
+    pass
+
+
+
+# --- Ensure all handlers are registered to the running application ---
+try:
+    # register_all_handlers or register_multilang may be defined in this module
+    if 'register_all_handlers' in globals():
+        try:
+            register_all_handlers(application)
+            try:
+                logger.info("register_all_handlers called at startup")
+            except Exception:
+                pass
+        except Exception:
+            try:
+                logger.exception("register_all_handlers failed at startup")
+            except Exception:
+                pass
+    elif 'register_multilang' in globals():
+        try:
+            register_multilang(application)
+            try:
+                logger.info("register_multilang called at startup")
+            except Exception:
+                pass
+        except Exception:
+            try:
+                logger.exception("register_multilang failed at startup")
+            except Exception:
+                pass
+except Exception:
+    try:
+        logger.exception("Handler registration bootstrap failed")
+    except Exception:
+        pass
+
+
     register_ui_handlers(application)
 
     # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
