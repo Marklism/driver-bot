@@ -3542,6 +3542,41 @@ def main():
         persistence = None
 
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+
+# --- Ensure all handlers are registered to the running application ---
+try:
+    # register_all_handlers or register_multilang may be defined in this module
+    if 'register_all_handlers' in globals():
+        try:
+            register_all_handlers(application)
+            try:
+                logger.info("register_all_handlers called at startup")
+            except Exception:
+                pass
+        except Exception:
+            try:
+                logger.exception("register_all_handlers failed at startup")
+            except Exception:
+                pass
+    elif 'register_multilang' in globals():
+        try:
+            register_multilang(application)
+            try:
+                logger.info("register_multilang called at startup")
+            except Exception:
+                pass
+        except Exception:
+            try:
+                logger.exception("register_multilang failed at startup")
+            except Exception:
+                pass
+except Exception:
+    try:
+        logger.exception("Handler registration bootstrap failed")
+    except Exception:
+        pass
+
+
     register_ui_handlers(application)
 
     # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
