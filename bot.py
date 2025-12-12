@@ -274,24 +274,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             h = ts_dt.hour + ts_dt.minute / 60.0
             # Rule 1: OUT between [00:00, 04:00)
             if 0 <= h < 4:
-                # Default to midnight start
                 start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                # Cross-day OT correction: if last IN exists and is previous day, use previous day 18:00 as start
-                try:
-                    if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == 'IN':
-                        try:
-                            last_in_dt = datetime.strptime(last[O_IDX_TIME], '%Y-%m-%d %H:%M:%S')
-                        except Exception:
-                            last_in_dt = None
-                        if last_in_dt is not None:
-                            prev_day = (ts_dt - timedelta(days=1)).date()
-                            if last_in_dt.date() == prev_day:
-                                start_dt = datetime.combine(prev_day, dtime(hour=18, minute=0, second=0))
-                except Exception:
-                    try:
-                        logger.exception('Failed to apply cross-day OT correction')
-                    except Exception:
-                        pass
                 morning_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
                 total_ot = round(morning_hours, 2)
                 if total_ot > 0:
@@ -956,31 +939,31 @@ TR = {
         "enter_odo_km": "Enter odometer reading (KM) for {plate}:",
         "enter_fuel_cost": "Enter fuel cost in $ for {plate}: (optionally add `inv:INV123 paid:yes`)",
     },
-    "km": {
-        "menu": "ម៉ឺនុយរបស់បុគ្គលបើក—ចុចប៊ូតុងណាមួយ។",
-        "choose_start": "ជ្រើសលេខឡាន ដើម្បីចាប់ផ្តើមដំណើរ៖",
-        "choose_end": "ជ្រើសលេខឡាន ដើម្បីបញ្ចប់ដំណើរ៖",
+        "km": {
+        "menu": "ម៉ឺនុយបុរសបើក — ចុចប៊ូតុងមួយ:",
+        "choose_start": "ជ្រើសលេខឡាន ដើម្បីចាប់ផ្តើមដំណើរ:",
+        "choose_end": "ជ្រើសលេខឡាន ដើម្បីបញ្ចប់ដំណើរ:",
         "start_ok": "អ្នកបើក {driver} លេខ {plate} បានចាប់ផ្តើមដំណើរ​នៅ {ts}។",
         "end_ok": "អ្នកបើក {driver} លេខ {plate} បានបញ្ចប់ដំណើរ​នៅ {ts}។",
-        "trip_summary": "អ្នកបើក {driver} បានបំពេញ {n_today} ដំណើរ​នៅថ្ងៃនេះ និង {n_month} ដង​ក្នុង {month} និង {n_year} ដង​ក្នុង {year}។\n{plate} បានបំពេញ {p_today} ដំណើរ​នៅថ្ងៃនេះ និង {p_month} ដង​ក្នុង {month} និង {p_year} ដង​ក្នុង {year}។",
-        "not_allowed": "❌ អ្នកមិនមានសិទ្ធិបើកឡាននេះទេ: {plate}។",
+        "trip_summary": "អ្នកបើក {driver} បានបញ្ចប់ {n_today} ដំណើរ នៅថ្ងៃនេះ និង {n_month} ក្នុង {month} និង {n_year} ក្នុង {year}។\n{plate} បានបញ្ចប់ {p_today} ដំណើរ នៅថ្ងៃនេះ និង {p_month} ក្នុង {month} និង {p_year} ក្នុង {year}។",
+        "not_allowed": "❌ អ្នកមិនមានសិទ្ធិបើកឡាននេះ: {plate}។",
         "invalid_sel": "ការជ្រើសមិនត្រឹមត្រូវ។",
         "help": "ជំនួយ៖ ប្រើ /start_trip ឬ /end_trip ហើយជ្រើសលេខឡាន។",
-        "mission_start_prompt_plate": "ជ្រើសលេខឡាន ដើម្បីចាប់ផ្តើមបេសកកម្ម៖",
-        "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញដំណើរ៖",
-        "mission_end_prompt_plate": "ជ្រើសលេខឡាន ដើម្បីបញ្ចប់បេសកកម្ម៖",
+        "mission_start_prompt_plate": "ជ្រើសលេខឡាន ដើម្បីចាប់ផ្តើមបេសកកម្ម:",
+        "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញដំណើរ:",
+        "mission_end_prompt_plate": "ជ្រើសលេខឡាន ដើម្បីបញ្ចប់បេសកកម្ម:",
         "mission_start_ok": "អ្នកបើក {driver} លេខ {plate} បានចេញពី {dep} នៅ {ts}។",
         "mission_end_ok": "អ្នកបើក {driver} លេខ {plate} បានមកដល់ {arr} នៅ {ts}។",
         "mission_no_open": "មិនមានបេសកកម្មបើកសម្រាប់ {plate} ទេ។",
-        "roundtrip_merged_notify": "✅ {driver} បានបញ្ចប់ {d_month} បេសកកម្ម​ក្នុង {month} និង {d_year} ក្នុង {year}។ {plate} បានបញ្ចប់ {p_month} បេសកកម្ម​ក្នុង {month} និង {p_year} ក្នុង {year}។",
+        "roundtrip_merged_notify": "✅{driver} បានបញ្ចប់ {d_month} បេសកកម្ម ក្នុង {month} និង {d_year} ក្នុង {year}។\n✅{driver} មាន {md_today} ថ្ងៃបេសកកម្ម (ថ្ងៃនេះ), {md_month} ថ្ងៃក្នុង {month} {year}។\n✅{plate} បានបញ្ចប់ {p_month} បេសកកម្ម ក្នុង {month} និង {p_year} ក្នុង {year}។",
         "lang_set": "បានកំណត់ភាសាទៅ {lang}។",
-        "invalid_amount": "ចំនួនមិនត្រឹមត្រូវ — សូមផ្ញើលេខបែប `23.5`។",
+        "invalid_amount": "ចំនួនមិនត្រឹមត្រូវ — សូមផ្ញើលេខដូចជា `23.5`។",
         "invalid_odo": "Odometer មិនត្រឹមត្រូវ — សូមផ្ញើលេខ KM ដូចជា `12345` ឬ `12345KM`។",
         "confirm_recorded": "{typ} ត្រូវបានកត់ត្រាសម្រាប់ {plate}: {amount}",
-        "leave_prompt": "ឆ្លើយតបទៅសារ​នេះ៖ <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <ហេតុផល> [កំណត់សំគាល់]\nឧទាហរណ៍: markpeng1 2025-12-01 2025-12-05 annual_leave",
-        "leave_confirm": "ការសុំច្បាប់បានកត់ត្រាសម្រាប់ {driver}: {start} ដល់ {end} ({reason})",
-        "enter_odo_km": "សូមបញ្ចូលចំនួន Odometer (KM) សម្រាប់ {plate}៖",
-        "enter_fuel_cost": "សូមបញ្ចូលថ្លៃប្រេង (USD) សម្រាប់ {plate}៖ (អាចបញ្ចូល `inv:INV123 paid:yes` បន្ថែម)",
+        "leave_prompt": "ឆ្លើយតបទៅសារ​នេះ៖ <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <មូលហេតុ> [កំណត់សំគាល់]\nឧទាហរណ៍: markpeng1 2025-12-01 2025-12-05 annual_leave",
+        "leave_confirm": "ការសុំច្បាប់ត្រូវបានកត់ត្រាសម្រាប់ {driver}: {start} ដល់ {end} ({reason})",
+        "enter_odo_km": "សូមបញ្ចូល Odometer (KM) សម្រាប់ {plate}:",
+        "enter_fuel_cost": "សូមបញ្ចូលថ្លៃប្រេង (USD) សម្រាប់ {plate}: (អាចបញ្ចូល `inv:INV123 paid:yes`)",
     },
 }
 
@@ -4490,3 +4473,330 @@ except Exception:
     pass
 
 # === END: OT & MISSION REPORTS EXTENSION ===
+
+
+# === BEGIN: MULTILANG PERSISTENCE & COMMANDS (ADDED) ===
+# Provides per-user language choice (en/km) stored in Bot_State worksheet (Key/Value),
+# admin override, and commands /setlang, /mylang, /forcelang.
+# This extension is non-invasive: it adds handlers and helper functions only.
+
+SUPPORTED_LANGS = ["en", "km"]
+LANG_STORE_PREFIX = "lang:user:"
+LANG_OVERRIDE_PREFIX = "lang:override:"
+
+_USER_LANG_CACHE = {}
+_OVERRIDE_LANG_CACHE = {}
+
+def _open_bot_state_ws():
+    # prefer existing helper open_bot_state_worksheet() if available
+    try:
+        return open_bot_state_worksheet()
+    except Exception:
+        try:
+            return open_worksheet(BOT_STATE_TAB)
+        except Exception:
+            # best-effort: try open_worksheet_by_name
+            try:
+                return open_worksheet_by_name("Bot_State")
+            except Exception:
+                return None
+
+def _kv_get(key: str) -> str:
+    try:
+        ws = _open_bot_state_ws()
+        if not ws:
+            return ""
+        records = ws.get_all_records()
+        for r in records:
+            k = str(r.get("Key") or r.get("key") or "").strip()
+            if k == key:
+                return str(r.get("Value") or r.get("value") or "")
+        return ""
+    except Exception:
+        try:
+            logger.exception("kv_get failed for %s", key)
+        except Exception:
+            pass
+        return ""
+
+def _kv_set(key: str, value: str) -> bool:
+    try:
+        ws = _open_bot_state_ws()
+        if not ws:
+            return False
+        records = ws.get_all_records()
+        found_row = None
+        for idx, r in enumerate(records, start=2):
+            k = str(r.get("Key") or r.get("key") or "").strip()
+            if k == key:
+                found_row = idx
+                break
+        if found_row:
+            ws.update_cell(found_row, 2, str(value))
+        else:
+            ws.append_row([key, str(value)], value_input_option="USER_ENTERED")
+        return True
+    except Exception:
+        try:
+            logger.exception("kv_set failed for %s", key)
+        except Exception:
+            pass
+        return False
+
+def save_user_lang(username: str, lang: str) -> bool:
+    if not username or not lang:
+        return False
+    lang = lang.lower()
+    if lang not in SUPPORTED_LANGS:
+        return False
+    key = LANG_STORE_PREFIX + username
+    ok = _kv_set(key, lang)
+    if ok:
+        _USER_LANG_CACHE[username] = lang
+    return ok
+
+def get_user_lang_stored(username: str) -> str:
+    if not username:
+        return ""
+    if username in _USER_LANG_CACHE:
+        return _USER_LANG_CACHE[username]
+    key = LANG_STORE_PREFIX + username
+    v = _kv_get(key)
+    if v:
+        _USER_LANG_CACHE[username] = v
+    return v or ""
+
+def set_admin_override(username: str, lang: str) -> bool:
+    if not username:
+        return False
+    lang = lang.lower()
+    if lang not in SUPPORTED_LANGS:
+        return False
+    key = LANG_OVERRIDE_PREFIX + username
+    ok = _kv_set(key, lang)
+    if ok:
+        _OVERRIDE_LANG_CACHE[username] = lang
+    return ok
+
+def get_admin_override(username: str) -> str:
+    if not username:
+        return ""
+    if username in _OVERRIDE_LANG_CACHE:
+        return _OVERRIDE_LANG_CACHE[username]
+    key = LANG_OVERRIDE_PREFIX + username
+    v = _kv_get(key)
+    if v:
+        _OVERRIDE_LANG_CACHE[username] = v
+    return v or ""
+
+def resolve_effective_lang(username: str, context=None) -> str:
+    if not username:
+        return DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
+    ov = get_admin_override(username)
+    if ov:
+        return ov.lower()
+    st = get_user_lang_stored(username)
+    if st:
+        return st.lower()
+    # fallback to context.user_data if provided
+    try:
+        if context and hasattr(context, "user_data"):
+            ctx_lang = context.user_data.get("lang")
+            if ctx_lang:
+                return ctx_lang.lower()
+    except Exception:
+        pass
+    return DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
+
+# Wrap existing t() to accept update/context or explicit lang
+_old_t = globals().get("t")
+def t(user_lang_or_update, key: str, **kwargs) -> str:
+    # Determine language
+    lang = None
+    try:
+        if hasattr(user_lang_or_update, "effective_user") or hasattr(user_lang_or_update, "message"):
+            update = user_lang_or_update
+            ctx = kwargs.pop("_context", None)
+            username = None
+            try:
+                username = update.effective_user.username if update and update.effective_user else None
+            except Exception:
+                username = None
+            if username:
+                lang = resolve_effective_lang(username, context=ctx)
+        elif isinstance(user_lang_or_update, str) and len(user_lang_or_update) <= 3:
+            lang = user_lang_or_update.lower()
+        else:
+            # fallback to default
+            lang = DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
+    except Exception:
+        lang = DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
+    if lang not in SUPPORTED_LANGS:
+        lang = "en"
+    # Use TR dict if present
+    try:
+        tr = TR.get(lang, TR.get("en", {}))
+        txt_template = tr.get(key, TR.get("en", {}).get(key, ""))
+        return txt_template.format(**kwargs)
+    except Exception:
+        try:
+            return str(TR.get("en", {}).get(key, "")).format(**kwargs)
+        except Exception:
+            return ""
+
+# Sync handler to keep context.user_data['lang'] updated when users interact
+async def _sync_user_lang(update, context):
+    try:
+        user = update.effective_user if hasattr(update, "effective_user") else None
+        if not user or not getattr(user, "username", None):
+            return
+        username = user.username
+        eff = resolve_effective_lang(username, context=context)
+        cur = context.user_data.get("lang")
+        if cur != eff:
+            context.user_data["lang"] = eff
+    except Exception:
+        try:
+            logger.exception("sync_user_lang failed")
+        except Exception:
+            pass
+    # do not send messages
+
+# Command handlers
+async def cmd_setlang(update, context):
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+    args = context.args or []
+    if not args:
+        await update.effective_chat.send_message("Usage: /setlang en|km")
+        return
+    lang = args[0].lower()
+    if lang not in SUPPORTED_LANGS:
+        await update.effective_chat.send_message("Supported: " + ", ".join(SUPPORTED_LANGS))
+        return
+    user = update.effective_user
+    uname = user.username if user else None
+    if not uname:
+        await update.effective_chat.send_message("Cannot determine username; cannot persist language.")
+        return
+    ok = save_user_lang(uname, lang)
+    context.user_data["lang"] = lang
+    if ok:
+        await update.effective_chat.send_message(t(lang, "lang_set", lang=lang))
+    else:
+        await update.effective_chat.send_message("Failed to persist language setting.")
+
+async def cmd_mylang(update, context):
+    user = update.effective_user
+    uname = user.username if user else None
+    if not uname:
+        await update.effective_chat.send_message("No username found.")
+        return
+    eff = resolve_effective_lang(uname, context=context)
+    await update.effective_chat.send_message(f"Your language: {eff}")
+
+async def cmd_forcelang(update, context):
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+    user = update.effective_user
+    uname = user.username if user else None
+    # check admin: prefer BOT_ADMINS env var then BOT_ADMINS_DEFAULT global
+    admins = []
+    try:
+        if os.getenv("BOT_ADMINS"):
+            admins = [x.strip() for x in os.getenv("BOT_ADMINS").split(",") if x.strip()]
+        elif 'BOT_ADMINS_DEFAULT' in globals():
+            admins = [x.strip() for x in BOT_ADMINS_DEFAULT.split(",") if x.strip()]
+    except Exception:
+        admins = []
+    if not uname or uname not in admins:
+        await update.effective_chat.send_message("❌ You are not an admin for this operation.")
+        return
+    args = context.args or []
+    if len(args) < 2:
+        await update.effective_chat.send_message("Usage: /forcelang <username> <en|km>")
+        return
+    target = args[0].strip()
+    lang = args[1].lower().strip()
+    if lang not in SUPPORTED_LANGS:
+        await update.effective_chat.send_message("Supported: " + ", ".join(SUPPORTED_LANGS))
+        return
+    ok = set_admin_override(target, lang)
+    if ok:
+        await update.effective_chat.send_message(f"Set admin override for {target} → {lang}")
+    else:
+        await update.effective_chat.send_message("Failed to set admin override.")
+
+# Register handlers if application object is present
+try:
+    application.add_handler(CommandHandler("setlang", cmd_setlang))
+    application.add_handler(CommandHandler("mylang", cmd_mylang))
+    application.add_handler(CommandHandler("forcelang", cmd_forcelang))
+    application.add_handler(MessageHandler(filters.ALL, _sync_user_lang), group=0)
+except Exception:
+    # expose a function to register later
+    def register_multilang(app):
+        try:
+            app.add_handler(CommandHandler("setlang", cmd_setlang))
+            app.add_handler(CommandHandler("mylang", cmd_mylang))
+            app.add_handler(CommandHandler("forcelang", cmd_forcelang))
+            app.add_handler(MessageHandler(filters.ALL, _sync_user_lang), group=0)
+        except Exception:
+            pass
+    globals().setdefault("register_multilang", register_multilang)
+
+# Ensure TR has km entry – if missing, copy en (user can replace with more natural KH later)
+try:
+    if "TR" in globals() and isinstance(TR, dict):
+        if "km" not in TR:
+            TR["km"] = {}
+        for k, v in TR.get("en", {}).items():
+            if k not in TR["km"]:
+                # placeholder: copy English; earlier we may have partial translations; do not overwrite existing entries
+                if not TR["km"].get(k):
+                    TR["km"][k] = v
+except Exception:
+    pass
+
+# === END MULTILANG EXTENSION ===
+
+
+# Auto-register bot commands (so they appear in Telegram UI)
+def _register_bot_commands(app):
+    try:
+        from telegram import BotCommand
+        cmds = [
+            BotCommand("setlang", "Set your language (en/km)"),
+            BotCommand("mylang", "Show your current language"),
+            BotCommand("forcelang", "Admin: force language for a user"),
+        ]
+        try:
+            # PTB v20: application.bot.set_my_commands exists
+            app.bot.set_my_commands(cmds)
+        except Exception:
+            try:
+                app.set_my_commands(cmds)
+            except Exception:
+                pass
+    except Exception:
+        try:
+            logger.exception("Failed to register bot commands")
+        except Exception:
+            pass
+
+# If application is present, register commands now
+try:
+    if 'application' in globals() and application is not None:
+        _register_bot_commands(application)
+except Exception:
+    pass
+
+# Also expose helper for explicit call
+globals().setdefault("register_bot_commands", _register_bot_commands)
+
