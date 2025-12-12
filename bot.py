@@ -945,8 +945,7 @@ TR = {
         "choose_end": "ជ្រើសលេខឡាន ដើម្បីបញ្ចប់ដំណើរ៖",
         "start_ok": "អ្នកបើក {driver} លេខ {plate} បានចាប់ផ្តើមដំណើរ​នៅ {ts}។",
         "end_ok": "អ្នកបើក {driver} លេខ {plate} បានបញ្ចប់ដំណើរ​នៅ {ts}។",
-        "trip_summary": "អ្នកបើក {driver} បានបំពេញ {n_today} ដំណើរ​នៅថ្ងៃនេះ និង {n_month} ដង​ក្នុង {month} និង {n_year} ដង​ក្នុង {year}។
-{plate} បានបំពេញ {p_today} ដំណើរ​នៅថ្ងៃនេះ និង {p_month} ដង​ក្នុង {month} និង {p_year} ដង​ក្នុង {year}។",
+        "trip_summary": "អ្នកបើក {driver} បានបំពេញ {n_today} ដំណើរ​នៅថ្ងៃនេះ និង {n_month} ដង​ក្នុង {month} និង {n_year} ដង​ក្នុង {year}។\n{plate} បានបំពេញ {p_today} ដំណើរ​នៅថ្ងៃនេះ និង {p_month} ដង​ក្នុង {month} និង {p_year} ដង​ក្នុង {year}។",
         "not_allowed": "❌ អ្នកមិនមានសិទ្ធិបើកឡាននេះទេ: {plate}។",
         "invalid_sel": "ការជ្រើសមិនត្រឹមត្រូវ។",
         "help": "ជំនួយ៖ ប្រើ /start_trip ឬ /end_trip ហើយជ្រើសលេខឡាន។",
@@ -961,8 +960,7 @@ TR = {
         "invalid_amount": "ចំនួនមិនត្រឹមត្រូវ — សូមផ្ញើលេខបែប `23.5`។",
         "invalid_odo": "Odometer មិនត្រឹមត្រូវ — សូមផ្ញើលេខ KM ដូចជា `12345` ឬ `12345KM`។",
         "confirm_recorded": "{typ} ត្រូវបានកត់ត្រាសម្រាប់ {plate}: {amount}",
-        "leave_prompt": "ឆ្លើយតបទៅសារ​នេះ៖ <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <ហេតុផល> [កំណត់សំគាល់]
-ឧទាហរណ៍: markpeng1 2025-12-01 2025-12-05 annual_leave",
+        "leave_prompt": "ឆ្លើយតបទៅសារ​នេះ៖ <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <ហេតុផល> [កំណត់សំគាល់]\nឧទាហរណ៍: markpeng1 2025-12-01 2025-12-05 annual_leave",
         "leave_confirm": "ការសុំច្បាប់បានកត់ត្រាសម្រាប់ {driver}: {start} ដល់ {end} ({reason})",
         "enter_odo_km": "សូមបញ្ចូលចំនួន Odometer (KM) សម្រាប់ {plate}៖",
         "enter_fuel_cost": "សូមបញ្ចូលថ្លៃប្រេង (USD) សម្រាប់ {plate}៖ (អាចបញ្ចូល `inv:INV123 paid:yes` បន្ថែម)",
