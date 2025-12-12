@@ -274,7 +274,24 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             h = ts_dt.hour + ts_dt.minute / 60.0
             # Rule 1: OUT between [00:00, 04:00)
             if 0 <= h < 4:
+                # Default to midnight start
                 start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                # Cross-day OT correction: if last IN exists and is previous day, use previous day 18:00 as start
+                try:
+                    if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == 'IN':
+                        try:
+                            last_in_dt = datetime.strptime(last[O_IDX_TIME], '%Y-%m-%d %H:%M:%S')
+                        except Exception:
+                            last_in_dt = None
+                        if last_in_dt is not None:
+                            prev_day = (ts_dt - timedelta(days=1)).date()
+                            if last_in_dt.date() == prev_day:
+                                start_dt = datetime.combine(prev_day, dtime(hour=18, minute=0, second=0))
+                except Exception:
+                    try:
+                        logger.exception('Failed to apply cross-day OT correction')
+                    except Exception:
+                        pass
                 morning_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
                 total_ot = round(morning_hours, 2)
                 if total_ot > 0:
