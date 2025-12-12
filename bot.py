@@ -2915,9 +2915,49 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             pass
                     month_label = month_start.strftime("%B")
                     msg = t(user_lang, "roundtrip_merged_notify", driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                    
                     try:
-                        await q.message.chat.send_message(msg)
-                        # record sent time and reset cycle counter
+                        md_month = 0
+                        md_today = 0
+                        today_dt = nowdt.date()
+                        try:
+                            vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                            for r in vals_all[sidx:]:
+                                r = _ensure_row_length(r, M_MANDATORY_COLS)
+                                ruser = str(r[M_IDX_NAME]).strip() if len(r) > M_IDX_NAME else ''
+                                if not ruser or ruser != username:
+                                    continue
+                                rstart = parse_ts(str(r[M_IDX_START]).strip()) if len(r) > M_IDX_START else None
+                                rend = parse_ts(str(r[M_IDX_END]).strip()) if len(r) > M_IDX_END else None
+                                if not rstart or not rend:
+                                    continue
+                                m_start = max(rstart.date(), month_start.date())
+                                m_end = min(rend.date(), (month_end - timedelta(days=1)).date())
+                                if m_start <= m_end:
+                                    md_month += (m_end - m_start).days + 1
+                                t_start = max(rstart.date(), today_dt)
+                                t_end = min(rend.date(), today_dt)
+                                if t_start <= t_end:
+                                    md_today += (t_end - t_start).days + 1
+                        except Exception:
+                            try:
+                                logger.exception('Failed to compute mission days for notification (safe)')
+                            except Exception:
+                                pass
+                        month_label = month_start.strftime('%B')
+                        line1 = t(user_lang, 'roundtrip_merged_notify', driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                        # Build line2 and line3 explicitly
+                        line2 = f"✅Driver {username} has {md_today} mission day(s) (today), {md_month} mission day(s) in {month_label} {nowdt.year}."
+                        line3 = f"✅{plate} completed {plate_counts_month} mission(s) in {month_label} and {plate_counts_year} mission(s) in {nowdt.year}."
+                        await q.message.chat.send_message(line1)
+                        await q.message.chat.send_message(line2)
+                        await q.message.chat.send_message(line3)
+                    except Exception:
+                        try:
+                            logger.exception('Failed to send enhanced merged roundtrip summary (safe)')
+                        except Exception:
+                            pass
+        # record sent time and reset cycle counter
                         try:
                             last_map = context.chat_data.get("last_merge_sent", {})
                             last_map[f"{username}|{plate}"] = nowdt.isoformat()
