@@ -1,5 +1,3 @@
-raise RuntimeError("### RUNTIME FILE CONFIRMED ###")
-
 from datetime import datetime, timedelta, time as dtime
 
 def determine_ot_rate(dt: datetime, is_holiday: bool = False) -> str:
@@ -1458,11 +1456,11 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
         await update.effective_chat.send_message(text)
 
 async def mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /mission_monthly_report YYYY-MM username
+    """  YYYY-MM username
     """
     args = context.args
     if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_monthly_report YYYY-MM username")
+        await update.effective_chat.send_message("Usage:  YYYY-MM username")
         return
     ym = args[0]; username = args[1]
     ym_parsed = _parse_ym(ym)
@@ -3356,7 +3354,7 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
         pass
     args = context.args
     if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
+        await update.effective_chat.send_message("Usage:  month YYYY-MM")
         return
     mode = args[0].lower()
     if mode == "month":
@@ -3376,9 +3374,9 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
             else:
                 await update.effective_chat.send_message("❌ Failed to write mission report.")
         except Exception:
-            await update.effective_chat.send_message("Invalid command. Usage: /mission_report month YYYY-MM")
+            await update.effective_chat.send_message("Invalid command. Usage:  month YYYY-MM")
     else:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
+        await update.effective_chat.send_message("Usage:  month YYYY-MM")
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -3564,7 +3562,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
+    
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CommandHandler("lang", lang_command))
@@ -3593,7 +3591,7 @@ def register_ui_handlers(application):
                 BotCommand("end_trip", "End a trip (select plate)"),
                 BotCommand("menu", "Open trip menu"),
                 BotCommand("mission", "Quick mission menu"),
-                BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
+                BotCommand("mission_report", "Generate mission report:  month YYYY-MM"),
                 BotCommand("leave", "Record leave (admin)"),
                 BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
             ])
@@ -4454,7 +4452,7 @@ for k, v in list(TR.get("en", {}).items()):
 # === BEGIN: OT & MISSION REPORTS EXTENSION (ADDED) ===
 # Adds commands:
 #   /ot_report   - generate per-driver OT reports for the most recently completed 16th->16th period
-#   /mission_report - generate per-driver Mission reports for the most recently completed 1st->1st period
+#    - generate per-driver Mission reports for the most recently completed 1st->1st period
 #
 # Behavior assumptions (non-invasive):
 # - Reads Google Sheets worksheets named "OT" and "Mission" respectively.
@@ -4685,14 +4683,14 @@ async def mission_report_command(update, context):
         for username, data in per_driver.items():
             name = data.get("name") or username
             missions = sorted(data.get("missions", []), key=lambda x: x[0])
-            csv_path = f"/tmp/mission_report_{username}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.csv"
+            csv_path = f"/tmp_{username}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.csv"
             with open(csv_path, "w", newline='', encoding="utf-8") as cf:
                 writer = csv.writer(cf)
                 writer.writerow(["Name","Mission Start Date","Mission End Date","Duration(day)","Description","Mission Type"])
                 for s_dt, e_dt, dur, mtype, desc in missions:
                     writer.writerow([name, s_dt.strftime("%Y-%m-%d"), e_dt.strftime("%Y-%m-%d"), str(dur), desc, mtype])
             files.append(csv_path)
-        zip_path = f"/tmp/mission_reports_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.zip"
+        zip_path = f"/tmps_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.zip"
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for p in files:
                 zf.write(p, arcname=os.path.basename(p))
@@ -4710,7 +4708,7 @@ async def mission_report_command(update, context):
 # Register handlers
 try:
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
+    
 except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
@@ -5136,7 +5134,7 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "rep_otm":
         await q.edit_message_text("Use: /ot_monthly_report YYYY-MM <username>")
     elif data == "rep_mm":
-        await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
+        await q.edit_message_text("Use:  YYYY-MM <username>")
 
 # ---- Register handlers ----
 try:
@@ -5283,7 +5281,7 @@ def _auto_close_previous_in(ws, driver, new_in_time):
 # MISSION REPORT — DRIVER BUTTON MODE (BUTTON ONLY)
 # ===============================
 # Behavior:
-# /mission_report -> private chat -> select driver button
+#  -> private chat -> select driver button
 # -> auto export CSV for driver's NATURAL MONTH (calendar month, by Start Date)
 # OT module untouched.
 
@@ -5418,7 +5416,7 @@ except Exception:
 # ======================================================
 # Design principles:
 # - Copy OT report interaction model 1:1
-# - /mission_report -> private -> select driver button
+# -  -> private -> select driver button
 # - NO arguments, NO YYYY-MM parsing
 # - Natural calendar month by Start Date
 # - Duration = (End Date - Start Date).days + 1
@@ -5571,7 +5569,7 @@ except Exception:
 # V10 — FORCE CLEAR BOT COMMANDS
 # ===============================
 # This removes Telegram-side cached Usage like:
-# /mission_report month YYYY-MM
+#  month YYYY-MM
 
 from telegram import BotCommand
 
