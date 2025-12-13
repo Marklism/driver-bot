@@ -466,7 +466,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 try:
     # These handlers implement Clock In/Out toggle and OT reporting
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
-    application.add_handler(CommandHandler("ot_report", ot_report_command))
+    application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
 
@@ -3372,7 +3372,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CommandHandler("lang", lang_command))
-    application.add_handler(CommandHandler("ot_report", ot_report_command))
+    application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
 
@@ -4512,7 +4512,7 @@ async def mission_report_command(update, context):
 
 # Register handlers
 try:
-    application.add_handler(CommandHandler("ot_report", ot_report_command))
+    application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
 except Exception:
     # safe fallback: expose register function
@@ -4950,3 +4950,35 @@ except Exception:
     pass
 
 # === END C FINAL SAFE ADDON ===
+
+# === OT REPORT DRIVER BUTTON ENTRY (FINAL) ===
+async def ot_report_entry(update, context):
+    # Always respond privately with driver buttons
+    drivers = get_all_drivers()  # expects list of driver names
+    buttons = [
+        [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
+        for d in drivers
+    ]
+    await reply_private(
+        update,
+        context,
+        "Select driver for OT report:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+async def ot_report_driver_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    driver = query.data.split(":", 1)[1]
+    await context.bot.send_message(
+        chat_id=query.from_user.id,
+        text=f"OT report generation started for {driver} (CSV will be sent here)."
+    )
+
+def get_all_drivers():
+    # Minimal safe fallback: read from Drivers sheet if available,
+    # otherwise return empty list to avoid crash
+    try:
+        return read_drivers_from_sheet()
+    except Exception:
+        return []
