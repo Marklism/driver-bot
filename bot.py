@@ -663,6 +663,7 @@ try:
     # These handlers implement Clock In/Out toggle and OT reporting
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
 except Exception:
@@ -3556,20 +3557,110 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception:
         logger.exception("Error in handle_clock_button")
 
+
+# =======================
+# Mission Report (OT-style, independent)
+# =======================
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+MISSION_CB_PREFIX = "MR_DRIVER:"
+
+async def mission_report_entry(update, context):
+    # Private-only UX like OT
+    drivers = []
+    try:
+        drivers = read_drivers_from_sheet()
+    except Exception:
+        drivers = []
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+
+    buttons = [[InlineKeyboardButton(d, callback_data=f"{MISSION_CB_PREFIX}{d}")] for d in sorted(drivers)]
+    await reply_private(
+        update, context,
+        "Select driver for Mission Report:",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+async def mission_report_driver_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+
+    driver = query.data.split(":", 1)[1]
+
+    ws = open_worksheet(MISSIONS_REPORT_TAB)
+    rows = ws.get_all_values()
+    if not rows or len(rows) < 2:
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ No mission records.")
+        return
+
+    header = rows[0]
+    data = rows[1:]
+
+    def idx(col):
+        return header.index(col)
+
+    out = []
+    for r in data:
+        try:
+            if r[idx("Name")].strip() != driver:
+                continue
+            start = r[idx("Start Date")]
+            end = r[idx("End Date")]
+            frm = r[idx("From")]
+            to = r[idx("To")]
+            # Mission type inference
+            mtype = "PP Mission" if frm == "SHV" else "SHV Mission"
+            # Duration in days (inclusive)
+            sd = datetime.fromisoformat(start.split(" ")[0])
+            ed = datetime.fromisoformat(end.split(" ")[0])
+            days = (ed - sd).days + 1
+            out.append([driver, start, end, str(days), mtype])
+        except Exception:
+            continue
+
+    if not out:
+        await context.bot.send_message(chat_id=query.from_user.id, text=f"❌ No mission data for {driver}.")
+        return
+
+    # Sort by start date
+    out.sort(key=lambda x: x[1])
+
+    import io, csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Name","Start Date","End Date","Duration","Mission Type"])
+    for r in out:
+        w.writerow(r)
+
+    bio = io.BytesIO(buf.getvalue().encode("utf-8"))
+    bio.name = f"Mission_Report_{driver}.csv"
+
+    await context.bot.send_document(
+        chat_id=query.from_user.id,
+        document=bio,
+        caption=f"Mission report for {driver}"
+    )
+
+
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
+    # DISABLED legacy mission_report
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
+    application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:"))
 
     application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
  
@@ -4708,7 +4799,8 @@ async def mission_report_command(update, context):
 # Register handlers
 try:
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+    # DISABLED legacy mission_report
 except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
@@ -5402,7 +5494,7 @@ async def mission_report_driver_callback(update, context):
     )
 
 try:
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+    # DISABLED legacy mission_report
     application.add_handler(
         CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_BTN:")
     )
@@ -5544,7 +5636,7 @@ async def mission_report_driver_callback(update, context):
 
 # --- FORCE OVERRIDE REGISTRATION (LAST WINS) ---
 try:
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+    # DISABLED legacy mission_report
     application.add_handler(
         CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:")
     )
