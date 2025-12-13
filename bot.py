@@ -1,4 +1,3 @@
-
 # === /ot_report rewritten to DRIVER BUTTON MODE ===
 # Old parameter-based logic removed
 # New flow: /ot_report -> private driver selection -> callback generates CSV
@@ -32,25 +31,27 @@ async def reply_private(update, context, text, reply_markup=None):
     )
 
 async def ot_report_entry(update, context):
-    try:
-        drivers = read_drivers_from_sheet()
-    except Exception:
-        drivers = []
+    driver_map = get_driver_map()   # ✅ 正确的数据入口
+    drivers = sorted(driver_map.keys())
 
     if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
         return
 
-    buttons = [
-        [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
-        for d in drivers
-    ]
+    keyboard = []
+    for d in drivers:
+        keyboard.append([
+            InlineKeyboardButton(
+                d,
+                callback_data=f"OTR_DRIVER:{d}"
+            )
+        ])
 
     await reply_private(
         update,
         context,
-        "Select driver for OT report:",
-        reply_markup=InlineKeyboardMarkup(buttons),
+        "Select driver:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 # ===== END helper =====
 
