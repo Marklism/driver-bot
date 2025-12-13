@@ -3669,7 +3669,7 @@ def register_ui_handlers(application):
     application.add_handler(
         CallbackQueryHandler(
             mission_report_entry,
-            pattern=r\"^MENU_MISSION$\"
+            pattern=r"^MENU_MISSION$"
         )
     )
     # --- Mission Report (menu only, V28) ---
