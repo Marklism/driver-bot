@@ -4885,15 +4885,18 @@ except Exception:
     pass
 
 # Also expose helper for explicit call
-globals().setdefault("register_bot_commands", _register_bot_commands)\n\n
+globals().setdefault("register_bot_commands", _register_bot_commands)
+
+
 
 # ===============================
-# === C FINAL ADDON (FIXED & EXECUTABLE)
+# === C FINAL SAFE ADDON
 # ===============================
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CommandHandler, CallbackQueryHandler
 
-# ---- SAFE language command (no external variable dependency) ----
+# ---- Language command ----
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     args = context.args or []
@@ -4907,12 +4910,12 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["lang"] = lang
     await msg.reply_text(t(lang, "lang_set", lang=lang))
 
-# ---- Inline report menu ----
+# ---- Reports menu ----
 async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
-        [InlineKeyboardButton("OT Report (cmd)", callback_data="rep_help_ot")],
-        [InlineKeyboardButton("OT Monthly (cmd)", callback_data="rep_help_otm")],
-        [InlineKeyboardButton("Mission Monthly (cmd)", callback_data="rep_help_mm")],
+        [InlineKeyboardButton("OT Report", callback_data="rep_ot")],
+        [InlineKeyboardButton("OT Monthly Report", callback_data="rep_otm")],
+        [InlineKeyboardButton("Mission Monthly Report", callback_data="rep_mm")],
         [
             InlineKeyboardButton("English", callback_data="lang_en"),
             InlineKeyboardButton("Khmer", callback_data="lang_km"),
@@ -4923,8 +4926,8 @@ async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-# ---- Callbacks ----
-async def c_final_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---- Callback handler ----
+async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     data = q.data
@@ -4932,29 +4935,22 @@ async def c_final_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "lang_en":
         context.user_data["lang"] = "en"
         await q.edit_message_text("Language set to English")
-        return
-    if data == "lang_km":
+    elif data == "lang_km":
         context.user_data["lang"] = "km"
         await q.edit_message_text("Language set to Khmer")
-        return
-
-    # Report help (Telegram does NOT allow silent injection of args safely)
-    if data == "rep_help_ot":
+    elif data == "rep_ot":
         await q.edit_message_text("Use: /ot_report <username> YYYY-MM")
-    elif data == "rep_help_otm":
+    elif data == "rep_otm":
         await q.edit_message_text("Use: /ot_monthly_report YYYY-MM <username>")
-    elif data == "rep_help_mm":
+    elif data == "rep_mm":
         await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
 
-# ---- Register handlers safely ----
-def register_c_final_handlers(application):
+# ---- Register handlers ----
+try:
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("reports", reports_menu))
-    application.add_handler(CallbackQueryHandler(c_final_callback, pattern="^(lang_|rep_help_)"))
-
-try:
-    register_c_final_handlers(application)
+    application.add_handler(CallbackQueryHandler(c_safe_callback, pattern="^(lang_|rep_)"))
 except Exception:
     pass
 
-# === END C FINAL ADDON (FIXED) ===
+# === END C FINAL SAFE ADDON ===
