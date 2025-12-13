@@ -3130,63 +3130,24 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(t(user_lang, "invalid_sel"))
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    args = context.args or []
 
-    # TWO-LOOP MISSION LOGIC: only send merged summary on second cycle
-    chat_data = context.chat_data
-    if "mission_cycle" not in chat_data:
-        chat_data["mission_cycle"] = {}
-    key_cycle = f"mission_cycle|{username}|{plate}"
-    cur_cycle = chat_data["mission_cycle"].get(key_cycle, 0) + 1
-    chat_data["mission_cycle"][key_cycle] = cur_cycle
-    try:
-        save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
-    except Exception:
-        logger.exception("Failed to persist mission_cycle after update")
-    logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
-
-    try:
-                        save_mission_cycles_to_sheet(chat_data.get("mission_cycle", {}))
-    except Exception:
-                        logger.exception("Failed to persist mission_cycle after update")
-# If it's the first (odd) cycle, skip sending summary now (clear pending and return)
-    if (cur_cycle % 2) != 0:
-        try:
-            context.user_data.pop("pending_mission", None)
-        except Exception:
-            pass
-        return
-
-    # otherwise (even cycle) continue to prepare/send merged summary (existing code follows)
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    args = context.args
     if not args:
-        try:
-            await update.effective_chat.send_message("Usage: /lang en|km")
-        except Exception:
-            if update.effective_message:
-                update.effective_message.reply_text("Usage: /lang en|km")
+        await msg.reply_text("Usage: /lang en | km")
         return
+
     lang = args[0].lower()
-    if lang not in SUPPORTED_LANGS:
-        try:
-            await update.effective_chat.send_message("Supported langs: en, km")
-        except Exception:
-            if update.effective_message:
-                update.effective_message.reply_text("Supported langs: en, km")
+    if lang not in ("en", "km"):
+        await msg.reply_text("Unsupported language. Use: en / km")
         return
+
     context.user_data["lang"] = lang
-    try:
-        await update.effective_chat.send_message(t(lang, "lang_set", lang=lang))
-    except Exception:
-        if update.effective_message:
-            try:
-                await update.effective_message.reply_text(t(lang, "lang_set", lang=lang))
-            except Exception:
-                pass
+
+    if lang == "en":
+        await msg.reply_text("Language set to English.")
+    else:
+        await msg.reply_text("បានកំណត់ភាសាជាភាសាខ្មែរ។")
 
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
