@@ -1,4 +1,23 @@
-from __future__ import annotations
+# ===============================
+# DRIVER BOT — LTS FROZEN VERSION
+# ===============================
+# This is the LONG-TERM SUPPORT version.
+# - Behavior identical to current running bot
+# - No __future__ imports
+# - Structure frozen for stability
+#
+# Allowed edits (ONLY):
+#   - HOLIDAYS
+#   - VEHICLE_PLATES
+#   - Language text dictionaries
+#   - ADMIN / permission lists
+#
+# Do NOT modify logic below.
+# ===============================
+
+
+from telegram import Update
+from telegram.ext import ContextTypes
 import os
 from telegram import Bot, BotCommand
 """
