@@ -1456,7 +1456,6 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
         await update.effective_chat.send_message(text)
 
 async def mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    Window: YYYY-MM-01 04:00 -> next month 01 04:00
     """
     args = context.args
     if not args or len(args) < 2:
