@@ -24,6 +24,13 @@ from telegram.ext import CallbackQueryHandler
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+async def reply_private(update, context, text, reply_markup=None):
+    await context.bot.send_message(
+        chat_id=update.effective_user.id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+
 async def ot_report_entry(update, context):
     try:
         drivers = read_drivers_from_sheet()
