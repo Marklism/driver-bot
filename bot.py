@@ -1,3 +1,27 @@
+# =======================
+# OPERATIONS CONFIGURATION
+# =======================
+# The following section is SAFE TO EDIT for operations.
+# Editing here will NOT change business logic behavior.
+#
+# 1. Holidays (YYYY-MM-DD)
+HOLIDAYS = [
+    # "2025-01-01",
+]
+
+# 2. Vehicle Plates
+VEHICLE_PLATES = [
+    # "ABC-1234",
+]
+
+# 3. Supported Languages
+SUPPORTED_LANGUAGES = ["en", "km"]
+
+# =======================
+# END OPERATIONS CONFIG
+# =======================
+
+
 from __future__ import annotations
 import os
 from telegram import Bot, BotCommand
