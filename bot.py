@@ -5276,3 +5276,96 @@ def _auto_close_previous_in(ws, driver, new_in_time):
             return
 
 # === CLOCK HANDLER END ===
+
+
+
+# ===============================
+# MISSION REPORT — DRIVER BUTTON MODE (NON-OT)
+# ===============================
+# Click username -> export per-driver natural-month mission report (CSV)
+# Duration rule (calendar days, inclusive): (End Date - Start Date) + 1
+
+from telegram.ext import CallbackQueryHandler
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+def _calendar_days_inclusive(start_dt, end_dt):
+    return (end_dt.date() - start_dt.date()).days + 1
+
+async def mission_report_entry(update, context):
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
+    await reply_private(update, context, "Select driver:", InlineKeyboardMarkup(keyboard))
+
+async def mission_report_driver_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    driver = query.data.split(":",1)[1]
+
+    ws = open_worksheet(MISSIONS_TAB)
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ No mission data.")
+        return
+
+    header = rows[0]
+    data = rows[1:]
+
+    idx_name = M_IDX_DRIVER
+    idx_plate = M_IDX_PLATE
+    idx_start = M_IDX_START
+    idx_end = M_IDX_END
+    idx_from = M_IDX_FROM
+    idx_to = M_IDX_TO
+
+    # natural month = current month by start date
+    now = _now_dt()
+    y, m = now.year, now.month
+    m_start = datetime(y, m, 1)
+    m_end = datetime(y+1,1,1) if m==12 else datetime(y, m+1, 1)
+
+    import csv, io
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["No.","Name","Plate","Start Date","End Date","Duration (days)","Mission Type"])
+
+    no = 0
+    for r in data:
+        try:
+            if r[idx_name].strip() != driver:
+                continue
+            sdt = datetime.fromisoformat(r[idx_start])
+            edt = datetime.fromisoformat(r[idx_end])
+            if not (m_start <= sdt < m_end):
+                continue
+            no += 1
+            days = _calendar_days_inclusive(sdt, edt)
+            frm = (r[idx_from] or "").upper()
+            to = (r[idx_to] or "").upper()
+            if frm.startswith("SHV") and to.startswith("SHV"):
+                mtype = "PP mission"
+            elif frm.startswith("PP") and to.startswith("PP"):
+                mtype = "SHV mission"
+            else:
+                mtype = "SHV mission" if "SHV" in (frm+to) else "PP mission"
+            w.writerow([no, driver, r[idx_plate], r[idx_start], r[idx_end], days, mtype])
+        except Exception:
+            continue
+
+    if no == 0:
+        await context.bot.send_message(chat_id=query.from_user.id, text=f"❌ No missions for {driver}.")
+        return
+
+    bio = io.BytesIO(out.getvalue().encode("utf-8"))
+    bio.name = f"Mission_Report_{driver}_{y}-{str(m).zfill(2)}.csv"
+    await context.bot.send_document(chat_id=query.from_user.id, document=bio)
+
+try:
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+    application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:"))
+except Exception:
+    pass
+# ===== END MISSION REPORT =====
