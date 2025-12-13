@@ -429,10 +429,6 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Register OT handlers (inserted)
 try:
     # These handlers implement Clock In/Out toggle and OT reporting
-    application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
-    application.add_handler(CommandHandler("ot_report", ot_report_command))
-    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
-    application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
 
 except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
@@ -3366,29 +3362,11 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception:
         logger.exception("Error in handle_clock_button")
 
-def register_ui_handlers(application):
-    application.add_handler(CommandHandler("menu", menu_command))
-    application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
-    application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
-    application.add_handler(CommandHandler("mission_start", mission_start_command))
-    application.add_handler(CommandHandler("mission_end", mission_end_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
-    application.add_handler(CommandHandler("leave", leave_command))
-    application.add_handler(CommandHandler("setup_menu", setup_menu_command))
-    application.add_handler(CommandHandler("lang", lang_command))
 
-    application.add_handler(CallbackQueryHandler(plate_callback))
     # Clock In/Out buttons handler
-    application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
-    application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
-    application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
-    application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
-    application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
     
     # Debug command for runtime self-check
-    application.add_handler(CommandHandler('debug_bot', debug_bot_command))
     async def _set_cmds():
         try:
             await application.bot.set_my_commands([
@@ -3420,7 +3398,6 @@ def register_ui_handlers(application):
             # Fallback: try to call application.create_task if provided by library
             try:
                 if hasattr(application, "create_task"):
-                    application.create_task(_set_cmds())
             except Exception:
                 logger.exception("Could not schedule set_my_commands.")
     except Exception:
@@ -3438,7 +3415,6 @@ def schedule_daily_summary(application):
             else:
                 tz = None
             job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
-            application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
             logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
         else:
             logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
@@ -3542,6 +3518,9 @@ def main():
         persistence = None
 
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+    # REGISTER HANDLERS (AUTO)
+    register_ui_handlers(application)
+
     register_ui_handlers(application)
 
     # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
@@ -4484,8 +4463,6 @@ async def mission_report_command(update, context):
 
 # Register handlers
 try:
-    application.add_handler(CommandHandler("ot_report", ot_report_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
 except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
