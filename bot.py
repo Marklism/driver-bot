@@ -3557,6 +3557,10 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.exception("Error in handle_clock_button")
 
 def register_ui_handlers(application):
+    # --- Mission Report (menu button only) ---
+    application.add_handler(CallbackQueryHandler(menu_mission_entry, pattern=r"^MENU_MISSION$"))
+    application.add_handler(CallbackQueryHandler(menu_mission_driver, pattern=r"^MR23:"))
+
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
