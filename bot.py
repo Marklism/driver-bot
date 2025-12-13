@@ -3652,6 +3652,15 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
+
+    # Mission Report callback (MENU_MISSION)
+    application.add_handler(
+        CallbackQueryHandler(
+            mission_report_entry,
+            pattern=r"^MENU_MISSION$"
+        )
+    )
+
     # --- Mission Report (menu only, V28) ---
     application.add_handler(CallbackQueryHandler(menu_mission_entry, pattern=r"^MENU_MISSION$"))
     application.add_handler(CallbackQueryHandler(menu_mission_driver, pattern=r"^MR26:"))
@@ -3807,9 +3816,15 @@ def main():
             try:
                 # Build command list for Telegram API
                 cmds_payload = [
-                    {"command": "menu", "description": "Open menu"},
-                    {"command": "ot_report", "description": "OT report"},
+                {"command": "menu", "description": "Open menu"},
+                {"command": "ot_report", "description": "OT report"},
+                {"command": "leave", "description": "Request leave"},
+                {"command": "clock_in", "description": "Clock In"},
+                {"command": "clock_out", "description": "Clock Out"}
+            ] YYYY-MM"},
                     {"command": "leave", "description": "Request leave"},
+                    {"command": "finance", "description": "Add finance record"},
+                    {"command": "mission_end", "description": "End mission"},
                     {"command": "clock_in", "description": "Clock In"},
                     {"command": "clock_out", "description": "Clock Out"}
                 ]
