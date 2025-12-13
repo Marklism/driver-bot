@@ -661,9 +661,9 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Register OT handlers (inserted)
 try:
     # These handlers implement Clock In/Out toggle and OT reporting
-    application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
-    application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
+application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
+application.add_handler(CommandHandler("ot_report", ot_report_entry))
+application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
 except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
@@ -3558,32 +3558,32 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.exception("Error in handle_clock_button")
 
 def register_ui_handlers(application):
-    application.add_handler(CommandHandler("menu", menu_command))
-    application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
-    application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
-    application.add_handler(CommandHandler("mission_start", mission_start_command))
-    application.add_handler(CommandHandler("mission_end", mission_end_command))
-        application.add_handler(CommandHandler("leave", leave_command))
-    application.add_handler(CommandHandler("setup_menu", setup_menu_command))
-    application.add_handler(CommandHandler("lang", lang_command))
-    application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
+application.add_handler(CommandHandler("menu", menu_command))
+application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
+application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
+application.add_handler(CommandHandler("mission_start", mission_start_command))
+application.add_handler(CommandHandler("mission_end", mission_end_command))
+application.add_handler(CommandHandler("leave", leave_command))
+application.add_handler(CommandHandler("setup_menu", setup_menu_command))
+application.add_handler(CommandHandler("lang", lang_command))
+application.add_handler(CommandHandler("ot_report", ot_report_entry))
+application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
-    application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
+application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
 
-    application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
+application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
  
-    application.add_handler(CallbackQueryHandler(plate_callback))
+application.add_handler(CallbackQueryHandler(plate_callback))
     # Clock In/Out buttons handler
-    application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
-    application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
-    application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
-    application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
+application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
+application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
+application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
+application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
+application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
     
     # Debug command for runtime self-check
-    application.add_handler(CommandHandler('debug_bot', debug_bot_command))
+application.add_handler(CommandHandler('debug_bot', debug_bot_command))
     async def _set_cmds():
         try:
             await application.bot.set_my_commands([
@@ -4056,7 +4056,7 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
 
 # Register command handler if application exists
 try:
-    application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))
+application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))
 except Exception:
     pass
 # === END: OT Summary integration ===
@@ -4109,7 +4109,7 @@ async def chatid_command(update, context):
 
 # Register handler if dispatcher/application exists
 try:
-    application.add_handler(CommandHandler("chatid", chatid_command))
+application.add_handler(CommandHandler("chatid", chatid_command))
 except Exception:
     try:
         # older style: dispatcher
@@ -4166,7 +4166,7 @@ async def chatid_command(update, context):
 
 # Register handler if dispatcher/application exists
 try:
-    application.add_handler(CommandHandler("chatid", chatid_command))
+application.add_handler(CommandHandler("chatid", chatid_command))
 except Exception:
     try:
         # older style: dispatcher
@@ -4415,10 +4415,10 @@ async def forcelang_command(update, context):
 
 # Register handlers if application object exists (best-effort, non-invasive)
 try:
-    application.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
-    application.add_handler(CommandHandler("setlang", setlang_command))
-    application.add_handler(CommandHandler("mylang", mylang_command))
-    application.add_handler(CommandHandler("forcelang", forcelang_command))
+application.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
+application.add_handler(CommandHandler("setlang", setlang_command))
+application.add_handler(CommandHandler("mylang", mylang_command))
+application.add_handler(CommandHandler("forcelang", forcelang_command))
 except Exception:
     # If 'application' is not yet defined at import time, registration will be attempted in main()
     pass
@@ -4707,7 +4707,7 @@ async def mission_report_command(update, context):
 
 # Register handlers
 try:
-    application.add_handler(CommandHandler("ot_report", ot_report_entry))
+application.add_handler(CommandHandler("ot_report", ot_report_entry))
     except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
@@ -4997,10 +4997,10 @@ async def cmd_forcelang(update, context):
 
 # Register handlers if application object is present
 try:
-    application.add_handler(CommandHandler("setlang", cmd_setlang))
-    application.add_handler(CommandHandler("mylang", cmd_mylang))
-    application.add_handler(CommandHandler("forcelang", cmd_forcelang))
-    application.add_handler(MessageHandler(filters.ALL, _sync_user_lang), group=0)
+application.add_handler(CommandHandler("setlang", cmd_setlang))
+application.add_handler(CommandHandler("mylang", cmd_mylang))
+application.add_handler(CommandHandler("forcelang", cmd_forcelang))
+application.add_handler(MessageHandler(filters.ALL, _sync_user_lang), group=0)
 except Exception:
     # expose a function to register later
     def register_multilang(app):
@@ -5135,9 +5135,9 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 # ---- Register handlers ----
 try:
-    application.add_handler(CommandHandler("lang", lang_command))
-    application.add_handler(CommandHandler("reports", reports_menu))
-    application.add_handler(CallbackQueryHandler(c_safe_callback, pattern="^(lang_|rep_)"))
+application.add_handler(CommandHandler("lang", lang_command))
+application.add_handler(CommandHandler("reports", reports_menu))
+application.add_handler(CallbackQueryHandler(c_safe_callback, pattern="^(lang_|rep_)"))
 except Exception:
     pass
 
@@ -5399,8 +5399,8 @@ async def mission_report_driver_callback(update, context):
     )
 
 try:
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
-    application.add_handler(
+application.add_handler(CommandHandler("mission_report", mission_report_entry))
+application.add_handler(
         CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_BTN:")
     )
 except Exception:
@@ -5499,8 +5499,8 @@ async def mission_report_driver_callback(update, context):
     await context.bot.send_document(query.from_user.id, bio)
 
 try:
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
-    application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:"))
+application.add_handler(CommandHandler("mission_report", mission_report_entry))
+application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:"))
 except Exception:
     pass
 
