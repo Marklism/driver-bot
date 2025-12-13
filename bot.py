@@ -3639,8 +3639,6 @@ async def menu_mission_driver(update, context):
 
 
 def register_ui_handlers(application):
-    application.add_handler(CallbackQueryHandler(menu_mission_entry, pattern=r"^MENU_MISSION$"))
-    application.add_handler(CallbackQueryHandler(menu_mission_driver, pattern=r"^MR26:"))
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
@@ -3654,6 +3652,10 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
+    # --- Mission Report (menu only, V28) ---
+    application.add_handler(CallbackQueryHandler(menu_mission_entry, pattern=r"^MENU_MISSION$"))
+    application.add_handler(CallbackQueryHandler(menu_mission_driver, pattern=r"^MR26:"))
+
 
     application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
  
@@ -5828,8 +5830,5 @@ async def menu_mission_driver(update, context):
     bio = io.BytesIO(buf.getvalue().encode("utf-8"))
     bio.name = f"Mission_Report_{driver}_{month_start.strftime('%Y-%m')}.csv"
     await context.bot.send_document(query.from_user.id, bio)
-
-application.add_handler(CallbackQueryHandler(menu_mission_entry, pattern=r"^MENU_MISSION$"))
-application.add_handler(CallbackQueryHandler(menu_mission_driver, pattern=r"^MR22:"))
 
 # ===== END V22 =====
