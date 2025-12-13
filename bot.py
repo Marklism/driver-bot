@@ -95,10 +95,9 @@ async def ot_report_entry(update, context):
         [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
         for d in drivers
     ]
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Select driver:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -5304,10 +5303,9 @@ async def mission_report_entry(update, context):
         for d in drivers
     ]
 
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Select driver:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -5441,10 +5439,9 @@ async def mission_report_entry(update, context):
         for d in drivers
     ]
 
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Select driver:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -5645,10 +5642,9 @@ async def mission_report_new_entry(update, context):
 
     keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_NEW:{d}")] for d in drivers]
 
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Select driver:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
