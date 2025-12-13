@@ -3676,10 +3676,6 @@ def register_ui_handlers(application):
                 BotCommand("start_trip", "Start a trip (select plate)"),
                 BotCommand("end_trip", "End a trip (select plate)"),
                 BotCommand("menu", "Open trip menu"),
-                BotCommand("mission", "Quick mission menu"),
-                BotCommand("mission_report", "Generate mission report:  month YYYY-MM"),
-                BotCommand("leave", "Record leave (admin)"),
-                BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
             ])
         except Exception:
             logger.exception("Failed to set bot commands.")
