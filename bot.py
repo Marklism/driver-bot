@@ -65,6 +65,19 @@ async def ot_report_entry(update, context):
     driver_map = get_driver_map()   # ✅ 正确的数据入口
     drivers = sorted(driver_map.keys())
 
+async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mission Report entry from menu button (V33)."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    await context.bot.send_message(
+        chat_id=update.effective_user.id,
+        text="Mission Report handler reached. (V33)"
+    )
+
     if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
         return
@@ -3653,14 +3666,12 @@ def register_ui_handlers(application):
     
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
 
-    # Mission Report callback (MENU_MISSION)
     application.add_handler(
         CallbackQueryHandler(
             mission_report_entry,
-            pattern=r"^MENU_MISSION$"
+            pattern=r\"^MENU_MISSION$\"
         )
     )
-
     # --- Mission Report (menu only, V28) ---
     application.add_handler(CallbackQueryHandler(menu_mission_entry, pattern=r"^MENU_MISSION$"))
     application.add_handler(CallbackQueryHandler(menu_mission_driver, pattern=r"^MR26:"))
@@ -3816,9 +3827,15 @@ def main():
             try:
                 # Build command list for Telegram API
                 cmds_payload = [
-                    {"command": "menu", "description": "Open menu"},
-                    {"command": "ot_report", "description": "OT report"},
+                {"command": "menu", "description": "Open menu"},
+                {"command": "ot_report", "description": "OT report"},
+                {"command": "leave", "description": "Request leave"},
+                {"command": "clock_in", "description": "Clock In"},
+                {"command": "clock_out", "description": "Clock Out"}
+            ] YYYY-MM"},
                     {"command": "leave", "description": "Request leave"},
+                    {"command": "finance", "description": "Add finance record"},
+                    {"command": "mission_end", "description": "End mission"},
                     {"command": "clock_in", "description": "Clock In"},
                     {"command": "clock_out", "description": "Clock Out"}
                 ]
@@ -5380,25 +5397,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 def _mission_duration_days(start_dt, end_dt):
     return (end_dt.date() - start_dt.date()).days + 1
 
-async def mission_report_entry(update, context):
-    driver_map = get_driver_map()
-    drivers = sorted(driver_map.keys())
-
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton(d, callback_data=f"MR_BTN:{d}")]
-        for d in drivers
-    ]
-
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
 
 async def mission_report_driver_callback(update, context):
     query = update.callback_query
@@ -5517,25 +5515,6 @@ from telegram.ext import CallbackQueryHandler, CommandHandler
 def _mission_duration_days_calendar(start_dt, end_dt):
     return (end_dt.date() - start_dt.date()).days + 1
 
-async def mission_report_entry(update, context):
-    driver_map = get_driver_map()
-    drivers = sorted(driver_map.keys())
-
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")]
-        for d in drivers
-    ]
-
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
 
 async def mission_report_driver_callback(update, context):
     query = update.callback_query
