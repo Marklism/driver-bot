@@ -5621,20 +5621,21 @@ except Exception:
 
 
 # ======================================================
-# V15 — MISSION REPORT (BUTTON MODE, CLEAN SIDECAR)
+# V16 — MISSION REPORT (NEW COMMAND: /mission_report_new)
 # ======================================================
-# /mission_report
-# -> select driver button
+# This command is NEW and does not collide with legacy handlers.
+# /mission_report_new
+# -> select driver (button)
 # -> export current natural month mission CSV
 # Duration = (End Date - Start Date).days + 1 (calendar days, inclusive)
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, CallbackQueryHandler
 
-def _mission_days_calendar(start_dt, end_dt):
+def _mission_new_days(start_dt, end_dt):
     return (end_dt.date() - start_dt.date()).days + 1
 
-async def mission_report_entry(update, context):
+async def mission_report_new_entry(update, context):
     driver_map = get_driver_map()
     drivers = sorted(driver_map.keys())
 
@@ -5642,7 +5643,7 @@ async def mission_report_entry(update, context):
         await reply_private(update, context, "❌ No drivers found.")
         return
 
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_CLEAN:{d}")] for d in drivers]
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_NEW:{d}")] for d in drivers]
 
     await reply_private(
         update,
@@ -5651,7 +5652,7 @@ async def mission_report_entry(update, context):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
-async def mission_report_driver_callback(update, context):
+async def mission_report_new_driver(update, context):
     query = update.callback_query
     await query.answer()
 
@@ -5688,7 +5689,7 @@ async def mission_report_driver_callback(update, context):
                 continue
 
             idx += 1
-            dur = _mission_days_calendar(sdt, edt)
+            dur = _mission_new_days(sdt, edt)
 
             frm = (r[M_IDX_FROM] or "").upper()
             to = (r[M_IDX_TO] or "").upper()
@@ -5738,10 +5739,10 @@ async def mission_report_driver_callback(update, context):
 
     await context.bot.send_document(query.from_user.id, bio)
 
-# Register clean mission report handlers (isolated)
-application.add_handler(CommandHandler("mission_report", mission_report_entry))
+# Register NEW command handlers (no collision with legacy code)
+application.add_handler(CommandHandler("mission_report_new", mission_report_new_entry))
 application.add_handler(
-    CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_CLEAN:")
+    CallbackQueryHandler(mission_report_new_driver, pattern=r"^MR_NEW:")
 )
 
-# ===== END V15 MISSION REPORT =====
+# ===== END V16 MISSION REPORT NEW =====
