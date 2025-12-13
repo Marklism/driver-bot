@@ -1455,10 +1455,13 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
     else:
         await update.effective_chat.send_message(text)
 
-async def mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _DISABLED_mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /mission_monthly_report YYYY-MM username
+    Window: YYYY-MM-01 04:00 -> next month 01 04:00
     """
     args = context.args
     if not args or len(args) < 2:
+        await update.effective_chat.send_message("Usage: /mission_monthly_report YYYY-MM username")
         return
     ym = args[0]; username = args[1]
     ym_parsed = _parse_ym(ym)
@@ -3352,6 +3355,7 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
         pass
     args = context.args
     if not args or len(args) < 2:
+        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
         return
     mode = args[0].lower()
     if mode == "month":
@@ -3371,7 +3375,9 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
             else:
                 await update.effective_chat.send_message("❌ Failed to write mission report.")
         except Exception:
+            await update.effective_chat.send_message("Invalid command. Usage: /mission_report month YYYY-MM")
     else:
+        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -3586,7 +3592,7 @@ def register_ui_handlers(application):
                 BotCommand("end_trip", "End a trip (select plate)"),
                 BotCommand("menu", "Open trip menu"),
                 BotCommand("mission", "Quick mission menu"),
-                
+                BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
                 BotCommand("leave", "Record leave (admin)"),
                 BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
             ])
@@ -3829,7 +3835,7 @@ def load_mission_cycles_from_sheet():
     """Return current in-memory mission cycle mapping.
 
     This overrides the earlier implementation that read from Google
-# (commented out invalid doc text)
+    Sheets. The return value is a shallow copy so callers can't
     accidentally mutate the internal store without calling the
     save helper.
     """
@@ -3840,7 +3846,7 @@ def save_mission_cycles_to_sheet(mission_cycles):
     """Update the in-memory mission cycle mapping.
 
     This overrides the earlier implementation that wrote to Google
-# (commented out invalid doc text)
+    Sheets. It simply keeps everything in process memory.
     """
     _MISSION_CYCLE_STORE.clear()
     _MISSION_CYCLE_STORE.update(mission_cycles or {})
@@ -5129,6 +5135,7 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "rep_otm":
         await q.edit_message_text("Use: /ot_monthly_report YYYY-MM <username>")
     elif data == "rep_mm":
+        await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
 
 # ---- Register handlers ----
 try:
@@ -5403,3 +5410,107 @@ try:
 except Exception:
     pass
 # ===== END MISSION REPORT BUTTON MODE =====
+
+
+# ===============================
+# SAFE MISSION REPORT (BUTTON MODE)
+# ===============================
+# Rules:
+# - Natural month (calendar month)
+# - Duration = (End Date - Start Date).days + 1
+# - Driver selected via button (same UX as OT report)
+
+async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
+
+    await reply_private(
+        update,
+        context,
+        "Select driver:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def mission_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    driver = query.data.split(":", 1)[1]
+
+    now = _now_dt()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month_start.month == 12:
+        month_end = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        month_end = month_start.replace(month=month_start.month + 1)
+
+    ws = open_worksheet(MISSIONS_TAB)
+    rows = ws.get_all_values()
+
+    if len(rows) < 2:
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ No mission data.")
+        return
+
+    data = rows[1:]
+    out = []
+    for r in data:
+        try:
+            if r[M_IDX_DRIVER].strip() != driver:
+                continue
+
+            sdt = datetime.fromisoformat(r[M_IDX_START])
+            edt = datetime.fromisoformat(r[M_IDX_END])
+
+            if not (month_start <= sdt < month_end):
+                continue
+
+            duration = (edt.date() - sdt.date()).days + 1
+
+            frm = str(r[M_IDX_FROM]).upper()
+            to = str(r[M_IDX_TO]).upper()
+            if frm.startswith("SHV"):
+                mtype = "Mission type"
+            else:
+                mtype = "SHV mission"
+
+            out.append([
+                r[M_IDX_NO],
+                driver,
+                r[M_IDX_PLATE],
+                r[M_IDX_START],
+                r[M_IDX_END],
+                str(duration),
+                mtype
+            ])
+        except Exception:
+            continue
+
+    if not out:
+        await context.bot.send_message(chat_id=query.from_user.id, text=f"❌ No missions for {driver}.")
+        return
+
+    import csv, io
+    bio = io.StringIO()
+    writer = csv.writer(bio)
+    writer.writerow(["No.", "Name", "Plate", "Start Date", "End Date", "Duration(days)", "Mission Type"])
+    for row in out:
+        writer.writerow(row)
+
+    file = io.BytesIO(bio.getvalue().encode("utf-8"))
+    file.name = f"Mission_Report_{driver}_{month_start.strftime('%Y-%m')}.csv"
+
+    await context.bot.send_document(chat_id=query.from_user.id, document=file)
+
+# Register handlers
+try:
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+    application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:"))
+except Exception:
+    pass
+
+# ===== END SAFE MISSION REPORT =====
