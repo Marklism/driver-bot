@@ -3422,7 +3422,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
 
-    application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:")
+    application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
 
     application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
  
