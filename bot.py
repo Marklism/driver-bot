@@ -3589,6 +3589,65 @@ def main():
         persistence = None
 
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+
+# ===============================
+# === FINAL WORKING V2: REPORT & LANG HANDLERS
+# ===============================
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CommandHandler, CallbackQueryHandler
+
+async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    args = context.args or []
+    if not args:
+        await msg.reply_text("Usage: /lang en | km")
+        return
+    lang = args[0].lower()
+    if lang not in SUPPORTED_LANGS:
+        await msg.reply_text("Unsupported language.")
+        return
+    context.user_data["lang"] = lang
+    await msg.reply_text(t(lang, "lang_set", lang=lang))
+
+async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [
+        [InlineKeyboardButton("OT Report", callback_data="rep_ot")],
+        [InlineKeyboardButton("OT Monthly Report", callback_data="rep_otm")],
+        [InlineKeyboardButton("Mission Monthly Report", callback_data="rep_mm")],
+        [
+            InlineKeyboardButton("English", callback_data="lang_en"),
+            InlineKeyboardButton("Khmer", callback_data="lang_km"),
+        ],
+    ]
+    await update.effective_message.reply_text(
+        "Reports & Language",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
+
+async def report_lang_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+    if data == "lang_en":
+        context.user_data["lang"] = "en"
+        await q.edit_message_text("Language set to English")
+    elif data == "lang_km":
+        context.user_data["lang"] = "km"
+        await q.edit_message_text("Language set to Khmer")
+    elif data == "rep_ot":
+        await q.edit_message_text("Use: /ot_report <username> YYYY-MM")
+    elif data == "rep_otm":
+        await q.edit_message_text("Use: /ot_monthly_report YYYY-MM <username>")
+    elif data == "rep_mm":
+        await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
+
+# Register handlers BEFORE polling starts
+application.add_handler(CommandHandler("lang", lang_command))
+application.add_handler(CommandHandler("reports", reports_menu))
+application.add_handler(CallbackQueryHandler(report_lang_callback, pattern="^(rep_|lang_)"))
+
+# === END FINAL WORKING V2 ===
+
     register_ui_handlers(application)
 
     # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
@@ -4886,71 +4945,3 @@ except Exception:
 
 # Also expose helper for explicit call
 globals().setdefault("register_bot_commands", _register_bot_commands)
-
-
-
-# ===============================
-# === C FINAL SAFE ADDON
-# ===============================
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler, CallbackQueryHandler
-
-# ---- Language command ----
-async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    args = context.args or []
-    if not args:
-        await msg.reply_text("Usage: /lang en | km")
-        return
-    lang = args[0].lower()
-    if lang not in SUPPORTED_LANGS:
-        await msg.reply_text("Unsupported language.")
-        return
-    context.user_data["lang"] = lang
-    await msg.reply_text(t(lang, "lang_set", lang=lang))
-
-# ---- Reports menu ----
-async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [
-        [InlineKeyboardButton("OT Report", callback_data="rep_ot")],
-        [InlineKeyboardButton("OT Monthly Report", callback_data="rep_otm")],
-        [InlineKeyboardButton("Mission Monthly Report", callback_data="rep_mm")],
-        [
-            InlineKeyboardButton("English", callback_data="lang_en"),
-            InlineKeyboardButton("Khmer", callback_data="lang_km"),
-        ],
-    ]
-    await update.effective_message.reply_text(
-        "Reports & Language",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
-
-# ---- Callback handler ----
-async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-
-    if data == "lang_en":
-        context.user_data["lang"] = "en"
-        await q.edit_message_text("Language set to English")
-    elif data == "lang_km":
-        context.user_data["lang"] = "km"
-        await q.edit_message_text("Language set to Khmer")
-    elif data == "rep_ot":
-        await q.edit_message_text("Use: /ot_report <username> YYYY-MM")
-    elif data == "rep_otm":
-        await q.edit_message_text("Use: /ot_monthly_report YYYY-MM <username>")
-    elif data == "rep_mm":
-        await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
-
-# ---- Register handlers ----
-try:
-    application.add_handler(CommandHandler("lang", lang_command))
-    application.add_handler(CommandHandler("reports", reports_menu))
-    application.add_handler(CallbackQueryHandler(c_safe_callback, pattern="^(lang_|rep_)"))
-except Exception:
-    pass
-
-# === END C FINAL SAFE ADDON ===
