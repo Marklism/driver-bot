@@ -1456,12 +1456,10 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
         await update.effective_chat.send_message(text)
 
 async def mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /mission_monthly_report YYYY-MM username
     Window: YYYY-MM-01 04:00 -> next month 01 04:00
     """
     args = context.args
     if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_monthly_report YYYY-MM username")
         return
     ym = args[0]; username = args[1]
     ym_parsed = _parse_ym(ym)
@@ -3355,7 +3353,6 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
         pass
     args = context.args
     if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
         return
     mode = args[0].lower()
     if mode == "month":
@@ -3375,9 +3372,7 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
             else:
                 await update.effective_chat.send_message("❌ Failed to write mission report.")
         except Exception:
-            await update.effective_chat.send_message("Invalid command. Usage: /mission_report month YYYY-MM")
     else:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -3592,7 +3587,7 @@ def register_ui_handlers(application):
                 BotCommand("end_trip", "End a trip (select plate)"),
                 BotCommand("menu", "Open trip menu"),
                 BotCommand("mission", "Quick mission menu"),
-                BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
+                
                 BotCommand("leave", "Record leave (admin)"),
                 BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
             ])
@@ -5135,7 +5130,6 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "rep_otm":
         await q.edit_message_text("Use: /ot_monthly_report YYYY-MM <username>")
     elif data == "rep_mm":
-        await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
 
 # ---- Register handlers ----
 try:
