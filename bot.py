@@ -28,6 +28,15 @@ async def ot_report_entry(update, context):
         drivers = read_drivers_from_sheet()
     except Exception:
         pass
+# ===== SAFE reply_private helper =====
+async def reply_private(update, context, text, reply_markup=None):
+    await context.bot.send_message(
+        chat_id=update.effective_user.id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+# ===== END helper =====
+
 
     if not drivers:
         await reply_private(update, context, "No drivers found.")
