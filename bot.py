@@ -3572,8 +3572,9 @@ async def menu_mission_entry(update, context):
         return
 
     keyboard = [[InlineKeyboardButton(d, callback_data=f"MR26:{d}")] for d in drivers]
-    await query.edit_message_text(
-        "Select driver:",
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="Select driver:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
