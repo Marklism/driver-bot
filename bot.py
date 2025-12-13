@@ -1,3 +1,32 @@
+
+def determine_ot_rate(dt: datetime, is_holiday: bool = False) -> str:
+    """
+    OT rate rules:
+    - Holiday: always 200%
+    - Friday:
+        before 23:59:59 -> 150%
+        from Saturday 00:00 -> 200%
+    - Saturday/Sunday: 200%
+    - Weekday: 150%
+    """
+    if is_holiday:
+        return "200%"
+
+    weekday = dt.weekday()  # Mon=0 ... Sun=6
+
+    # Saturday or Sunday
+    if weekday >= 5:
+        return "200%"
+
+    # Friday special cut-off
+    if weekday == 4:  # Friday
+        if dt.time() <= time(23, 59, 59):
+            return "150%"
+        return "200%"
+
+    return "150%"
+
+
 import io
 # === /ot_report rewritten to DRIVER BUTTON MODE ===
 # Old parameter-based logic removed
@@ -5119,3 +5148,131 @@ except Exception:
 
 # === END C FINAL SAFE ADDON ===
 application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern="^OTR_DRIVER:"))
+
+
+
+# ======================
+# OT REPORT PATCH V7
+# ======================
+import io, csv
+from datetime import timedelta
+
+def _calc_hours(row, idx_morning, idx_evening, idx_start, idx_end):
+    try:
+        m = float(row[idx_morning] or 0)
+        e = float(row[idx_evening] or 0)
+        if m + e > 0:
+            return round(m + e, 2)
+        s = datetime.fromisoformat(row[idx_start])
+        en = datetime.fromisoformat(row[idx_end])
+        return round((en - s).total_seconds() / 3600, 2)
+    except Exception:
+        return 0.0
+
+async def ot_report_entry(update, context):
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")] for d in drivers]
+    await reply_private(update, context, "Select driver:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def ot_report_driver_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    driver = query.data.split(":", 1)[1]
+    ws = open_worksheet(OT_RECORD_TAB)
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        await context.bot.send_message(query.from_user.id, "❌ No OT records.")
+        return
+
+    header, data = rows[0], rows[1:]
+    idx_name = header.index("Name")
+    idx_type = header.index("Type")
+    idx_start = header.index("Start Date")
+    idx_end = header.index("End Date")
+    idx_morning = header.index("Morning OT")
+    idx_evening = header.index("Evening OT")
+
+    now = _now_dt()
+    start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
+    if now < start_window:
+        start_window = (start_window - timedelta(days=31)).replace(day=16)
+    end_window = (start_window + timedelta(days=31)).replace(day=16, hour=4)
+
+    ot150, ot200 = [], []
+    t150 = t200 = 0.0
+
+    for r in data:
+        if r[idx_name].strip() != driver:
+            continue
+        try:
+            sdt = datetime.fromisoformat(r[idx_start])
+            if not (start_window <= sdt < end_window):
+                continue
+        except Exception:
+            continue
+
+        h = _calc_hours(r, idx_morning, idx_evening, idx_start, idx_end)
+        if h <= 0:
+            continue
+
+        row = [r[idx_start], r[idx_end], f"{h:.2f}"]
+        if r[idx_type] == "150%":
+            ot150.append(row); t150 += h
+        elif r[idx_type] == "200%":
+            ot200.append(row); t200 += h
+
+    ot150.sort(key=lambda x: x[0])
+    ot200.sort(key=lambda x: x[0])
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["Driver", driver])
+    w.writerow(["Period", f"{start_window} → {end_window}"])
+    w.writerow([])
+
+    if ot150:
+        w.writerow(["150% OT"]); w.writerow(["Start","End","Hours"])
+        w.writerows(ot150); w.writerow(["Subtotal","","%.2f"%t150]); w.writerow([])
+    if ot200:
+        w.writerow(["200% OT"]); w.writerow(["Start","End","Hours"])
+        w.writerows(ot200); w.writerow(["Subtotal","","%.2f"%t200]); w.writerow([])
+
+    w.writerow(["GRAND TOTAL","","%.2f"%(t150+t200)])
+
+    bio = io.BytesIO(out.getvalue().encode("utf-8"))
+    bio.name = f"OT_Report_{driver}.csv"
+    await context.bot.send_document(query.from_user.id, bio, caption=f"OT report for {driver}")
+
+# === CLOCK HANDLER START ===
+def _auto_close_previous_in(ws, driver, new_in_time):
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        return
+    header = rows[0]
+    data = rows[1:]
+    idx_driver = header.index("Name")
+    idx_action = header.index("Action")
+    idx_time = header.index("Time")
+    idx_end = header.index("End Time") if "End Time" in header else None
+
+    for i in range(len(data)-1, -1, -1):
+        r = data[i]
+        if r[idx_driver] == driver and r[idx_action] == "IN":
+            last_in = datetime.strptime(r[idx_time], "%Y-%m-%d %H:%M:%S")
+            auto_out = last_in.replace(hour=4, minute=0, second=0)
+            if auto_out <= last_in:
+                auto_out += timedelta(days=1)
+            ws.update_cell(i+2, idx_action+1, "OUT")
+            ws.update_cell(i+2, idx_time+1, auto_out.strftime("%Y-%m-%d %H:%M:%S"))
+            return
+
+# === CLOCK HANDLER END ===
