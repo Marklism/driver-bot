@@ -3625,12 +3625,7 @@ def ensure_env():
     if not BOT_TOKEN:
         raise RuntimeError(t(DEFAULT_LANG, "no_bot_token"))
 
-def 
-    # --- V19: mission report (button, new command) ---
-    application.add_handler(CommandHandler("mission_report_new", mission_report_new_entry))
-    application.add_handler(CallbackQueryHandler(mission_report_new_driver, pattern=r"^MR19:"))
-
-    \1:
+def schedule_daily_summary(application):
     try:
         if SUMMARY_CHAT_ID:
             if ZoneInfo and SUMMARY_TZ:
@@ -3793,12 +3788,7 @@ def main():
                 pass
     except Exception:
         pass
-    
-    # --- V19: mission report (button, new command) ---
-    application.add_handler(CommandHandler("mission_report_new", mission_report_new_entry))
-    application.add_handler(CallbackQueryHandler(mission_report_new_driver, pattern=r"^MR19:"))
-
-    \1
+    schedule_daily_summary(application)
 
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     PORT = int(os.getenv("PORT", "8443"))
@@ -5631,30 +5621,53 @@ except Exception:
 
 
 # ======================================================
-# V19 — MISSION REPORT (NEW COMMAND: /mission_report_new)
+# V20 — MISSION REPORT (MENU BUTTON, SAFE)
+# Entry: /menu -> Mission Report
+# No CommandHandler added. Callback-only.
 # ======================================================
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler, CallbackQueryHandler
+from telegram.ext import CallbackQueryHandler
 
-def _mission_v19_days(start_dt, end_dt):
+# ---- Menu injection ----
+def _inject_mission_button(menu_keyboard):
+    # Append Mission Report button to existing menu keyboard
+    menu_keyboard.append([InlineKeyboardButton("Mission Report", callback_data="MENU_MISSION")])
+    return menu_keyboard
+
+# Hook into existing menu builder if present
+try:
+    _old_build_menu = build_menu
+    def build_menu(*args, **kwargs):
+        kb = _old_build_menu(*args, **kwargs)
+        try:
+            return _inject_mission_button(kb)
+        except Exception:
+            return kb
+except Exception:
+    pass
+
+# ---- Mission logic (button flow) ----
+def _mission_days_v20(start_dt, end_dt):
     return (end_dt.date() - start_dt.date()).days + 1
 
-async def mission_report_new_entry(update, context):
+async def mission_menu_entry(update, context):
+    query = update.callback_query
+    await query.answer()
+
     driver_map = get_driver_map()
     drivers = sorted(driver_map.keys())
     if not drivers:
-        await context.bot.send_message(update.effective_chat.id, "❌ No drivers found.")
+        await query.edit_message_text("❌ No drivers found.")
         return
 
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR19:{d}")] for d in drivers]
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="Select driver:",
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR20:{d}")] for d in drivers]
+    await query.edit_message_text(
+        "Select driver:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
-async def mission_report_new_driver(update, context):
+async def mission_menu_driver(update, context):
     query = update.callback_query
     await query.answer()
     driver = query.data.split(":", 1)[1]
@@ -5684,7 +5697,7 @@ async def mission_report_new_driver(update, context):
             if not (month_start <= sdt < month_end):
                 continue
             idx += 1
-            dur = _mission_v19_days(sdt, edt)
+            dur = _mission_days_v20(sdt, edt)
 
             frm = (r[M_IDX_FROM] or "").upper()
             to = (r[M_IDX_TO] or "").upper()
@@ -5712,3 +5725,8 @@ async def mission_report_new_driver(update, context):
     bio.name = f"Mission_Report_{driver}_{month_start.strftime('%Y-%m')}.csv"
     await context.bot.send_document(query.from_user.id, bio)
 
+# ---- Callback registrations ----
+application.add_handler(CallbackQueryHandler(mission_menu_entry, pattern=r"^MENU_MISSION$"))
+application.add_handler(CallbackQueryHandler(mission_menu_driver, pattern=r"^MR20:"))
+
+# ===== END V20 MENU MISSION =====
