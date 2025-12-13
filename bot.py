@@ -72,6 +72,18 @@ async def ot_report_entry(update, context):
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
+def _calc_hours_fallback(r, idx_morning, idx_evening, idx_start, idx_end):
+    try:
+        m = float(r[idx_morning] or 0)
+        ev = float(r[idx_evening] or 0)
+        if m + ev > 0:
+            return round(m + ev, 2)
+        s = datetime.fromisoformat(r[idx_start])
+        e2 = datetime.fromisoformat(r[idx_end])
+        return round((e2 - s).total_seconds() / 3600, 2)
+    except Exception:
+        return 0
+
 async def ot_report_driver_callback(update, context):
     query = update.callback_query
     await query.answer()
