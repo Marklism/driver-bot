@@ -2230,6 +2230,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
         [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"),
          InlineKeyboardButton("Leave", callback_data="leave_menu")],
+        [InlineKeyboardButton("Mission Report", callback_data="MENU_MISSION")],
     ]
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -5621,37 +5622,16 @@ except Exception:
 
 
 # ======================================================
-# V20 — MISSION REPORT (MENU BUTTON, SAFE)
+# V21 — MISSION REPORT (MENU-BASED, FINAL)
 # Entry: /menu -> Mission Report
-# No CommandHandler added. Callback-only.
 # ======================================================
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
 
-# ---- Menu injection ----
-def _inject_mission_button(menu_keyboard):
-    # Append Mission Report button to existing menu keyboard
-    menu_keyboard.append([InlineKeyboardButton("Mission Report", callback_data="MENU_MISSION")])
-    return menu_keyboard
-
-# Hook into existing menu builder if present
-try:
-    _old_build_menu = build_menu
-    def build_menu(*args, **kwargs):
-        kb = _old_build_menu(*args, **kwargs)
-        try:
-            return _inject_mission_button(kb)
-        except Exception:
-            return kb
-except Exception:
-    pass
-
-# ---- Mission logic (button flow) ----
-def _mission_days_v20(start_dt, end_dt):
+def _mission_v21_days(start_dt, end_dt):
     return (end_dt.date() - start_dt.date()).days + 1
 
-async def mission_menu_entry(update, context):
+async def menu_mission_entry(update, context):
     query = update.callback_query
     await query.answer()
 
@@ -5661,13 +5641,13 @@ async def mission_menu_entry(update, context):
         await query.edit_message_text("❌ No drivers found.")
         return
 
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR20:{d}")] for d in drivers]
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR21:{d}")] for d in drivers]
     await query.edit_message_text(
         "Select driver:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
-async def mission_menu_driver(update, context):
+async def menu_mission_driver(update, context):
     query = update.callback_query
     await query.answer()
     driver = query.data.split(":", 1)[1]
@@ -5697,7 +5677,7 @@ async def mission_menu_driver(update, context):
             if not (month_start <= sdt < month_end):
                 continue
             idx += 1
-            dur = _mission_days_v20(sdt, edt)
+            dur = _mission_v21_days(sdt, edt)
 
             frm = (r[M_IDX_FROM] or "").upper()
             to = (r[M_IDX_TO] or "").upper()
@@ -5725,8 +5705,7 @@ async def mission_menu_driver(update, context):
     bio.name = f"Mission_Report_{driver}_{month_start.strftime('%Y-%m')}.csv"
     await context.bot.send_document(query.from_user.id, bio)
 
-# ---- Callback registrations ----
-application.add_handler(CallbackQueryHandler(mission_menu_entry, pattern=r"^MENU_MISSION$"))
-application.add_handler(CallbackQueryHandler(mission_menu_driver, pattern=r"^MR20:"))
+application.add_handler(CallbackQueryHandler(menu_mission_entry, pattern=r"^MENU_MISSION$"))
+application.add_handler(CallbackQueryHandler(menu_mission_driver, pattern=r"^MR21:"))
 
-# ===== END V20 MENU MISSION =====
+# ===== END V21 =====
