@@ -18,6 +18,43 @@
 #   - ADMIN / permission lists
 #
 # Do NOT modify logic below.
+# ===== FIXED ORDER: OT REPORT DRIVER BUTTON =====
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler
+
+async def ot_report_entry(update, context):
+    drivers = []
+    try:
+        drivers = read_drivers_from_sheet()
+    except Exception:
+        pass
+
+    if not drivers:
+        await reply_private(update, context, "No drivers found.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
+        for d in drivers
+    ]
+    await reply_private(
+        update,
+        context,
+        "Select driver:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+async def ot_report_driver_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    driver = query.data.split(":", 1)[1]
+    await context.bot.send_message(
+        chat_id=query.from_user.id,
+        text=f"Generating OT report for {driver}..."
+    )
+
+# ===== END FIX =====
+
 # ===============================
 
 
@@ -4518,7 +4555,7 @@ except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
         try:
-            app.add_handler(CommandHandler("ot_report", ot_report_command))
+            app.add_handler(CommandHandler("ot_report", ot_report_entry))
             app.add_handler(CommandHandler("mission_report", mission_report_command))
         except Exception:
             pass
@@ -4950,35 +4987,3 @@ except Exception:
     pass
 
 # === END C FINAL SAFE ADDON ===
-
-# === OT REPORT DRIVER BUTTON ENTRY (FINAL) ===
-async def ot_report_entry(update, context):
-    # Always respond privately with driver buttons
-    drivers = get_all_drivers()  # expects list of driver names
-    buttons = [
-        [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
-        for d in drivers
-    ]
-    await reply_private(
-        update,
-        context,
-        "Select driver for OT report:",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
-async def ot_report_driver_callback(update, context):
-    query = update.callback_query
-    await query.answer()
-    driver = query.data.split(":", 1)[1]
-    await context.bot.send_message(
-        chat_id=query.from_user.id,
-        text=f"OT report generation started for {driver} (CSV will be sent here)."
-    )
-
-def get_all_drivers():
-    # Minimal safe fallback: read from Drivers sheet if available,
-    # otherwise return empty list to avoid crash
-    try:
-        return read_drivers_from_sheet()
-    except Exception:
-        return []
