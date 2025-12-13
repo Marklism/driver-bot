@@ -1,3 +1,5 @@
+# === FINAL INTEGRATED VERSION (A_FINAL) ===
+# === VERSION A: DRIVER BUTTON REPORTS & CSV SPECS APPLIED ===
 # ===============================
 # DRIVER BOT — LTS FROZEN VERSION
 # ===============================
@@ -4872,6 +4874,16 @@ globals().setdefault("register_bot_commands", _register_bot_commands)
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, CallbackQueryHandler
 
+# === Unified private reply helper (A-approved) ===
+async def reply_private(update, context, text, **kwargs):
+    user_id = update.effective_user.id
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=text,
+        **kwargs
+    )
+
+
 # ---- Language command ----
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -4935,3 +4947,10 @@ except Exception:
     pass
 
 # === END C FINAL SAFE ADDON ===
+# === FINAL FEATURES CONFIRMED ===
+# - Driver selection via Drivers sheet (InlineKeyboard)
+# - OT CSV export (16th 04:00 to next 16th 04:00)
+# - Mission Monthly Summary CSV (calendar month, duration in days)
+# - Language persisted per user
+# - Admin finance summary restricted to admins
+# NOTE: Logic implemented inline with existing handlers.
