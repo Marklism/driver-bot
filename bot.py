@@ -1,16 +1,3 @@
-
-# === BEGIN: Language helpers (SAFE) ===
-def _get_lang(context):
-    try:
-        return context.user_data.get("lang", "en")
-    except Exception:
-        return "en"
-
-def _lang_header(lang, title_en, title_km):
-    if lang == "km":
-        return f"{title_km}\n"
-    return f"{title_en}\n"
-# === END: Language helpers ===
 # ===============================
 # DRIVER BOT — LTS FROZEN VERSION
 # ===============================
@@ -36,6 +23,18 @@ from telegram import Bot, BotCommand
 """
 Merged Driver Bot — usage notes (auto-inserted)
 
+
+# === BEGIN: Group-silent private reply helper ===
+async def reply_privately(update, context, text):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    # If triggered in group, reply via private chat
+    if chat and chat.type in ("group", "supergroup"):
+        await context.bot.send_message(chat_id=user.id, text=text)
+    else:
+        await update.effective_message.reply_text(text)
+# === END: Group-silent private reply helper ===
 Before running this script, set these environment variables (examples):
 
 BOT_TOKEN — Telegram bot token, e.g. export BOT_TOKEN="123:ABC..."
@@ -378,7 +377,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
     if not args:
-        await update.message.reply_text("Usage: /ot_report [username] YYYY-MM")
+        await update.message.reply_privately(update, context, "Usage: /ot_report [username] YYYY-MM")
         return
 
     if len(args) == 1:
@@ -3134,21 +3133,20 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
 
     if not args:
-        await msg.reply_text("Usage: /lang en | km")
+        await reply_privately(update, context, "Usage: /lang en | km")
         return
 
     lang = args[0].lower()
     if lang not in ("en", "km"):
-        await msg.reply_text("Unsupported language. Use: en / km")
+        await reply_privately(update, context, "Unsupported language. Use: en / km")
         return
 
     context.user_data["lang"] = lang
 
     if lang == "en":
-        await msg.reply_text("Language set to English.")
+        await reply_privately(update, context, "Language set to English.")
     else:
-        await msg.reply_text("បានកំណត់ភាសាជាភាសាខ្មែរ។")
-
+        await reply_privately(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -4874,17 +4872,22 @@ from telegram.ext import CommandHandler, CallbackQueryHandler
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     args = context.args or []
-    if not args:
-        await msg.reply_text("Usage: /lang en | km")
-        return
-    lang = args[0].lower()
-    if lang not in SUPPORTED_LANGS:
-        await msg.reply_text("Unsupported language.")
-        return
-    context.user_data["lang"] = lang
-    await msg.reply_text(t(lang, "lang_set", lang=lang))
 
-# ---- Reports menu ----
+    if not args:
+        await reply_privately(update, context, "Usage: /lang en | km")
+        return
+
+    lang = args[0].lower()
+    if lang not in ("en", "km"):
+        await reply_privately(update, context, "Unsupported language. Use: en / km")
+        return
+
+    context.user_data["lang"] = lang
+
+    if lang == "en":
+        await reply_privately(update, context, "Language set to English.")
+    else:
+        await reply_privately(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
 async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("OT Report", callback_data="rep_ot")],
