@@ -3831,7 +3831,7 @@ def main():
                     {"command": "ot_report", "description": "OT report"},
                     {"command": "leave", "description": "Request leave"},
                     {"command": "clock_in", "description": "Clock In"},
-                    {"command": "clock_out", "description": "Clock Out"} 
+                    {"command": "clock_out", "description": "Clock Out"}
                 ]
                 try:
                     import json, urllib.request
