@@ -1,3 +1,5 @@
+raise RuntimeError("### RUNTIME FILE CONFIRMED ###")
+
 from datetime import datetime, timedelta, time as dtime
 
 def determine_ot_rate(dt: datetime, is_holiday: bool = False) -> str:
