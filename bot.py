@@ -49,6 +49,9 @@ import io
 #
 # Do NOT modify logic below.
 # ===== FIXED ORDER: OT REPORT DRIVER BUTTON =====
+
+from telegram import Update
+from telegram.ext import ContextTypes
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
 
@@ -230,8 +233,7 @@ async def ot_report_driver_callback(update, context):
 # ===============================
 
 
-from telegram import Update
-from telegram.ext import ContextTypes
+
 import os
 from telegram import Bot, BotCommand
 """
