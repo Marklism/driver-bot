@@ -87,11 +87,100 @@ def _calc_hours_fallback(r, idx_morning, idx_evening, idx_start, idx_end):
 async def ot_report_driver_callback(update, context):
     query = update.callback_query
     await query.answer()
+
     driver = query.data.split(":", 1)[1]
-    await context.bot.send_message(
+
+    ws = open_worksheet("OT Record")
+    rows = ws.get_all_values()
+
+    if len(rows) < 2:
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text="❌ OT Record is empty."
+        )
+        return
+
+    header = rows[0]
+    data = rows[1:]
+
+    idx_name = header.index("Name")
+    idx_type = header.index("Type")
+    idx_start = header.index("Start Date")
+    idx_end = header.index("End Date")
+    idx_morning = header.index("Morning OT")
+    idx_evening = header.index("Evening OT")
+
+    ot_150, ot_200 = [], []
+
+    for r in data:
+        if r[idx_name].strip() != driver:
+            continue
+
+        typ = r[idx_type].strip()
+
+        # ===== 核心修复点 =====
+        try:
+            m = float(r[idx_morning] or 0)
+            e = float(r[idx_evening] or 0)
+            hours = m + e
+
+            if hours == 0:
+                s = datetime.fromisoformat(r[idx_start])
+                en = datetime.fromisoformat(r[idx_end])
+                hours = round((en - s).total_seconds() / 3600, 2)
+        except Exception as ex:
+            # 直接跳过坏行，但不炸整个 driver
+            continue
+
+        row = [r[idx_start], r[idx_end], f"{hours:.2f}"]
+
+        if typ == "150%":
+            ot_150.append(row)
+        elif typ == "200%":
+            ot_200.append(row)
+
+    if not ot_150 and not ot_200:
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text=f"❌ No OT data for {driver}"
+        )
+        return
+
+    import io, csv
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow(["Driver", driver])
+    writer.writerow([])
+
+    if ot_150:
+        writer.writerow(["150% OT"])
+        writer.writerow(["Start", "End", "Hours"])
+        total = 0
+        for r in ot_150:
+            writer.writerow(r)
+            total += float(r[2])
+        writer.writerow(["TOTAL", "", f"{total:.2f}"])
+        writer.writerow([])
+
+    if ot_200:
+        writer.writerow(["200% OT"])
+        writer.writerow(["Start", "End", "Hours"])
+        total = 0
+        for r in ot_200:
+            writer.writerow(r)
+            total += float(r[2])
+        writer.writerow(["TOTAL", "", f"{total:.2f}"])
+
+    bio = io.BytesIO(output.getvalue().encode("utf-8"))
+    bio.name = f"OT_Report_{driver}.csv"
+
+    await context.bot.send_document(
         chat_id=query.from_user.id,
-        text=f"Generating OT report for {driver}..."
+        document=bio,
+        caption=f"OT report for {driver}"
     )
+
 
 # ===== END FIX =====
 
