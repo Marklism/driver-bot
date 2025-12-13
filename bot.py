@@ -3542,6 +3542,36 @@ def main():
         persistence = None
 
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+
+# === FIXED COMMAND REGISTRATION (SAFE, MINIMAL) ===
+def _register_fixed_handlers(app):
+    try:
+        app.add_handler(CommandHandler("setlang", cmd_setlang))
+        app.add_handler(CommandHandler("mylang", cmd_mylang))
+        app.add_handler(CommandHandler("ot_report", ot_report_command))
+        app.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
+        app.add_handler(CommandHandler("ot_summary", ot_summary_command))
+        app.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
+        if 'daily_summary_command' in globals():
+            app.add_handler(CommandHandler("daily_summary", daily_summary_command))
+        print("REGISTERED FIXED COMMANDS")
+    except Exception as e:
+        print("REGISTER ERROR", e)
+
+_register_fixed_handlers(application)
+
+try:
+    application.bot.set_my_commands([
+        BotCommand("setlang", "Set language / ជ្រើសរើសភាសា"),
+        BotCommand("mylang", "My language / ភាសារបស់ខ្ញុំ"),
+        BotCommand("ot_report", "OT report / របាយការណ៍ OT"),
+        BotCommand("ot_monthly_report", "Monthly OT / របាយការណ៍ OT ប្រចាំខែ"),
+        BotCommand("ot_summary", "Daily OT / OT ប្រចាំថ្ងៃ"),
+        BotCommand("mission_monthly_report", "Mission monthly / របាយការណ៍ដំណើរប្រចាំខែ")
+    ])
+except Exception as e:
+    print("SET MENU ERROR", e)
+
     register_ui_handlers(application)
 
     # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
