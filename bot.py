@@ -4996,3 +4996,4 @@ except Exception:
     pass
 
 # === END C FINAL SAFE ADDON ===
+application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern="^OTR_DRIVER:"))
