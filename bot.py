@@ -652,7 +652,18 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     result = f"OT Report for {driver} ({ym}):\n"
     result += "\n".join(detail_lines)
-    result += f"\n\nTotal OT: **{round(total_ot, 2)} hours**"
+    result += f"\n
+from telegram import BotCommand
+
+async def post_init(application):
+    await application.bot.set_my_commands([
+        BotCommand("menu", "Open menu"),
+        BotCommand("ot_report", "OT report"),
+        BotCommand("leave", "Request leave"),
+        BotCommand("clock_in", "Clock in"),
+        BotCommand("clock_out", "Clock out"),
+    ])
+\n\nTotal OT: **{round(total_ot, 2)} hours**"
 
     await update.message.reply_text(result)
 # ---------------------------------------------------------
@@ -5123,10 +5134,8 @@ def _register_bot_commands(app):
         ]
         try:
             # PTB v20: application.bot.set_my_commands exists
-            app.bot.set_my_commands(cmds)
         except Exception:
             try:
-                app.set_my_commands(cmds)
             except Exception:
                 pass
     except Exception:
@@ -5682,9 +5691,7 @@ from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPriva
 async def _hard_reset_bot_commands(app):
     try:
         # 1️⃣ Clear default scope
-        await app.bot.set_my_commands([], scope=BotCommandScopeDefault())
         # 2️⃣ Clear private chat scope
-        await app.bot.set_my_commands([], scope=BotCommandScopeAllPrivateChats())
         # 3️⃣ Re-register minimal clean commands
         await app.bot.set_my_commands([
             BotCommand("mission_report", "Mission report (button mode)"),
