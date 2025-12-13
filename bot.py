@@ -25,6 +25,7 @@ def check_deployment_requirements():
     required_env = ["BOT_TOKEN", "SHEET_ID", "GOOGLE_CREDS_B64"]
     missing = [v for v in required_env if not os.getenv(v)]
     if missing:
+    pass
         print("=== DEPLOYMENT CHECK WARNING ===")
         print("Missing required environment variables:", missing)
         print("Please set them in your Railway project variables.")
@@ -61,6 +62,7 @@ _env_h = os.getenv("OT_HOLIDAYS") or os.getenv("HOLIDAYS", "")
 for _h in _env_h.split(","):
     _h = _h.strip()
     if _h:
+    pass
         OT_HOLIDAYS.add(_h)
 
 def _is_holiday(dt: datetime) -> bool:
@@ -134,10 +136,12 @@ def get_last_clock_entry(driver: str):
     ws = open_worksheet(OT_TAB)
     vals = ws.get_all_values()
     if len(vals) <= 1:
+    pass
         return None
     # vals[0] is header
     for row in reversed(vals[1:]):
         if row[O_IDX_DRIVER] == driver:
+    pass
             return row
     return None
 
@@ -147,6 +151,7 @@ def _is_weekend(dt: datetime) -> bool:
 def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool = False):
     """Return total OT hours for one shift, possibly crossing midnight."""
     if end_dt < start_dt:
+    pass
         end_dt = end_dt + timedelta(days=1)
 
     total_ot = 0.0
@@ -160,11 +165,13 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
         seg_is_holiday = is_holiday
 
         if seg_is_weekend or seg_is_holiday:
+    pass
             hours = (segment_end - dt).total_seconds() / 3600
             total_ot += hours
         else:
             t7 = dt.replace(hour=7, minute=0, second=0, microsecond=0)
             if dt < t7:
+    pass
                 ot_morning = (min(segment_end, t7) - dt).total_seconds() / 3600
                 total_ot += max(ot_morning, 0)
 
@@ -172,6 +179,7 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
             t1830 = dt.replace(hour=18, minute=30, second=0, microsecond=0)
 
             if segment_end > t1830:
+    pass
                 ot_evening = (segment_end - t18).total_seconds() / 3600
                 total_ot += max(ot_evening, 0)
 
@@ -211,6 +219,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # parse timestamp
     try:
+    pass
         ts_dt = datetime.strptime(rec[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
     except Exception:
         ts_dt = _now_dt()
@@ -248,6 +257,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 note_str,
             ]
             try:
+    pass
                 ws.append_row(row, value_input_option="USER_ENTERED")
             except Exception:
                 ws.append_row(row)
@@ -256,15 +266,18 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # --- Normal weekdays OT rules ---
     if is_normal_weekday:
+    pass
         if action == "IN":
-            # Rule 2: IN between (04:00, 07:00)
+    pass
             t4 = ts_dt.replace(hour=4, minute=0, second=0, microsecond=0)
             t7 = ts_dt.replace(hour=7, minute=0, second=0, microsecond=0)
             if t4 < ts_dt < t7:
+    pass
                 end_morning = ts_dt.replace(hour=8, minute=0, second=0, microsecond=0)
                 morning_hours = max((end_morning - ts_dt).total_seconds() / 3600.0, 0)
                 total_ot = round(morning_hours, 2)
                 if total_ot > 0:
+    pass
                     ot_type = "150%"
                     note = "Weekday morning OT (Clock In)"
                     append_ot_record(ts_dt, end_morning, total_ot, 0.0, ot_type, note)
@@ -274,20 +287,24 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             h = ts_dt.hour + ts_dt.minute / 60.0
             # Rule 1: OUT between [00:00, 04:00)
             if 0 <= h < 4:
+    pass
                 start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
                 morning_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
                 total_ot = round(morning_hours, 2)
                 if total_ot > 0:
+    pass
                     ot_type = "150%"
                     note = "Weekday early-morning OT (after midnight)"
                     append_ot_record(start_dt, ts_dt, total_ot, 0.0, ot_type, note)
                     should_notify = True
             # Rule 5: OUT >= 18:30
             elif ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
+    pass
                 start_dt = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
                 evening_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
                 total_ot = round(evening_hours, 2)
                 if total_ot > 0:
+    pass
                     ot_type = "150%"
                     note = "Weekday evening OT"
                     append_ot_record(start_dt, ts_dt, 0.0, total_ot, ot_type, note)
@@ -297,21 +314,25 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     else:
         # Only act on OUT; IN just records time
         if action == "OUT":
+    pass
             start_dt = None
             if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
+    pass
                 try:
                     start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
                 except Exception:
                     start_dt = None
             if start_dt is not None:
-                # Full shift as OT
+    pass
                 if ts_dt < start_dt:
+    pass
                     ts_dt_adj = ts_dt + timedelta(days=1)
                 else:
                     ts_dt_adj = ts_dt
                 dur = max((ts_dt_adj - start_dt).total_seconds() / 3600.0, 0)
                 total_ot = round(dur, 2)
                 if total_ot > 0:
+    pass
                     ot_type = "200%"
                     note = "Weekend/Holiday full-shift OT"
                     append_ot_record(start_dt, ts_dt_adj, 0.0, total_ot, ot_type, note)
@@ -320,8 +341,10 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # --- Notifications & user feedback ---
     if should_notify and total_ot > 0 and chat is not None:
+    pass
         try:
             if weekday_msg:
+    pass
                 msg = f"Driver {driver}: OT: {total_ot:.2f} hour(s)."
             else:
                 msg = f"Driver {driver}: OT today: {total_ot:.2f} hour(s)."
@@ -332,6 +355,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     # Edit the inline-button message as a confirmation
     try:
         if total_ot > 0:
+    pass
             await query.edit_message_text(
                 f"Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}. OT: {total_ot:.2f} hour(s)."
             )
@@ -346,10 +370,12 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
     if not args:
+    pass
         await update.message.reply_text("Usage: /ot_report [username] YYYY-MM")
         return
 
     if len(args) == 1:
+    pass
         driver = update.effective_user.username
         ym = args[0]
     else:
@@ -360,6 +386,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         year, month = map(int, ym.split("-"))
         month_start = datetime(year, month, 1)
         if month == 12:
+    pass
             month_end = datetime(year + 1, 1, 1)
         else:
             month_end = datetime(year, month + 1, 1)
@@ -370,26 +397,31 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ws = open_worksheet(OT_TAB)
     vals = ws.get_all_values()
     if len(vals) <= 1:
+    pass
         await update.message.reply_text("No OT records.")
         return
 
     records = []
     for row in vals[1:]:
         if len(row) < 4:
+    pass
             continue
         d = row[O_IDX_DATE]
         r_driver = row[O_IDX_DRIVER]
         ts = row[O_IDX_TIME]
         if r_driver != driver:
+    pass
             continue
         try:
             dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
         except Exception:
             continue
         if month_start <= dt < month_end:
+    pass
             records.append((dt, row))
 
     if not records:
+    pass
         await update.message.reply_text(f"No OT for {driver} in {ym}.")
         return
 
@@ -401,13 +433,17 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for dt, row in records:
         action = row[O_IDX_ACTION]
         if action == "IN":
+    pass
             pending_start = dt
         elif action == "OUT":
+    pass
             if pending_start:
+    pass
                 shifts.append((pending_start, dt))
                 pending_start = None
 
     if pending_start:
+    pass
         shifts.append((pending_start, month_end))
 
     total_ot = 0.0
@@ -428,12 +464,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Register OT handlers (inserted)
 try:
-    # These handlers implement Clock In/Out toggle and OT reporting
-    application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
-    application.add_handler(CommandHandler("ot_report", ot_report_command))
-    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
-    application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
-
+    pass
 except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
     pass
@@ -493,6 +524,7 @@ GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "")
 
 _env_tz = os.getenv("LOCAL_TZ")
 if _env_tz is None:
+    pass
     LOCAL_TZ = "Asia/Phnom_Penh"
 else:
     LOCAL_TZ = _env_tz.strip() or None
@@ -512,6 +544,7 @@ try:
     _raw_holidays = os.getenv("HOLIDAYS", "") or ""
     HOLIDAYS = {d.strip() for d in _raw_holidays.split(",") if d.strip()}
 except Exception:
+    pass
     HOLIDAYS = set()
 
 SUPPORTED_LANGS = ("en", "km")
@@ -581,12 +614,14 @@ import base64, json
 from google.oauth2 import service_account
 import gspread
 if not os.getenv('GOOGLE_CREDS_B64') and os.getenv('GOOGLE_CREDS_BASE64'):
+    pass
     os.environ['GOOGLE_CREDS_B64'] = os.getenv('GOOGLE_CREDS_BASE64')
 _GSPREAD_SCOPES = ['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive']
 _LOADED_MISSION_CYCLES = {}
 def _get_gspread_client():
     b64 = os.getenv('GOOGLE_CREDS_B64') or os.getenv('GOOGLE_CREDS_BASE64')
     if not b64:
+    pass
         raise RuntimeError('Google credentials not provided (GOOGLE_CREDS_B64 / GOOGLE_CREDS_BASE64)')
     info = json.loads(base64.b64decode(b64))
     try:
@@ -612,6 +647,7 @@ def load_mission_cycles_from_sheet():
         for r in records:
             k = r.get('Key') or r.get('key'); v = r.get('Value') or r.get('value')
             if k == 'mission_cycle' and v:
+    pass
                 _LOADED_MISSION_CYCLES = json.loads(v); return _LOADED_MISSION_CYCLES
     except Exception:
         pass
@@ -662,6 +698,7 @@ def _get_gspread_client():
     # Accept either GOOGLE_CREDS_BASE64 or GOOGLE_CREDS_B64 env var
     b64 = os.getenv("GOOGLE_CREDS_BASE64") or os.getenv("GOOGLE_CREDS_B64")
     if not b64:
+    pass
         raise RuntimeError("Google credentials not provided in environment (GOOGLE_CREDS_BASE64 / GOOGLE_CREDS_B64)")
     cred_json = base64.b64decode(b64)
     creds = service_account.Credentials.from_service_account_info(json.loads(cred_json))
@@ -673,8 +710,10 @@ def open_bot_state_worksheet():
     sheet_name = os.getenv("GOOGLE_SHEET_NAME")
     sheet_id = os.getenv("SHEET_ID")
     if sheet_name:
+    pass
         sh = gc.open(sheet_name)
     elif sheet_id:
+    pass
         sh = gc.open_by_key(sheet_id)
     else:
         raise RuntimeError("Neither GOOGLE_SHEET_NAME nor SHEET_ID provided")
@@ -697,7 +736,9 @@ def load_mission_cycles_from_sheet():
             k = r.get("Key") or r.get("key")
             v = r.get("Value") or r.get("value")
             if k and v:
+    pass
                 if k == "mission_cycle":
+    pass
                     try:
                         _LOADED_MISSION_CYCLES = json.loads(v)
                     except Exception:
@@ -707,7 +748,7 @@ def load_mission_cycles_from_sheet():
         _LOADED_MISSION_CYCLES = {}
         return _LOADED_MISSION_CYCLES
     except Exception:
-        # don't crash startup; leave empty
+    pass
         _LOADED_MISSION_CYCLES = {}
         return _LOADED_MISSION_CYCLES
 
@@ -719,10 +760,12 @@ def save_mission_cycles_to_sheet(mdict):
         for idx, r in enumerate(records, start=2):
             k = r.get("Key") or r.get("key")
             if k == "mission_cycle":
+    pass
                 found_row = idx
                 break
         json_val = json.dumps(mdict, ensure_ascii=False)
         if found_row:
+    pass
             ws.update(f"B{found_row}", json_val)
         else:
             ws.append_row(["mission_cycle", json_val])
@@ -752,6 +795,7 @@ class GoogleApiQueue:
             now = time.time()
             since = now - self._last_time
             if since < self._min_interval:
+    pass
                 time.sleep(self._min_interval - since)
             attempt = 0
             while True:
@@ -765,6 +809,7 @@ class GoogleApiQueue:
                     # If likely a rate-limit / transient error, retry with backoff up to max_retries;
                     # otherwise return error after retries.
                     if attempt > self._max_retries:
+    pass
                         resp_q.put((False, e))
                         break
                     # backoff sleep
@@ -806,7 +851,7 @@ class WorksheetProxy:
         func = getattr(self._ws, fn_name)
         ok, res = _api_queue.submit(func, *args, **kwargs)
         if not ok:
-            # raise original exception
+    pass
             raise res
         return res
 
@@ -814,6 +859,7 @@ class WorksheetProxy:
         now = time.time()
         cache = _sheets_read_cache.get(self._key)
         if cache and (now - cache[0]) < _READ_CACHE_TTL:
+    pass
             return cache[1]
         # call
         vals = self._submit("get_all_values", *args, **kwargs)
@@ -825,6 +871,7 @@ class WorksheetProxy:
         vals = self.get_all_values(*args, **kwargs)
         # Attempt to emulate gspread.Worksheet.get_all_records behavior
         if not vals:
+    pass
             return []
         headers = vals[0]
         out = []
@@ -836,6 +883,7 @@ class WorksheetProxy:
         return out
 
     def row_values(self, *args, **kwargs):
+    pass
         return self._submit("row_values", *args, **kwargs)
 
     def append_row(self, *args, **kwargs):
@@ -857,6 +905,7 @@ class WorksheetProxy:
     def delete_rows(self, *args, **kwargs):
         # gspread newer method name; support both delete_rows and delete_row
         if hasattr(self._ws, "delete_rows"):
+    pass
             res = self._submit("delete_rows", *args, **kwargs)
         else:
             res = self._submit("delete_row", *args, **kwargs)
@@ -876,14 +925,17 @@ class WorksheetProxy:
         return getattr(self._ws, "worksheet")(*args, **kwargs)
 
     def __getattr__(self, name):
-        # Fallback for other attributes/methods: call directly but queued
+    pass
         if hasattr(self._ws, name) and callable(getattr(self._ws, name)):
+    pass
             def _callable(*a, **k):
                 ok, res = _api_queue.submit(getattr(self._ws, name), *a, **k)
                 if not ok:
+    pass
                     raise res
                 # Invalidate cache on any write-like operations heuristically
                 if name.startswith(("append", "update", "delete", "insert")):
+    pass
                     _sheets_read_cache.pop(self._key, None)
                 return res
             return _callable
@@ -970,16 +1022,19 @@ TR = {
 def t(user_lang: Optional[str], key: str, **kwargs) -> str:
     lang = (user_lang or DEFAULT_LANG or "en").lower()
     if lang not in SUPPORTED_LANGS:
+    pass
         lang = "en"
     return TR.get(lang, TR["en"]).get(key, TR["en"].get(key, "")).format(**kwargs)
 
 def _load_creds_from_base64(encoded: str) -> dict:
     try:
         if encoded.strip().startswith("{"):
+    pass
             return json.loads(encoded)
         padded = "".join(encoded.split())
         missing = len(padded) % 4
         if missing:
+    pass
             padded += "=" * (4 - missing)
         decoded = base64.b64decode(padded)
         return json.loads(decoded)
@@ -990,16 +1045,20 @@ def _load_creds_from_base64(encoded: str) -> dict:
 def get_gspread_client():
     creds_json = None
     if GOOGLE_CREDS_BASE64:
+    pass
         creds_json = _load_creds_from_base64(GOOGLE_CREDS_BASE64)
     elif GOOGLE_CREDS_PATH and os.path.exists(GOOGLE_CREDS_PATH):
+    pass
         with open(GOOGLE_CREDS_PATH, "r", encoding="utf-8") as f:
             creds_json = json.load(f)
     else:
         fallback = "credentials.json"
         if os.path.exists(fallback):
+    pass
             with open(fallback, "r", encoding="utf-8") as f:
                 creds_json = json.load(f)
     if not creds_json:
+    pass
         raise RuntimeError("Google credentials not found.")
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, SCOPES)
     client = gspread.authorize(creds)
@@ -1009,6 +1068,7 @@ def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
     try:
         values = ws.get_all_values()
         if not values:
+    pass
             ws.insert_row(headers, index=1)
     except Exception:
         logger.exception("Failed to ensure headers on %s", getattr(ws, "title", "<ws>"))
@@ -1017,12 +1077,14 @@ def ensure_sheet_headers_match(ws, headers: List[str]):
     try:
         values = ws.get_all_values()
         if not values:
+    pass
             ws.insert_row(headers, index=1)
             return
         first_row = values[0]
         norm_first = [str(c).strip() for c in first_row]
         norm_headers = [str(c).strip() for c in headers]
         if norm_first != norm_headers:
+    pass
             rng = f"A1:{chr(ord('A') + len(headers) - 1)}1"
             ws.update(rng, [headers], value_input_option="USER_ENTERED")
             logger.info("Updated header row on %s", getattr(ws, "title", "<ws>"))
@@ -1035,21 +1097,27 @@ def _missions_header_fix_if_needed(ws):
     try:
         values = ws.get_all_values()
         if not values:
+    pass
             return
         first_row = values[0]
         header_like_keywords = {"no", "no.", "name", "plate", "start", "end", "departure", "arrival", "staff", "roundtrip"}
         is_header_like = any(str(c).strip().lower() in header_like_keywords for c in first_row if c)
         if not is_header_like:
+    pass
             return
         if len(values) < 2:
+    pass
             return
         second_row = values[1]
         first_cell = str(second_row[0]).strip() if len(second_row) > 0 else ""
         if first_cell and _UUID_RE.match(first_cell):
+    pass
             header_first = str(first_row[0]).strip().lower() if len(first_row) > 0 else ""
             if header_first != "guid":
+    pass
                 headers = HEADERS_BY_TAB.get(MISSIONS_TAB, [])
                 if not headers:
+    pass
                     return
                 try:
                     h = list(headers)
@@ -1087,7 +1155,7 @@ def open_worksheet(tab: str = ""):
             cols = max(12, len(headers) if headers else 12)
             ws_new = sh.add_worksheet(title=name, rows="2000", cols=str(cols))
             if headers:
-                # Header row – queued via proxy, but it's a one‑time write anyway
+    pass
                 ws_new.insert_row(headers, index=1)
             return _wrap_ws(ws_new)
         except Exception:
@@ -1098,13 +1166,16 @@ def open_worksheet(tab: str = ""):
                 raise
 
     if tab:
+    pass
         try:
             ws = sh.worksheet(tab)
             template = HEADERS_BY_TAB.get(tab)
             if template:
+    pass
                 ensure_sheet_has_headers_conservative(ws, template)
                 ensure_sheet_headers_match(ws, template)
             if tab == MISSIONS_TAB:
+    pass
                 _missions_header_fix_if_needed(ws)
             return _wrap_ws(ws)
         except Exception:
@@ -1112,9 +1183,11 @@ def open_worksheet(tab: str = ""):
             return _create_tab(tab, headers=headers)
     else:
         if GOOGLE_SHEET_TAB:
+    pass
             try:
                 ws = sh.worksheet(GOOGLE_SHEET_TAB)
                 if GOOGLE_SHEET_TAB in HEADERS_BY_TAB:
+    pass
                     ensure_sheet_has_headers_conservative(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
                     ensure_sheet_headers_match(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
                 return _wrap_ws(ws)
@@ -1146,12 +1219,14 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
     """
     args = context.args
     if not args or len(args) < 2:
+    pass
         await update.effective_chat.send_message("Usage: /ot_monthly_report YYYY-MM username")
         return
     ym = args[0]
     username = args[1]
     ym_parsed = _parse_ym(ym)
     if not ym_parsed:
+    pass
         await update.effective_chat.send_message("Invalid YYYY-MM")
         return
     y,m = ym_parsed
@@ -1165,6 +1240,7 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
         await update.effective_chat.send_message("Failed to open OT records sheet.")
         return
     if not vals or len(vals) < 2:
+    pass
         await update.effective_chat.send_message("No OT records.")
         return
     headers = vals[0]
@@ -1181,11 +1257,13 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
         try:
             name = row[idx_name].strip()
             if name != username:
+    pass
                 continue
             typ = row[idx_type].strip()
             start_raw = row[idx_start].strip() if len(row) > idx_start else ""
             sd = None
             try:
+    pass
                 sd = datetime.datetime.strptime(start_raw, "%Y-%m-%d %H:%M:%S")
             except Exception:
                 try:
@@ -1193,18 +1271,22 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
                 except Exception:
                     continue
             if not (start_dt <= sd < end_dt):
+    pass
                 continue
             h = 0.0
             if idx_morning is not None and len(row) > idx_morning:
+    pass
                 try: h += float(row[idx_morning] or 0)
                 except: pass
             if idx_evening is not None and len(row) > idx_evening:
+    pass
                 try: h += float(row[idx_evening] or 0)
                 except: pass
             entries.setdefault((name,typ), []).append((sd, h))
         except Exception:
             continue
     if not entries:
+    pass
         await update.effective_chat.send_message("No OT records in window for user.")
         return
     # format message
@@ -1217,6 +1299,7 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
     text = "\n".join(lines)
     # send as file if too long
     if len(text) > 4000:
+    pass
         bio = io.BytesIO(text.encode("utf-8"))
         bio.name = f"ot_report_{ym}_{username}.txt"
         bio.seek(0)
@@ -1230,11 +1313,13 @@ async def mission_monthly_report_command(update: Update, context: ContextTypes.D
     """
     args = context.args
     if not args or len(args) < 2:
+    pass
         await update.effective_chat.send_message("Usage: /mission_monthly_report YYYY-MM username")
         return
     ym = args[0]; username = args[1]
     ym_parsed = _parse_ym(ym)
     if not ym_parsed:
+    pass
         await update.effective_chat.send_message("Invalid YYYY-MM")
         return
     y,m = ym_parsed
@@ -1248,6 +1333,7 @@ async def mission_monthly_report_command(update: Update, context: ContextTypes.D
         await update.effective_chat.send_message("Failed to open MISSIONS sheet.")
         return
     if not vals or len(vals) < 2:
+    pass
         await update.effective_chat.send_message("No mission records.")
         return
     headers = vals[0]
@@ -1257,11 +1343,13 @@ async def mission_monthly_report_command(update: Update, context: ContextTypes.D
         try:
             rdriver = str(row[M_IDX_DRIVER]).strip() if len(row)>M_IDX_DRIVER else ""
             if rdriver != username:
+    pass
                 continue
             sraw = row[M_IDX_START].strip() if len(row)>M_IDX_START else ""
             eraw = row[M_IDX_END].strip() if len(row)>M_IDX_END else ""
             sdt=None; edt=None
             try:
+    pass
                 sdt = datetime.datetime.strptime(sraw, "%Y-%m-%d %H:%M:%S")
             except:
                 try:
@@ -1276,6 +1364,7 @@ async def mission_monthly_report_command(update: Update, context: ContextTypes.D
                 except:
                     continue
             if not (start_dt <= sdt < end_dt):
+    pass
                 continue
             days = (edt.date() - sdt.date()).days + 1
             # description infer
@@ -1283,20 +1372,24 @@ async def mission_monthly_report_command(update: Update, context: ContextTypes.D
             to = str(row[M_IDX_TO]).strip().upper() if len(row)>M_IDX_TO else ""
             desc = "Unknown"
             if frm.startswith("PP") and to.startswith("PP"):
-                # PP-...-PP -> SHV mission
+    pass
                 desc = "SHV mission"
             elif frm.startswith("SHV") and to.startswith("SHV"):
+    pass
                 desc = "PP mission"
             else:
                 # try to infer from route fields
                 if "SHV" in frm or "SHV" in to:
+    pass
                     desc = "SHV mission"
                 elif "PP" in frm or "PP" in to:
+    pass
                     desc = "PP mission"
             entries.append((rdriver, sdt.date().isoformat(), edt.date().isoformat(), days, desc))
         except Exception:
             continue
     if not entries:
+    pass
         await update.effective_chat.send_message("No missions in window for user.")
         return
     # format CSV lines
@@ -1328,21 +1421,24 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
 
     # check overlaps
     if sd_dt and ed_dt:
+    pass
         for r in records:
             try:
                 r_driver = next((r[k] for k in ("Driver","driver","Username","Name") if k in r and str(r.get(k,"")).strip()), "")
                 if r_driver != driver:
+    pass
                     continue
                 r_start = next((r[k] for k in ("Start","Start Date","Start DateTime","StartDate") if k in r and str(r.get(k,"")).strip()), None)
                 r_end = next((r[k] for k in ("End","End Date","End DateTime","EndDate") if k in r and str(r.get(k,"")).strip()), None)
                 if not r_start or not r_end:
+    pass
                     continue
                 r_s = str(r_start).split()[0]
                 r_e = str(r_end).split()[0]
                 r_sd = datetime.strptime(r_s, "%Y-%m-%d")
                 r_ed = datetime.strptime(r_e, "%Y-%m-%d")
                 if not (ed_dt < r_sd or sd_dt > r_ed):
-                    # overlap
+    pass
                     msg = f"This date has already been applied for leave ({r_s} to {r_e}), please choose different dates."
                     try:
                         await context.bot.send_message(chat_id=user.id, text=msg)
@@ -1360,6 +1456,7 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
     # compute leave days excluding weekends and HOLIDAYS
     leave_days = 0
     if sd_dt and ed_dt and sd_dt <= ed_dt:
+    pass
         cur = sd_dt
         while cur <= ed_dt:
             try:
@@ -1367,6 +1464,7 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             except Exception:
                 is_hol = False
             if cur.weekday() < 5 and not is_hol:
+    pass
                 leave_days += 1
             cur += timedelta(days=1)
 
@@ -1383,14 +1481,17 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
 
 def load_driver_map_from_env() -> Dict[str, List[str]]:
     if not DRIVER_PLATE_MAP_JSON:
+    pass
         return {}
     try:
         obj = json.loads(DRIVER_PLATE_MAP_JSON)
         normalized = {}
         for k, v in obj.items():
             if isinstance(v, str):
+    pass
                 plates = [p.strip() for p in v.split(",") if p.strip()]
             elif isinstance(v, list):
+    pass
                 plates = [str(p).strip() for p in v]
             else:
                 plates = []
@@ -1409,21 +1510,25 @@ def load_driver_map_from_sheet() -> Dict[str, List[str]]:
             user = str(r.get("Username", r.get("username", r.get("User", "")))).strip()
             plates_raw = str(r.get("Plates", r.get("plates", r.get("Plate", "")))).strip()
             if user:
+    pass
                 mapping[user] = [p.strip() for p in plates_raw.split(",") if p.strip()]
         return mapping
     except Exception:
+    pass
         logger.exception("Failed to load drivers tab.")
         return {}
 
 def get_driver_map() -> Dict[str, List[str]]:
     env_map = load_driver_map_from_env()
     if env_map:
+    pass
         return env_map
     sheet_map = load_driver_map_from_sheet()
     return sheet_map
 
 def _now_dt() -> datetime:
     if LOCAL_TZ and ZoneInfo:
+    pass
         try:
             tz = ZoneInfo(LOCAL_TZ)
             return datetime.now(tz)
@@ -1450,10 +1555,12 @@ def compute_duration(start_ts: str, end_ts: str) -> str:
         s = parse_ts(start_ts)
         e = parse_ts(end_ts)
         if s is None or e is None:
+    pass
             return ""
         delta = e - s
         total_minutes = int(delta.total_seconds() // 60)
         if total_minutes < 0:
+    pass
             return ""
         hours = total_minutes // 60
         minutes = total_minutes % 60
@@ -1479,15 +1586,18 @@ def record_end_trip(driver: str, plate: str) -> dict:
         rows = ws.get_all_values()
         start_idx = 1 if rows and any("date" in c.lower() for c in rows[0] if c) else 0
         for idx in range(len(rows) - 1, start_idx - 1, -1):
+    pass
             rec = rows[idx]
             rec_plate = rec[2] if len(rec) > 2 else ""
             rec_end = rec[4] if len(rec) > 4 else ""
             rec_start = rec[3] if len(rec) > 3 else ""
             if str(rec_plate).strip() == plate and (not rec_end):
+    pass
                 row_number = idx + 1
                 end_ts = now_str()
                 duration_text = compute_duration(rec_start, end_ts) if rec_start else ""
                 try:
+    pass
                     ws.update_cell(row_number, COL_END, end_ts)
                     ws.update_cell(row_number, COL_DURATION, duration_text)
                 except Exception:
@@ -1518,10 +1628,12 @@ def record_end_trip(driver: str, plate: str) -> dict:
 def _missions_get_values_and_data_rows(ws):
     values = ws.get_all_values()
     if not values:
+    pass
         return [], 0
     first_row = values[0]
     header_like_keywords = {"guid", "no", "name", "plate", "start", "end", "departure", "arrival", "staff", "roundtrip"}
     if any(str(c).strip().lower() in header_like_keywords for c in first_row if c):
+    pass
         return values, 1
     return values, 0
 
@@ -1578,6 +1690,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
             rec_start = str(row[M_IDX_START]).strip()
             rec_dep = str(row[M_IDX_DEPART]).strip()
             if rec_plate == plate and rec_name == driver and not rec_end:
+    pass
                 row_number = i + 1
                 end_ts = now_str()
                 try:
@@ -1604,6 +1717,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
 
                 s_dt = parse_ts(rec_start) if rec_start else None
                 if not s_dt:
+    pass
                     return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False, "end_ts": end_ts}
 
                 window_start = s_dt - timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
@@ -1613,6 +1727,7 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 candidates = []
                 for j in range(start_idx2, len(vals2)):
                     if j == i:
+    pass
                         continue
                     r2 = _ensure_row_length(vals2[j], M_MANDATORY_COLS)
                     rn = str(r2[M_IDX_NAME]).strip()
@@ -1622,13 +1737,17 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     dep = str(r2[M_IDX_DEPART]).strip()
                     arr = str(r2[M_IDX_ARRIVAL]).strip()
                     if rn != driver or rp != plate:
+    pass
                         continue
                     if not rstart or not rend:
+    pass
                         continue
                     r_s_dt = parse_ts(rstart)
                     if not r_s_dt:
+    pass
                         continue
                     if not (window_start <= r_s_dt <= window_end):
+    pass
                         continue
                     candidates.append({"idx": j, "start": r_s_dt, "end": parse_ts(rend), "dep": dep, "arr": arr, "rstart": rstart, "rend": rend})
 
@@ -1638,20 +1757,25 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 for comp in candidates:
                     if (cur_dep == "PP" and cur_arr == "SHV" and comp["dep"] == "SHV" and comp["arr"] == "PP") or \
                        (cur_dep == "SHV" and cur_arr == "PP" and comp["dep"] == "PP" and comp["arr"] == "SHV"):
+    pass
                         found_pair = comp
                         break
 
                 if not found_pair:
+    pass
                     for comp in candidates:
                         if comp["dep"] == cur_arr and comp["arr"] == cur_dep:
+    pass
                             found_pair = comp
                             break
 
                 if not found_pair and candidates:
+    pass
                     candidates.sort(key=lambda x: abs((x["start"] - s_dt).total_seconds()))
                     found_pair = candidates[0]
 
                 if not found_pair:
+    pass
                     return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False, "end_ts": end_ts}
 
                 other_idx = found_pair["idx"]
@@ -1663,9 +1787,11 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 secondary_row_number = secondary_idx + 1
 
                 if primary_idx == i:
+    pass
                     return_start = found_pair["rstart"]
                     return_end = found_pair["rend"] if found_pair["rend"] else (found_pair["end"].strftime(TS_FMT) if found_pair["end"] else "")
                 else:
+    pass
                     return_start = rec_start
                     return_end = end_ts
 
@@ -1696,10 +1822,12 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                     sec_guid = sec_vals[M_IDX_GUID] if sec_vals else None
                     deleted_secondary = False
                     if sec_guid:
+    pass
                         all_vals_post, start_idx_post = _missions_get_values_and_data_rows(ws)
                         for k in range(start_idx_post, len(all_vals_post)):
                             r_k = _ensure_row_length(all_vals_post[k], M_MANDATORY_COLS)
                             if str(r_k[M_IDX_GUID]).strip() == str(sec_guid).strip():
+    pass
                                 try:
                                     ws.delete_rows(k + 1)
                                     deleted_secondary = True
@@ -1743,11 +1871,14 @@ def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[Li
             r = _ensure_row_length(r, M_MANDATORY_COLS)
             start = str(r[M_IDX_START]).strip()
             if not start:
+    pass
                 continue
             s_dt = parse_ts(start)
             if not s_dt:
+    pass
                 continue
             if start_date <= s_dt < end_date:
+    pass
                 out.append([r[M_IDX_GUID], r[M_IDX_NO], r[M_IDX_NAME], r[M_IDX_PLATE], r[M_IDX_START], r[M_IDX_END], r[M_IDX_DEPART], r[M_IDX_ARRIVAL], r[M_IDX_STAFF], r[M_IDX_ROUNDTRIP], r[M_IDX_RETURN_START], r[M_IDX_RETURN_END]])
         return out
     except Exception:
@@ -1767,9 +1898,11 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
             name = r[2] if len(r) > 2 else ""
             roundtrip = str(r[9]).strip().lower() if len(r) > 9 else ""
             if name and roundtrip == "yes":
+    pass
                 rt_counts[name] = rt_counts.get(name, 0) + 1
         ws.append_row(["Roundtrip Summary by Driver:"], value_input_option="USER_ENTERED")
         if rt_counts:
+    pass
             ws.append_row(["Driver", "Roundtrip Count"], value_input_option="USER_ENTERED")
             for driver, cnt in sorted(rt_counts.items(), key=lambda x: (-x[1], x[0])):
                 ws.append_row([driver, cnt], value_input_option="USER_ENTERED")
@@ -1789,12 +1922,15 @@ def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) 
             r = _ensure_row_length(r, M_MANDATORY_COLS)
             start = str(r[M_IDX_START]).strip()
             if not start:
+    pass
                 continue
             s_dt = parse_ts(start)
             if not s_dt or not (start_date <= s_dt < end_date):
+    pass
                 continue
             rt = str(r[M_IDX_ROUNDTRIP]).strip().lower()
             if rt != "yes":
+    pass
                 continue
             name = str(r[M_IDX_NAME]).strip() or "Unknown"
             counts[name] = counts.get(name, 0) + 1
@@ -1808,22 +1944,28 @@ def count_trips_for_day(driver: str, date_dt: datetime) -> int:
         ws = open_worksheet(RECORDS_TAB)
         vals = ws.get_all_values()
         if not vals:
+    pass
             return 0
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
         for r in vals[start_idx:]:
             if len(r) < COL_START:
+    pass
                 continue
             dr = r[1] if len(r) > 1 else ""
             start_ts = r[3] if len(r) > 3 else ""
             end_ts = r[4] if len(r) > 4 else ""
             if dr != driver:
+    pass
                 continue
             if not start_ts or not end_ts:
+    pass
                 continue
             s_dt = parse_ts(start_ts)
             if not s_dt:
+    pass
                 continue
             if s_dt.date() == date_dt.date():
+    pass
                 cnt += 1
     except Exception:
         logger.exception("Failed to count trips for day")
@@ -1835,22 +1977,28 @@ def count_trips_for_month(driver: str, month_start: datetime, month_end: datetim
         ws = open_worksheet(RECORDS_TAB)
         vals = ws.get_all_values()
         if not vals:
+    pass
             return 0
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
         for r in vals[start_idx:]:
             if len(r) < COL_START:
+    pass
                 continue
             dr = r[1] if len(r) > 1 else ""
             start_ts = r[3] if len(r) > 3 else ""
             end_ts = r[4] if len(r) > 4 else ""
             if dr != driver:
+    pass
                 continue
             if not start_ts or not end_ts:
+    pass
                 continue
             s_dt = parse_ts(start_ts)
             if not s_dt:
+    pass
                 continue
             if month_start <= s_dt < month_end:
+    pass
                 cnt += 1
     except Exception:
         logger.exception("Failed to count trips for month")
@@ -1873,14 +2021,18 @@ PAID_RE = re.compile(r'(?i)\bpaid[:\s]*(yes|y|no|n)\b')
 
 def normalize_fin_type(typ: str) -> Optional[str]:
     if not typ:
+    pass
         return None
     typ = typ.strip().lower()
     if typ in FIN_TYPES:
+    pass
         return typ
     if typ in FIN_TYPE_ALIASES:
+    pass
         return FIN_TYPE_ALIASES[typ]
     for k, v in FIN_TYPE_ALIASES.items():
         if typ.startswith(k):
+    pass
             return v
     return None
 
@@ -1889,15 +2041,19 @@ def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
         ws = open_worksheet(FUEL_TAB)
         vals = ws.get_all_values()
         if not vals:
+    pass
             return None
         start_idx = 1 if any("plate" in c.lower() for c in vals[0] if c) else 0
         for r in reversed(vals[start_idx:]):
             if len(r) >= 4:
+    pass
                 rp = str(r[0]).strip() if len(r) > 0 else ""
                 mileage_cell = str(r[3]).strip() if len(r) > 3 else ""
                 if rp == plate and mileage_cell:
+    pass
                     m = re.search(r'(\d+)', mileage_cell)
                     if m:
+    pass
                         return int(m.group(1))
         return None
     except Exception:
@@ -1915,6 +2071,7 @@ def record_finance_odo_fuel(plate: str, mileage: str, fuel_cost: str, by_user: s
             m_int = None
         delta = ""
         if prev_m is not None and m_int is not None:
+    pass
             try:
                 delta_val = m_int - prev_m
                 delta = str(delta_val)
@@ -1970,11 +2127,14 @@ def build_plate_keyboard(prefix: str, allowed_plates: Optional[List[str]] = None
     row = []
     plates = allowed_plates if allowed_plates is not None else PLATES
     for i, plate in enumerate(plates, 1):
+    pass
         row.append(InlineKeyboardButton(plate, callback_data=f"{prefix}|{plate}"))
         if i % 3 == 0:
+    pass
             buttons.append(row)
             row = []
     if row:
+    pass
         buttons.append(row)
     return InlineKeyboardMarkup(buttons)
 
@@ -1987,6 +2147,7 @@ async def safe_delete_message(bot, chat_id, message_id):
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -2010,6 +2171,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -2017,12 +2179,14 @@ async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     driver_map = get_driver_map()
     allowed = None
     if user and user.username and driver_map.get(user.username):
+    pass
         allowed = driver_map.get(user.username)
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "choose_start"), reply_markup=build_plate_keyboard("start", allowed_plates=allowed))
 
 async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -2030,12 +2194,14 @@ async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     driver_map = get_driver_map()
     allowed = None
     if user and user.username and driver_map.get(user.username):
+    pass
         allowed = driver_map.get(user.username)
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "choose_end"), reply_markup=build_plate_keyboard("end", allowed_plates=allowed))
 
 async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -2043,12 +2209,14 @@ async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TY
     driver_map = get_driver_map()
     allowed = None
     if user and user.username and driver_map.get(user.username):
+    pass
         allowed = driver_map.get(user.username)
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_start_prompt_plate"), reply_markup=build_plate_keyboard("mission_start_plate", allowed_plates=allowed))
 
 async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -2056,12 +2224,14 @@ async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     driver_map = get_driver_map()
     allowed = None
     if user and user.username and driver_map.get(user.username):
+    pass
         allowed = driver_map.get(user.username)
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate", allowed_plates=allowed))
 
 async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -2079,6 +2249,7 @@ async def admin_finance_callback_handler(update: Update, context: ContextTypes.D
     user = query.from_user
     username = user.username or (user.first_name or "")
     if username not in BOT_ADMINS:
+    pass
         try:
             await query.edit_message_text("❌ You are not an admin.")
         except Exception:
@@ -2104,6 +2275,7 @@ async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_
     data = query.data
     parts = data.split("|", 1)
     if len(parts) != 2:
+    pass
         try:
             await query.edit_message_text("Invalid selection.")
         except Exception:
@@ -2113,6 +2285,7 @@ async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_
     user = query.from_user
     username = user.username or (user.first_name or "")
     if username not in BOT_ADMINS:
+    pass
         try:
             await query.edit_message_text("❌ Not admin.")
         except Exception:
@@ -2127,20 +2300,26 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
     user = update.effective_user
     text = update.effective_message.text.strip() if update.effective_message and update.effective_message.text else ""
     if not text:
+    pass
         return
 
     pending_multi = context.user_data.get("pending_fin_multi")
     if pending_multi:
+    pass
         ptype = pending_multi.get("type")
         plate = pending_multi.get("plate")
         step = pending_multi.get("step")
         origin = pending_multi.get("origin")
         if ptype == "odo_fuel":
+    pass
             if step == "km":
+    pass
                 m = ODO_RE.match(text)
                 if not m:
+    pass
                     m2 = re.search(r'(\d+)', text)
                     if m2:
+    pass
                         km = m2.group(1)
                     else:
                         try:
@@ -2153,6 +2332,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                             pass
                         try:
                             if origin:
+    pass
                                 await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
                         except Exception:
                             pass
@@ -2172,18 +2352,22 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 # Do NOT send a ForceReply prompt; user will provide fuel amount directly.
                 return
             elif step == "fuel":
+    pass
                 raw = text
                 inv_m = INV_RE.search(raw)
                 paid_m = PAID_RE.search(raw)
                 invoice = inv_m.group(1) if inv_m else ""
                 driver_paid = ""
                 if paid_m:
+    pass
                     v = paid_m.group(1).lower()
                     driver_paid = "yes" if v.startswith("y") else "no"
                 am = AMOUNT_RE.match(raw)
                 if not am:
+    pass
                     m2 = re.search(r'(\d+(?:\.\d+)?)', raw)
                     if m2:
+    pass
                         fuel_amt = m2.group(1)
                     else:
                         try:
@@ -2196,6 +2380,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                             pass
                         try:
                             if origin:
+    pass
                                 await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
                         except Exception:
                             pass
@@ -2216,11 +2401,13 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     pchat = pending_multi.get("prompt_chat")
                     pmsg = pending_multi.get("prompt_msg_id")
                     if pchat and pmsg:
+    pass
                         await safe_delete_message(context.bot, pchat, pmsg)
                 except Exception:
                     pass
                 try:
                     if origin:
+    pass
                         await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
                 except Exception:
                     pass
@@ -2243,15 +2430,19 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     pending_simple = context.user_data.get("pending_fin_simple")
     if pending_simple:
+    pass
         typ = pending_simple.get("type")
         plate = pending_simple.get("plate")
         origin = pending_simple.get("origin")
         raw = text
         if typ == "odo":
+    pass
             m = ODO_RE.match(raw)
             if not m:
+    pass
                 m2 = re.search(r'(\d+)', raw)
                 if m2:
+    pass
                     km = m2.group(1)
                 else:
                     try:
@@ -2264,6 +2455,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         pass
                     try:
                         if origin:
+    pass
                             await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
                     except Exception:
                         pass
@@ -2282,6 +2474,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
             try:
                 if origin:
+    pass
                     await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
             except Exception:
                 pass
@@ -2297,12 +2490,15 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             invoice = inv_m.group(1) if inv_m else ""
             driver_paid = ""
             if paid_m:
+    pass
                 v = paid_m.group(1).lower()
                 driver_paid = "yes" if v.startswith("y") else "no"
             am = AMOUNT_RE.match(raw)
             if not am:
+    pass
                 m2 = re.search(r'(\d+(?:\.\d+)?)', raw)
                 if m2:
+    pass
                     amt = m2.group(1)
                 else:
                     try:
@@ -2315,6 +2511,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         pass
                     try:
                         if origin:
+    pass
                             await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
                     except Exception:
                         pass
@@ -2324,13 +2521,16 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 amt = am.group(1)
             res = {"ok": False}
             if typ == "parking":
+    pass
                 res = record_parking(plate, amt, by_user=user.username or "")
                 # 公共群通知固定显示 "paid by Mark"
                 msg_pub = f"{plate} parking fee ${amt} on {today_date_str()} paid by Mark."
             elif typ == "wash":
+    pass
                 res = record_wash(plate, amt, by_user=user.username or "")
                 msg_pub = f"{plate} wash fee ${amt} on {today_date_str()} paid by Mark."
             elif typ == "repair":
+    pass
                 res = record_repair(plate, amt, by_user=user.username or "")
                 msg_pub = f"{plate} repair fee ${amt} on {today_date_str()} paid by Mark."
             else:
@@ -2341,6 +2541,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
             try:
                 if origin:
+    pass
                     await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
             except Exception:
                 pass
@@ -2357,8 +2558,10 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     pending_leave = context.user_data.get("pending_leave")
     if pending_leave:
+    pass
         parts = text.split()
         if len(parts) < 4:
+    pass
             try:
                 await update.effective_message.delete()
             except Exception:
@@ -2379,6 +2582,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         reason = parts[3]
         notes = " ".join(parts[4:]) if len(parts) > 4 else ""
         try:
+    pass
             sd = datetime.strptime(start, "%Y-%m-%d")
             ed = datetime.strptime(end, "%Y-%m-%d")
         except Exception:
@@ -2400,6 +2604,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             ws = open_worksheet(LEAVE_TAB)
             success = await process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user)
             if not success:
+    pass
                 return
             try:
                 await update.effective_message.delete()
@@ -2423,21 +2628,26 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         drv = None
                         for k in DRIVER_KEYS:
                             if k in r and str(r.get(k, "")).strip():
+    pass
                                 drv = str(r.get(k, "")).strip()
                                 break
                         if drv != driver:
+    pass
                             continue
                         s_val = None
                         e_val = None
                         for k in START_KEYS:
                             if k in r and str(r.get(k, "")).strip():
+    pass
                                 s_val = str(r.get(k, "")).strip()
                                 break
                         for k in END_KEYS:
                             if k in r and str(r.get(k, "")).strip():
+    pass
                                 e_val = str(r.get(k, "")).strip()
                                 break
                         if not s_val or not e_val:
+    pass
                             continue
                         s_val = s_val.split()[0]
                         e_val = e_val.split()[0]
@@ -2449,9 +2659,10 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         ld_raw = r.get('Leave Days', r.get('LeaveDays', ''))
                         this_days = int(str(ld_raw).strip()) if str(ld_raw).strip() and str(ld_raw).strip().isdigit() else None
                     except Exception:
+    pass
                         this_days = None
                     if this_days is None:
-                        # fallback: compute excluding weekends and HOLIDAYS
+    pass
                         this_days = 0
                         curd = s2
                         while curd <= e2:
@@ -2460,11 +2671,14 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                             except Exception:
                                 is_hol = False
                             if curd.weekday() < 5 and not is_hol:
+    pass
                                 this_days += 1
                             curd += timedelta(days=1)
                     if s2.year == sd.year and s2.month == sd.month:
+    pass
                         month_total += this_days
                     if s2.year == sd.year:
+    pass
                         year_total += this_days
                 try:
                     # compute leave days for current entry excluding weekends and HOLIDAYS
@@ -2476,6 +2690,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         except Exception:
                             is_hol = False
                         if curd.weekday() < 5 and not is_hol:
+    pass
                             days_this += 1
                         curd += timedelta(days=1)
                 except Exception:
@@ -2487,11 +2702,13 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         dval = next((r[k] for k in DRIVER_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         if dval == driver and s_val.split()[0] == start and e_val.split()[0] == end:
+    pass
                             found_exact = True
                             break
                     except Exception:
                         continue
                 if not found_exact:
+    pass
                     month_total += days_this
                     year_total += days_this
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
@@ -2503,6 +2720,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 # fallback: simple confirmation if any error computing totals
                 try:
+    pass
                     await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
                 except Exception:
                     pass
@@ -2516,8 +2734,10 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if pending_leave:
+    pass
         parts = text.split()
         if len(parts) < 4:
+    pass
             try:
                 await update.effective_message.delete()
             except Exception:
@@ -2538,6 +2758,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         reason = parts[3]
         notes = " ".join(parts[4:]) if len(parts) > 4 else ""
         try:
+    pass
             sd = datetime.strptime(start, "%Y-%m-%d")
             ed = datetime.strptime(end, "%Y-%m-%d")
         except Exception:
@@ -2559,6 +2780,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             ws = open_worksheet(LEAVE_TAB)
             success = await process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user)
             if not success:
+    pass
                 return
             try:
                 await update.effective_message.delete()
@@ -2583,13 +2805,16 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         drv = None
                         for k in DRIVER_KEYS:
                             if k in r and str(r.get(k, "")).strip():
+    pass
                                 drv = str(r.get(k, "")).strip()
                                 break
                         if drv != driver:
+    pass
                             continue
                         s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         if not s_val or not e_val:
+    pass
                             continue
                         s_val = s_val.split()[0]
                         e_val = e_val.split()[0]
@@ -2601,9 +2826,10 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         ld_raw = r.get('Leave Days', r.get('LeaveDays', ''))
                         this_days = int(str(ld_raw).strip()) if str(ld_raw).strip() and str(ld_raw).strip().isdigit() else None
                     except Exception:
+    pass
                         this_days = None
                     if this_days is None:
-                        # fallback: compute excluding weekends and HOLIDAYS
+    pass
                         this_days = 0
                         curd = s2
                         while curd <= e2:
@@ -2612,11 +2838,14 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                             except Exception:
                                 is_hol = False
                             if curd.weekday() < 5 and not is_hol:
+    pass
                                 this_days += 1
                             curd += timedelta(days=1)
                     if s2.year == sd.year and s2.month == sd.month:
+    pass
                         month_total += this_days
                     if s2.year == sd.year:
+    pass
                         year_total += this_days
                 try:
                     # compute leave days for current entry excluding weekends and HOLIDAYS
@@ -2628,6 +2857,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         except Exception:
                             is_hol = False
                         if curd.weekday() < 5 and not is_hol:
+    pass
                             days_this += 1
                         curd += timedelta(days=1)
                 except Exception:
@@ -2635,16 +2865,19 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 # if current entry not in sheet records yet, add it
                 found_exact = False
                 for r in records:
+    pass
                     try:
                         s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         dval = next((r[k] for k in DRIVER_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         if dval == driver and s_val.split()[0] == start and e_val.split()[0] == end:
+    pass
                             found_exact = True
                             break
                     except Exception:
                         continue
                 if not found_exact:
+    pass
                     month_total += days_this
                     year_total += days_this
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
@@ -2673,7 +2906,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         data_check = ""
     if data_check.startswith("clock_"):
-        # call dedicated handler to avoid being handled as invalid selection by plate_callback
+    pass
         return await handle_clock_button(update, context)
 
     await q.answer()
@@ -2683,41 +2916,52 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
     if data == "show_start":
+    pass
         await q.edit_message_text(t(user_lang, "choose_start"), reply_markup=build_plate_keyboard("start"))
         return
     if data == "show_end":
+    pass
         await q.edit_message_text(t(user_lang, "choose_end"), reply_markup=build_plate_keyboard("end"))
         return
     if data == "show_mission_start":
+    pass
         await q.edit_message_text(t(user_lang, "mission_start_prompt_plate"), reply_markup=build_plate_keyboard("mission_start_plate"))
         return
     if data == "show_mission_end":
+    pass
         await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate"))
         return
     if data == "help":
+    pass
         await q.edit_message_text(t(user_lang, "help"))
         return
 
     if data == "admin_finance":
+    pass
         if (q.from_user.username or "") not in BOT_ADMINS:
+    pass
             await q.edit_message_text("❌ Admins only.")
             return
         return await admin_finance_callback_handler(update, context)
     if data.startswith("fin_type|"):
+    pass
         return await admin_fin_type_selected(update, context)
 
     if data.startswith("fin_plate|"):
+    pass
         parts = data.split("|", 2)
         if len(parts) < 3:
+    pass
             await q.edit_message_text("Invalid selection.")
             return
         _, typ, plate = parts
         if (q.from_user.username or "") not in BOT_ADMINS:
+    pass
             await q.edit_message_text("❌ Admins only.")
             return
         origin_info = {"chat": q.message.chat.id, "msg_id": q.message.message_id, "typ": typ}
         if typ == "odo_fuel":
-            # Set pending state but DO NOT send a separate "Enter odometer..." ForceReply message.
+    pass
             context.user_data["pending_fin_multi"] = {"type": "odo_fuel", "plate": plate, "step": "km", "origin": origin_info}
             try:
                 # Edit the callback message minimally to reflect pending state; do not send a new ForceReply prompt.
@@ -2726,7 +2970,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.exception("Failed to edit message for pending odo_fuel entry.")
             return
         if typ in ("parking", "wash", "repair", "fuel"):
-            # Set pending simple state but DO NOT send a separate "Enter amount..." ForceReply message.
+    pass
             context.user_data["pending_fin_simple"] = {"type": typ, "plate": plate, "origin": origin_info}
             try:
                 await q.edit_message_text(f"Pending {typ} entry for {plate}. Please send amount in chat.")
@@ -2735,7 +2979,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if data == "leave_menu":
-        # Mark leave pending and edit the callback message to a short prompt (avoid duplicate long messages)
+    pass
         try:
             context.user_data["pending_leave"] = {"prompt_chat": q.message.chat.id, "prompt_msg_id": q.message.message_id, "origin": {"chat": q.message.chat.id, "msg_id": q.message.message_id}}
             try:
@@ -2748,8 +2992,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---------- mission-related handlers ----------
     if data.startswith("mission_start_plate|"):
+    pass
         parts = data.split("|", 1)
         if len(parts) < 2:
+    pass
             logger.warning("mission_start_plate callback missing plate: %s", data)
             return
         _, plate = parts
@@ -2762,6 +3008,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Legacy mission end callback from old menus: "mission_end|{plate}"
     if data.startswith("mission_end|") and not data.startswith("mission_end_plate|"):
+    pass
         try:
             _, legacy_plate = data.split("|", 1)
         except Exception:
@@ -2771,8 +3018,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = f"mission_end_now|{legacy_plate}"
 
     if data.startswith("mission_end_plate|"):
+    pass
         parts = data.split("|", 1)
         if len(parts) < 2:
+    pass
             logger.warning("mission_end_plate callback missing plate: %s", data)
             return
         _, plate = parts
@@ -2783,15 +3032,17 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("mission_depart|"):
+    pass
         parts = data.split("|")
         if len(parts) < 3:
+    pass
             logger.warning("mission_depart callback missing fields: %s", data)
             return
         _, dep, plate = parts
         context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
         res = start_mission_record(username, plate, dep)
         if res.get("ok"):
-            # mission_start_ok template already adjusted to not show the word "plate"
+    pass
             await q.edit_message_text(t(user_lang, "mission_start_ok", driver=username, plate=plate, dep=dep, ts=res.get("start_ts")))
         else:
             await q.edit_message_text("❌ " + res.get("message", ""))
@@ -2799,11 +3050,13 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # support both "mission_end_now|{plate}" and "mission_end_now"
     if data.startswith("mission_end_now|") or data == "mission_end_now":
+    pass
         if data == "mission_end_now":
-            # try to get plate from pending_mission
+    pass
             pending = context.user_data.get("pending_mission") or {}
             plate = pending.get("plate")
             if not plate:
+    pass
                 logger.warning("mission_end_now callback without plate and no pending_mission: %s", data)
                 return
         else:
@@ -2813,6 +3066,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         driver_map = get_driver_map()
         allowed = driver_map.get(username, []) if username else []
         if allowed and plate not in allowed:
+    pass
             await q.edit_message_text(t(user_lang, "not_allowed", plate=plate))
             return
         try:
@@ -2828,10 +3082,12 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rend = str(r[M_IDX_END]).strip()
                 dep = str(r[M_IDX_DEPART]).strip()
                 if rn == username and rp == plate and not rend:
+    pass
                     found_idx = i
                     found_dep = dep
                     break
             if found_idx is None:
+    pass
                 await q.edit_message_text(t(user_lang, "mission_no_open", plate=plate))
                 return
 
@@ -2840,6 +3096,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res = end_mission_record(username, plate, arrival)
 
             if not res.get("ok"):
+    pass
                 await q.edit_message_text("❌ " + res.get("message", ""))
                 return
 
@@ -2880,6 +3137,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     nowdt = _now_dt()
                     month_start = datetime(nowdt.year, nowdt.month, 1)
                     if nowdt.month == 12:
+    pass
                         month_end = datetime(nowdt.year + 1, 1, 1)
                     else:
                         month_end = datetime(nowdt.year, nowdt.month + 1, 1)
@@ -2900,13 +3158,17 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
                             rstart = str(r[M_IDX_START]).strip() if len(r) > M_IDX_START else ""
                             if not rpl or rpl != target_plate or rrt != "yes":
+    pass
                                 continue
                             sdt = parse_ts(rstart)
                             if not sdt:
+    pass
                                 continue
                             if month_start <= sdt < month_end:
+    pass
                                 plate_counts_month += 1
                             if year_start <= sdt < year_end:
+    pass
                                 plate_counts_year += 1
                     except Exception:
                         try:
@@ -2926,18 +3188,22 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 r = _ensure_row_length(r, M_MANDATORY_COLS)
                                 ruser = str(r[M_IDX_NAME]).strip() if len(r) > M_IDX_NAME else ''
                                 if not ruser or ruser != username:
+    pass
                                     continue
                                 rstart = parse_ts(str(r[M_IDX_START]).strip()) if len(r) > M_IDX_START else None
                                 rend = parse_ts(str(r[M_IDX_END]).strip()) if len(r) > M_IDX_END else None
                                 if not rstart or not rend:
+    pass
                                     continue
                                 m_start = max(rstart.date(), month_start.date())
                                 m_end = min(rend.date(), (month_end - timedelta(days=1)).date())
                                 if m_start <= m_end:
+    pass
                                     md_month += (m_end - m_start).days + 1
                                 t_start = max(rstart.date(), today_dt)
                                 t_end = min(rend.date(), today_dt)
                                 if t_start <= t_end:
+    pass
                                     md_today += (t_end - t_start).days + 1
                         except Exception:
                             try:
@@ -2995,6 +3261,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             pass
     if data.startswith("start|") or data.startswith("end|"):
+    pass
         try:
             action, plate = data.split("|", 1)
         except Exception:
@@ -3003,11 +3270,14 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         driver_map = get_driver_map()
         allowed = driver_map.get(username, []) if username else []
         if allowed and plate not in allowed:
+    pass
             await q.edit_message_text(t(user_lang, "not_allowed", plate=plate))
             return
         if action == "start":
+    pass
             res = record_start_trip(username, plate)
             if res.get("ok"):
+    pass
                 try:
                     await q.edit_message_text(t(user_lang, "start_ok", driver=username, plate=plate, ts=res.get("ts")))
                 except Exception:
@@ -3023,14 +3293,17 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             return
         elif action == "end":
+    pass
             res = record_end_trip(username, plate)
             if res.get("ok"):
+    pass
                 ts = res.get("ts")
                 dur = res.get("duration") or ""
                 nowdt = _now_dt()
                 n_today = count_trips_for_day(username, nowdt)
                 month_start = datetime(nowdt.year, nowdt.month, 1)
                 if nowdt.month == 12:
+    pass
                     month_end = datetime(nowdt.year + 1, 1, 1)
                 else:
                     month_end = datetime(nowdt.year, nowdt.month + 1, 1)
@@ -3047,26 +3320,34 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ws = open_worksheet(RECORDS_TAB)
                     vals = ws.get_all_values()
                     if vals:
+    pass
                         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
                         for r in vals[start_idx:]:
                             if len(r) < COL_START:
+    pass
                                 continue
                             dr = r[1] if len(r) > 1 else ""
                             pl = r[2] if len(r) > 2 else ""
                             s_ts = r[3] if len(r) > 3 else ""
                             e_ts = r[4] if len(r) > 4 else ""
                             if pl != plate:
+    pass
                                 continue
                             if not s_ts or not e_ts:
+    pass
                                 continue
                             sdt = parse_ts(s_ts)
                             if not sdt:
+    pass
                                 continue
                             if sdt.date() == nowdt.date():
+    pass
                                 p_today += 1
                             if month_start <= sdt < month_end:
+    pass
                                 p_month += 1
                             if year_start <= sdt < year_end:
+    pass
                                 p_year += 1
                 except Exception:
                     logger.exception("Failed to compute plate trip counts")
@@ -3093,6 +3374,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Prevent spurious "Invalid selection" after mission_end_now handlers
     if data.startswith("mission_end_now|") or data == "mission_end_now":
+    pass
         return
 
     await q.edit_message_text(t(user_lang, "invalid_sel"))
@@ -3102,6 +3384,7 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # TWO-LOOP MISSION LOGIC: only send merged summary on second cycle
     chat_data = context.chat_data
     if "mission_cycle" not in chat_data:
+    pass
         chat_data["mission_cycle"] = {}
     key_cycle = f"mission_cycle|{username}|{plate}"
     cur_cycle = chat_data["mission_cycle"].get(key_cycle, 0) + 1
@@ -3118,6 +3401,7 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.exception("Failed to persist mission_cycle after update")
 # If it's the first (odd) cycle, skip sending summary now (clear pending and return)
     if (cur_cycle % 2) != 0:
+    pass
         try:
             context.user_data.pop("pending_mission", None)
         except Exception:
@@ -3127,23 +3411,28 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # otherwise (even cycle) continue to prepare/send merged summary (existing code follows)
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
     args = context.args
     if not args:
+    pass
         try:
             await update.effective_chat.send_message("Usage: /lang en|km")
         except Exception:
             if update.effective_message:
+    pass
                 update.effective_message.reply_text("Usage: /lang en|km")
         return
     lang = args[0].lower()
     if lang not in SUPPORTED_LANGS:
+    pass
         try:
             await update.effective_chat.send_message("Supported langs: en, km")
         except Exception:
             if update.effective_message:
+    pass
                 update.effective_message.reply_text("Supported langs: en, km")
         return
     context.user_data["lang"] = lang
@@ -3151,6 +3440,7 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_chat.send_message(t(lang, "lang_set", lang=lang))
     except Exception:
         if update.effective_message:
+    pass
             try:
                 await update.effective_message.reply_text(t(lang, "lang_set", lang=lang))
             except Exception:
@@ -3159,20 +3449,24 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
     args = context.args
     if not args or len(args) < 2:
+    pass
         await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
         return
     mode = args[0].lower()
     if mode == "month":
+    pass
         try:
             y_m = args[1]
             dt = datetime.strptime(y_m + "-01", "%Y-%m-%d")
             start = datetime(dt.year, dt.month, 1)
             if dt.month == 12:
+    pass
                 end = datetime(dt.year + 1, 1, 1)
             else:
                 end = datetime(dt.year, dt.month + 1, 1)
@@ -3180,6 +3474,7 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
             ok = write_mission_report_rows(rows, period_label=start.strftime("%Y-%m"))
             counts = count_roundtrips_per_driver_month(start, end)
             if ok:
+    pass
                 await update.effective_chat.send_message(f"Monthly mission report for {start.strftime('%Y-%m')} created.")
             else:
                 await update.effective_chat.send_message("❌ Failed to write mission report.")
@@ -3210,9 +3505,11 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Try to fetch current bot commands
     try:
         if bot_token:
+    pass
             b = Bot(bot_token)
             cmds = await b.get_my_commands()
             if cmds:
+    pass
                 lines.append("Registered bot commands:")
                 for c in cmds:
                     lines.append(f" - /{c.command}: {c.description}")
@@ -3225,11 +3522,13 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tabs = list(HEADERS_BY_TAB.keys()) if 'HEADERS_BY_TAB' in globals() else []
         lines.append("Known sheet tabs: " + (", ".join(tabs) if tabs else "(none)"))
     except Exception:
+    pass
         pass
     text = "\
 ".join(lines)
     # Send in chat (split if too long)
     try:
+    pass
         await update.effective_chat.send_message(text)
     except Exception:
         try:
@@ -3241,10 +3540,13 @@ AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还�
 
 async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
+    pass
         text = (update.effective_message.text or "").strip()
         if not text:
+    pass
             return
         if text.startswith("/"):
+    pass
             try:
                 await update.effective_message.delete()
             except Exception:
@@ -3261,9 +3563,11 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data if hasattr(context.job, "data") else {}
     chat_id = job_data.get("chat_id") or SUMMARY_CHAT_ID
     if not chat_id:
+    pass
         logger.info("SUMMARY_CHAT_ID not set; skipping daily summary.")
         return
     if SUMMARY_TZ and ZoneInfo:
+    pass
         try:
             tz = ZoneInfo(SUMMARY_TZ)
             now = datetime.now(tz)
@@ -3276,6 +3580,7 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
     try:
         totals = aggregate_for_period(date_dt, date_dt + timedelta(days=1))
         if not totals:
+    pass
             await context.bot.send_message(chat_id=chat_id, text=f"No records for {date_dt.strftime(DATE_FMT)}")
         else:
             lines = []
@@ -3288,6 +3593,7 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Failed to send daily summary.")
 
     if now.day == 1:
+    pass
         try:
             first_of_this_month = datetime(now.year, now.month, 1)
             prev_month_end = first_of_this_month
@@ -3296,6 +3602,7 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
             ok = write_mission_report_rows(rows, period_label=prev_month_start.strftime("%Y-%m"))
             counts = count_roundtrips_per_driver_month(prev_month_start, prev_month_end)
             if ok:
+    pass
                 await context.bot.send_message(chat_id=chat_id, text=f"Auto-generated mission report for {prev_month_start.strftime('%Y-%m')}.")
         except Exception:
             logger.exception("Failed to auto-generate monthly mission report on day 1.")
@@ -3306,35 +3613,43 @@ def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]
         ws = open_worksheet(RECORDS_TAB)
         vals = ws.get_all_values()
         if not vals:
+    pass
             return totals
         start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
         for r in vals[start_idx:]:
             if len(r) < COL_DURATION:
+    pass
                 continue
             plate = r[COL_PLATE - 1] if len(r) >= COL_PLATE else ""
             start_ts = r[COL_START - 1] if len(r) >= COL_START else ""
             if not start_ts:
+    pass
                 continue
             s_dt = parse_ts(start_ts)
             if not s_dt:
+    pass
                 continue
             if not (start_dt <= s_dt < end_dt):
+    pass
                 continue
             duration_text = r[COL_DURATION - 1] if len(r) >= COL_DURATION else ""
             minutes = 0
             m = re.match(r'(?:(\d+)h)?(?:(\d+)m)?', duration_text)
             if m:
+    pass
                 hours = int(m.group(1)) if m.group(1) else 0
                 mins = int(m.group(2)) if m.group(2) else 0
                 minutes = hours * 60 + mins
             totals[plate] = totals.get(plate, 0) + minutes
     except Exception:
+    pass
         logger.exception("Failed to aggregate for period.")
     return totals
 
 async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if (user.username or "") not in BOT_ADMINS:
+    pass
         await update.effective_chat.send_message("❌ Admins only.")
         return
     try:
@@ -3352,6 +3667,7 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def delete_command_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -3366,29 +3682,11 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception:
         logger.exception("Error in handle_clock_button")
 
-def register_ui_handlers(application):
-    application.add_handler(CommandHandler("menu", menu_command))
-    application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
-    application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
-    application.add_handler(CommandHandler("mission_start", mission_start_command))
-    application.add_handler(CommandHandler("mission_end", mission_end_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
-    application.add_handler(CommandHandler("leave", leave_command))
-    application.add_handler(CommandHandler("setup_menu", setup_menu_command))
-    application.add_handler(CommandHandler("lang", lang_command))
 
-    application.add_handler(CallbackQueryHandler(plate_callback))
     # Clock In/Out buttons handler
-    application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
-    application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
-    application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
-    application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
-    application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
     
     # Debug command for runtime self-check
-    application.add_handler(CommandHandler('debug_bot', debug_bot_command))
     async def _set_cmds():
         try:
             await application.bot.set_my_commands([
@@ -3405,6 +3703,7 @@ def register_ui_handlers(application):
 
     # Schedule _set_cmds safely using the running event loop if available.
     try:
+    pass
         import asyncio
         loop = None
         try:
@@ -3415,12 +3714,14 @@ def register_ui_handlers(application):
             except Exception:
                 loop = None
         if loop and hasattr(loop, "create_task"):
+    pass
             loop.create_task(_set_cmds())
         else:
             # Fallback: try to call application.create_task if provided by library
             try:
+    pass
                 if hasattr(application, "create_task"):
-                    application.create_task(_set_cmds())
+    pass
             except Exception:
                 logger.exception("Could not schedule set_my_commands.")
     except Exception:
@@ -3428,17 +3729,19 @@ def register_ui_handlers(application):
 
 def ensure_env():
     if not BOT_TOKEN:
+    pass
         raise RuntimeError(t(DEFAULT_LANG, "no_bot_token"))
 
 def schedule_daily_summary(application):
     try:
         if SUMMARY_CHAT_ID:
+    pass
             if ZoneInfo and SUMMARY_TZ:
+    pass
                 tz = ZoneInfo(SUMMARY_TZ)
             else:
                 tz = None
             job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
-            application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
             logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
         else:
             logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
@@ -3466,6 +3769,7 @@ async def _send_startup_debug(application):
     """
     chat_id = os.getenv("MENU_CHAT_ID") or os.getenv("SUMMARY_CHAT_ID")
     if not chat_id:
+    pass
         return
     try:
         bot_token = os.getenv("BOT_TOKEN")
@@ -3476,10 +3780,13 @@ async def _send_startup_debug(application):
         lines.append(f"Google creds present: {'Yes' if (os.getenv('GOOGLE_CREDS_B64') or os.getenv('GOOGLE_CREDS_BASE64') or os.getenv('GOOGLE_CREDS_PATH')) else 'No'}")
         # list commands
         try:
+    pass
             if bot_token:
+    pass
                 b = Bot(bot_token)
                 cmds = await b.get_my_commands()
                 if cmds:
+    pass
                     lines.append("Registered commands:")
                     for c in cmds:
                         lines.append(f" - /{c.command}: {c.description}")
@@ -3499,6 +3806,7 @@ def main():
     try:
         token_tmp = os.getenv("BOT_TOKEN")
         if token_tmp:
+    pass
             try:
                 # Build command list for Telegram API
                 cmds_payload = [
@@ -3527,6 +3835,7 @@ def main():
     # --- end set commands ---
 
     if LOCAL_TZ and ZoneInfo:
+    pass
         try:
             ZoneInfo(LOCAL_TZ)
             logger.info("Using LOCAL_TZ=%s", LOCAL_TZ)
@@ -3542,10 +3851,14 @@ def main():
         persistence = None
 
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+    # REGISTER HANDLERS (AUTO)
+    register_ui_handlers(application)
+
     register_ui_handlers(application)
 
     # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
     try:
+    pass
         import asyncio
         loop = None
         try:
@@ -3556,10 +3869,12 @@ def main():
             except Exception:
                 loop = None
         if loop and hasattr(loop, "create_task"):
+    pass
             loop.create_task(_send_startup_debug(application))
         else:
             try:
                 if hasattr(application, "create_task"):
+    pass
                     application.create_task(_send_startup_debug(application))
             except Exception:
                 pass
@@ -3571,6 +3886,7 @@ def main():
     PORT = int(os.getenv("PORT", "8443"))
 
     if WEBHOOK_URL:
+    pass
         logger.info("Starting in webhook mode. WEBHOOK_URL=%s", WEBHOOK_URL)
         try:
             application.run_webhook(
@@ -3585,6 +3901,7 @@ def main():
             logger.info("No WEBHOOK_URL set — attempting to delete existing webhook (if any) before polling.")
             ok = _delete_telegram_webhook(BOT_TOKEN)
             if not ok:
+    pass
                 logger.warning("deleteWebhook call returned failure or error; proceeding to polling anyway.")
         except Exception:
             logger.exception("Error while attempting deleteWebhook; proceeding to polling.")
@@ -3595,7 +3912,7 @@ def main():
             logger.exception("Polling exited with exception.")
 
 if __name__ == "__main__":
-    
+    pass
     main()
 main()
 # === In-memory override for mission cycle persistence ===
@@ -3641,13 +3958,15 @@ def compute_window_for_time(now_dt: Optional[datetime] = None):
     Returns (window_start, window_end) as naive datetimes in LOCAL_TZ if available.
     """
     if now_dt is None:
+    pass
         now_dt = _now_dt()
     year = now_dt.year
     month = now_dt.month
     candidate_start = datetime(year, month, 16, 0, 0, 0)
     if now_dt < (candidate_start + timedelta(hours=4)):
-        # use previous month
+    pass
         if month == 1:
+    pass
             prev_month = 12
             prev_year = year - 1
         else:
@@ -3658,6 +3977,7 @@ def compute_window_for_time(now_dt: Optional[datetime] = None):
         window_start = candidate_start
     # window_end is 15th of next month 23:59:59
     if window_start.month == 12:
+    pass
         next_month = 1
         next_year = window_start.year + 1
     else:
@@ -3679,6 +3999,7 @@ def _collect_ot_records_in_window(window_start: datetime, window_end: datetime):
         return []
     out = []
     if not vals or len(vals) <= 1:
+    pass
         return out
     for row in vals[1:]:
         try:
@@ -3686,12 +4007,14 @@ def _collect_ot_records_in_window(window_start: datetime, window_end: datetime):
             ts_s = row[O_IDX_TIME] if len(row) > O_IDX_TIME else ""
             act = row[O_IDX_ACTION] if len(row) > O_IDX_ACTION else ""
             if not ts_s:
+    pass
                 continue
             try:
                 ts = datetime.strptime(ts_s, "%Y-%m-%d %H:%M:%S")
             except Exception:
                 continue
             if window_start <= ts <= window_end:
+    pass
                 out.append({"driver": drv, "timestamp": ts, "event": act})
         except Exception:
             continue
@@ -3711,15 +4034,19 @@ def compute_driver_ot_hours_from_records(records, window_start, window_end):
         in_time = None
         for ts, ev in events:
             if ev and str(ev).upper().strip() == "IN":
+    pass
                 in_time = ts
             elif ev and str(ev).upper().strip() == "OUT":
+    pass
                 if in_time:
+    pass
                     total += (ts - in_time)
                     in_time = None
                 else:
                     # OUT without IN - skip
                     pass
         if in_time:
+    pass
             total += (window_end - in_time)
         totals[drv] = round(total.total_seconds() / 3600.0, 2)
     return totals
@@ -3728,6 +4055,7 @@ def ensure_ot_summary_sheet_exists(spreadsheet):
     """Ensure a worksheet titled 'OT Summary' exists; create with headers if missing."""
     title = os.getenv("OT_SUMMARY_TAB") or "OT Summary"
     try:
+    pass
         ws = spreadsheet.worksheet(title)
     except Exception:
         # create sheet
@@ -3746,8 +4074,10 @@ def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datet
         sheet_name = os.getenv("GOOGLE_SHEET_NAME") or os.getenv("GOOGLE_SHEET_TAB") or None
         sheet_id = os.getenv("SHEET_ID") or os.getenv("SPREADSHEET_ID") or None
         if sheet_name:
+    pass
             sh = gc.open(sheet_name)
         elif sheet_id:
+    pass
             sh = gc.open_by_key(sheet_id)
         else:
             sh = gc.open(GOOGLE_SHEET_NAME)
@@ -3765,6 +4095,7 @@ def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datet
             # write header if missing
             vals = ws.get_all_values()
             if not vals or len(vals) == 0:
+    pass
                 ws.append_row(["Driver", "Total OT Hours", "Window Start", "Window End"], value_input_option="USER_ENTERED")
             # clear from A2:D1000 (best-effort)
             try:
@@ -3772,6 +4103,7 @@ def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datet
             except Exception:
                 pass
             if rows:
+    pass
                 ws.update("A2:D{}".format(len(rows)+1), rows, value_input_option="USER_ENTERED")
         except Exception:
             # fallback: append rows
@@ -3796,6 +4128,7 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
     args = context.args or []
     at = None
     if args:
+    pass
         try:
             at = datetime.fromisoformat(args[0])
         except Exception:
@@ -3811,10 +4144,12 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
         ok = update_ot_summary_sheet(driver_totals, window_start, window_end)
         sheet_result = "updated" if ok else "failed"
     except Exception as e:
+    pass
         sheet_result = f"error: {e}"
     # build reply text
     lines = [f"OT Summary {window_start.date()} → {window_end.date()} ({window_start.year})", ""]
     if driver_totals:
+    pass
         for drv, hrs in sorted(driver_totals.items(), key=lambda x: x[0]):
             lines.append(f"{drv}\t{hrs:.2f}")
     else:
@@ -3833,6 +4168,7 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
 
 # Register command handler if application exists
 try:
+    pass
     application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))
 except Exception:
     pass
@@ -3848,14 +4184,17 @@ async def chatid_command(update, context):
         chat = None
         # Prefer effective_chat when available
         if hasattr(update, "effective_chat") and update.effective_chat is not None:
+    pass
             chat = update.effective_chat
         elif hasattr(update, "message") and update.message and update.message.chat:
+    pass
             chat = update.message.chat
         elif hasattr(update, "callback_query") and update.callback_query and update.callback_query.message and update.callback_query.message.chat:
+    pass
             chat = update.callback_query.message.chat
 
         if not chat:
-            # best-effort fallback
+    pass
             try:
                 await update.effective_chat.send_message("Could not determine chat id.")
             except Exception:
@@ -3886,6 +4225,7 @@ async def chatid_command(update, context):
 
 # Register handler if dispatcher/application exists
 try:
+    pass
     application.add_handler(CommandHandler("chatid", chatid_command))
 except Exception:
     try:
@@ -3905,14 +4245,17 @@ async def chatid_command(update, context):
         chat = None
         # Prefer effective_chat when available
         if hasattr(update, "effective_chat") and update.effective_chat is not None:
+    pass
             chat = update.effective_chat
         elif hasattr(update, "message") and update.message and update.message.chat:
+    pass
             chat = update.message.chat
         elif hasattr(update, "callback_query") and update.callback_query and update.callback_query.message and update.callback_query.message.chat:
+    pass
             chat = update.callback_query.message.chat
 
         if not chat:
-            # best-effort fallback
+    pass
             try:
                 await update.effective_chat.send_message("Could not determine chat id.")
             except Exception:
@@ -3943,6 +4286,7 @@ async def chatid_command(update, context):
 
 # Register handler if dispatcher/application exists
 try:
+    pass
     application.add_handler(CommandHandler("chatid", chatid_command))
 except Exception:
     try:
@@ -3970,11 +4314,13 @@ _OVERRIDE_LANG_CACHE = {}
 def _kv_get(key: str) -> str:
     """Get a stored value from Bot_State worksheet by Key column. Returns empty string if missing."""
     try:
+    pass
         ws = open_bot_state_worksheet()
         records = ws.get_all_records()
         for r in records:
             k = str(r.get("Key") or r.get("key") or "").strip()
             if k == key:
+    pass
                 return str(r.get("Value") or r.get("value") or "")
         return ""
     except Exception:
@@ -3987,15 +4333,18 @@ def _kv_get(key: str) -> str:
 def _kv_set(key: str, value: str) -> bool:
     """Set a key/value pair in Bot_State worksheet. Overwrites existing key if present."""
     try:
+    pass
         ws = open_bot_state_worksheet()
         records = ws.get_all_records()
         found_row = None
         for idx, r in enumerate(records, start=2):
             k = str(r.get("Key") or r.get("key") or "").strip()
             if k == key:
+    pass
                 found_row = idx
                 break
         if found_row:
+    pass
             ws.update_cell(found_row, 2, str(value))
         else:
             ws.append_row([key, str(value)], value_input_option="USER_ENTERED")
@@ -4009,58 +4358,73 @@ def _kv_set(key: str, value: str) -> bool:
 
 def save_user_lang(username: str, lang: str) -> bool:
     if not username or not lang:
+    pass
         return False
     key = SUPPORTED_STORE_PREFIX + username
     ok = _kv_set(key, lang)
     if ok:
+    pass
         _USER_LANG_CACHE[username] = lang
     return ok
 
 def get_user_lang_stored(username: str) -> str:
     if not username:
+    pass
         return ""
     if username in _USER_LANG_CACHE:
+    pass
         return _USER_LANG_CACHE[username]
     key = SUPPORTED_STORE_PREFIX + username
     v = _kv_get(key)
     if v:
+    pass
         _USER_LANG_CACHE[username] = v
     return v or ""
 
 def set_admin_override(username: str, lang: str) -> bool:
     if not username:
+    pass
         return False
     key = SUPPORTED_OVERRIDE_PREFIX + username
     ok = _kv_set(key, lang)
     if ok:
+    pass
         _OVERRIDE_LANG_CACHE[username] = lang
     return ok
 
 def get_admin_override(username: str) -> str:
     if not username:
+    pass
         return ""
     if username in _OVERRIDE_LANG_CACHE:
+    pass
         return _OVERRIDE_LANG_CACHE[username]
     key = SUPPORTED_OVERRIDE_PREFIX + username
     v = _kv_get(key)
     if v:
+    pass
         _OVERRIDE_LANG_CACHE[username] = v
     return v or ""
 
 def get_effective_lang_for_username(username: str, context=None) -> str:
     """Resolved language for a username: admin override -> user stored -> context.user_data -> DEFAULT_LANG"""
     if not username:
+    pass
         return DEFAULT_LANG
     ov = get_admin_override(username)
     if ov:
+    pass
         return ov.lower()
     st = get_user_lang_stored(username)
     if st:
+    pass
         return st.lower()
     # fallback to context.user_data if provided (useful when username not yet in sheet)
     if context is not None:
+    pass
         ctx_lang = context.user_data.get("lang") if isinstance(context, type(context)) or hasattr(context, "user_data") else None
         if ctx_lang:
+    pass
             return ctx_lang.lower()
     return DEFAULT_LANG
 
@@ -4071,34 +4435,39 @@ def t(user_lang_or_update, key: str, **kwargs) -> str:
     lang = None
     try:
         if hasattr(user_lang_or_update, "effective_user") or hasattr(user_lang_or_update, "message"):
-            # it's likely an Update or Context; prefer to resolve via update + context if provided via kwargs
+    pass
             update = user_lang_or_update
             ctx = kwargs.pop("_context", None)
             username = None
             try:
                 username = update.effective_user.username if update and update.effective_user else None
             except Exception:
+    pass
                 username = None
             if username:
+    pass
                 lang = get_effective_lang_for_username(username, context=ctx)
         else:
             # treat as explicit lang string
             if isinstance(user_lang_or_update, str) and len(user_lang_or_update) <= 3:
+    pass
                 lang = user_lang_or_update.lower()
     except Exception:
         lang = None
     if not lang:
-        # fallback: try the old t behavior
+    pass
         try:
             return _old_t(user_lang_or_update if isinstance(user_lang_or_update, str) else None, key, **kwargs)
         except Exception:
-            # last resort
+    pass
             lang = DEFAULT_LANG
     if lang not in SUPPORTED_LANGS:
+    pass
         lang = "en"
     # Try to fetch translation from TR; if missing, fall back to English string then format
     txt_template = TR.get(lang, TR.get("en", {})).get(key)
     if txt_template is None:
+    pass
         txt_template = TR.get("en", {}).get(key, "")
     try:
         return txt_template.format(**kwargs)
@@ -4113,11 +4482,13 @@ async def sync_user_lang(update, context):
     try:
         user = update.effective_user if hasattr(update, "effective_user") else None
         if not user or not getattr(user, "username", None):
+    pass
             return
         username = user.username
         eff = get_effective_lang_for_username(username, context=context)
         cur = context.user_data.get("lang")
         if cur != eff:
+    pass
             context.user_data["lang"] = eff
     except Exception:
         try:
@@ -4130,23 +4501,28 @@ async def sync_user_lang(update, context):
 async def setlang_command(update, context):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
     args = context.args or []
     if not args:
+    pass
         await update.effective_chat.send_message("Usage: /setlang en|km")
         return
     lang = args[0].lower()
     if lang not in SUPPORTED_LANGS:
+    pass
         await update.effective_chat.send_message("Supported langs: " + ", ".join(SUPPORTED_LANGS))
         return
     user = update.effective_user
     username = user.username if user else None
     if username:
+    pass
         ok = save_user_lang(username, lang)
         context.user_data["lang"] = lang
         if ok:
+    pass
             await update.effective_chat.send_message(t(lang, "lang_set", lang=lang))
         else:
             await update.effective_chat.send_message("Failed to persist language setting.")
@@ -4158,6 +4534,7 @@ async def mylang_command(update, context):
     user = update.effective_user
     username = user.username if user else None
     if not username:
+    pass
         await update.effective_chat.send_message("No username found for your account.")
         return
     eff = get_effective_lang_for_username(username, context=context)
@@ -4167,31 +4544,37 @@ async def mylang_command(update, context):
 async def forcelang_command(update, context):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
     user = update.effective_user
     username = user.username if user else None
     if not username or username not in [u.strip() for u in (os.getenv('BOT_ADMINS_DEFAULT') or BOT_ADMINS_DEFAULT).split(",") if u.strip()]:
+    pass
         await update.effective_chat.send_message("❌ You are not an admin for this operation.")
         return
     args = context.args or []
     if not args or len(args) < 2:
+    pass
         await update.effective_chat.send_message("Usage: /forcelang <username> <lang>  (e.g. /forcelang markpeng1 km)")
         return
     target = args[0].strip()
     lang = args[1].lower().strip()
     if lang not in SUPPORTED_LANGS:
+    pass
         await update.effective_chat.send_message("Supported langs: " + ", ".join(SUPPORTED_LANGS))
         return
     ok = set_admin_override(target, lang)
     if ok:
+    pass
         await update.effective_chat.send_message(f"Set admin override for {target} → {lang}")
     else:
         await update.effective_chat.send_message("Failed to set admin override.")
 
 # Register handlers if application object exists (best-effort, non-invasive)
 try:
+    pass
     application.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
     application.add_handler(CommandHandler("setlang", setlang_command))
     application.add_handler(CommandHandler("mylang", mylang_command))
@@ -4202,6 +4585,7 @@ except Exception:
 
 # Also attempt to register during main() if register hook available
 try:
+    pass
     def register_multilang_handlers(app):
         try:
             app.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
@@ -4216,9 +4600,11 @@ except Exception:
 
 # Ensure Khmer entry exists in TR (placeholder copy of English strings) so user can paste full KH translations later.
 if "km" not in TR:
+    pass
     TR["km"] = {}
 for k, v in list(TR.get("en", {}).items()):
     if k not in TR.get("km", {}):
+    pass
         TR["km"][k] = v  # placeholder: copy English (user will replace with full KH translations)
 
 # === END: MULTILANG EXTENSION ===
@@ -4245,8 +4631,10 @@ from datetime import datetime, timedelta, time as dtime
 
 def _parse_date_guess(val):
     if not val:
+    pass
         return None
     if isinstance(val, datetime):
+    pass
         return val
     s = str(val).strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y", "%Y.%m.%d"):
@@ -4266,7 +4654,7 @@ def _compute_16_to_16_period(reference_dt=None):
     # Use the month that ends most recently: if now < current_month 16 04:00, then period is previous month's 16->current 16.
     this_month_16 = datetime(year=now.year, month=now.month, day=16, hour=4)
     if now < this_month_16:
-        # use previous month
+    pass
         end = this_month_16
         # compute prev month 16 04:00
         prev_month = (this_month_16.replace(day=1) - timedelta(days=1)).replace(day=16, hour=4)
@@ -4281,10 +4669,11 @@ def _compute_16_to_16_period(reference_dt=None):
     return start, end
 
 def _compute_1_to_1_period(reference_dt=None):
-    # Period: from 1st 04:00 (inclusive) of month M to 1st 04:00 of month M+1 (exclusive)
+    pass
     now = reference_dt or datetime.utcnow()
     this_month_1 = datetime(year=now.year, month=now.month, day=1, hour=4)
     if now < this_month_1:
+    pass
         end = this_month_1
         prev = (this_month_1.replace(day=1) - timedelta(days=1)).replace(day=1, hour=4)
         start = prev
@@ -4296,16 +4685,19 @@ def _compute_1_to_1_period(reference_dt=None):
     return start, end
 
 def _safe_get_col_index(rowkeys, candidates):
-    # rowkeys: list of header names (lower). candidates: list of possible names. Return index or -1
+    pass
     for i, h in enumerate(rowkeys):
         if h in candidates:
+    pass
             return i
     return -1
 
 async def ot_report_command(update, context):
     # delete invoking message if possible
     try:
+    pass
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -4314,6 +4706,7 @@ async def ot_report_command(update, context):
     try:
         ws = open_ot_worksheet()  # expected helper in original code; if missing, try open_worksheet("OT")
     except Exception:
+    pass
         try:
             ws = open_worksheet_by_name("OT")
         except Exception:
@@ -4322,6 +4715,7 @@ async def ot_report_command(update, context):
     try:
         rows = ws.get_all_values()
         if not rows or len(rows) < 2:
+    pass
             await update.effective_chat.send_message(t(context, "ot_report_no_data"))
             return
         headers = [c.strip().lower() for c in rows[0]]
@@ -4341,9 +4735,11 @@ async def ot_report_command(update, context):
                 ot_type_raw = r[idx_ot_type].strip() if idx_ot_type!=-1 and idx_ot_type < len(r) else ""
                 dt = _parse_date_guess(date_raw)
                 if not dt:
+    pass
                     continue
                 # consider timezone? assume sheet times are local; compare naive UTC ranges by converting start/end to dates
                 if not (start <= dt < end):
+    pass
                     continue
                 hours = float(hours_raw) if hours_raw else 0.0
                 ot_type = ot_type_raw or ""
@@ -4352,6 +4748,7 @@ async def ot_report_command(update, context):
             except Exception:
                 continue
         if not per_driver:
+    pass
             await update.effective_chat.send_message(t(context, "ot_report_no_records", start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")))
             return
         # For each driver generate CSV and send
@@ -4389,6 +4786,7 @@ async def ot_report_command(update, context):
 async def mission_report_command(update, context):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -4405,6 +4803,7 @@ async def mission_report_command(update, context):
     try:
         rows = ws.get_all_values()
         if not rows or len(rows) < 2:
+    pass
             await update.effective_chat.send_message(t(context, "mission_report_no_data"))
             return
         headers = [c.strip().lower() for c in rows[0]]
@@ -4425,9 +4824,11 @@ async def mission_report_command(update, context):
                 s_dt = _parse_date_guess(s_raw)
                 e_dt = _parse_date_guess(e_raw)
                 if not s_dt or not e_dt:
+    pass
                     continue
                 # include mission if any overlap with period
                 if e_dt < start or s_dt >= end:
+    pass
                     continue
                 duration_days = (e_dt.date() - s_dt.date()).days + 1
                 # determine mission type based on description sequence heuristics
@@ -4437,15 +4838,18 @@ async def mission_report_command(update, context):
                 # heuristic for mixed sequences: check tokens
                 tokens = re.split(r"[\s,;\/\-]+", desc_upper)
                 if not mission_type:
-                    # find pattern e.g., PP SHV PP -> treat as SHV mission (per requirement)
+    pass
                     seq = "".join([t for t in tokens if t in ("PP","SHV")])
                     if "PPSHVP P" in seq:
+    pass
                         mission_type = "SHV mission"
                     else:
                         # fallback: if starts with PP and alternates, choose PP mission
                         if seq.startswith("PP") and seq.endswith("PP"):
+    pass
                             mission_type = "PP Mission"
                         elif seq.startswith("SHV") and seq.endswith("SHV"):
+    pass
                             mission_type = "SHV mission"
                         else:
                             mission_type = "PP Mission" if "PP" in seq else ("SHV mission" if "SHV" in seq else "Unknown")
@@ -4454,6 +4858,7 @@ async def mission_report_command(update, context):
             except Exception:
                 continue
         if not per_driver:
+    pass
             await update.effective_chat.send_message(t(context, "mission_report_no_records", start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")))
             return
         files = []
@@ -4484,8 +4889,7 @@ async def mission_report_command(update, context):
 
 # Register handlers
 try:
-    application.add_handler(CommandHandler("ot_report", ot_report_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
+    pass
 except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
@@ -4530,6 +4934,7 @@ _OVERRIDE_LANG_CACHE = {}
 def _open_bot_state_ws():
     # prefer existing helper open_bot_state_worksheet() if available
     try:
+    pass
         return open_bot_state_worksheet()
     except Exception:
         try:
@@ -4545,11 +4950,13 @@ def _kv_get(key: str) -> str:
     try:
         ws = _open_bot_state_ws()
         if not ws:
+    pass
             return ""
         records = ws.get_all_records()
         for r in records:
             k = str(r.get("Key") or r.get("key") or "").strip()
             if k == key:
+    pass
                 return str(r.get("Value") or r.get("value") or "")
         return ""
     except Exception:
@@ -4563,15 +4970,18 @@ def _kv_set(key: str, value: str) -> bool:
     try:
         ws = _open_bot_state_ws()
         if not ws:
+    pass
             return False
         records = ws.get_all_records()
         found_row = None
         for idx, r in enumerate(records, start=2):
             k = str(r.get("Key") or r.get("key") or "").strip()
             if k == key:
+    pass
                 found_row = idx
                 break
         if found_row:
+    pass
             ws.update_cell(found_row, 2, str(value))
         else:
             ws.append_row([key, str(value)], value_input_option="USER_ENTERED")
@@ -4585,64 +4995,82 @@ def _kv_set(key: str, value: str) -> bool:
 
 def save_user_lang(username: str, lang: str) -> bool:
     if not username or not lang:
+    pass
         return False
     lang = lang.lower()
     if lang not in SUPPORTED_LANGS:
+    pass
         return False
     key = LANG_STORE_PREFIX + username
     ok = _kv_set(key, lang)
     if ok:
+    pass
         _USER_LANG_CACHE[username] = lang
     return ok
 
 def get_user_lang_stored(username: str) -> str:
     if not username:
+    pass
         return ""
     if username in _USER_LANG_CACHE:
+    pass
         return _USER_LANG_CACHE[username]
     key = LANG_STORE_PREFIX + username
     v = _kv_get(key)
     if v:
+    pass
         _USER_LANG_CACHE[username] = v
     return v or ""
 
 def set_admin_override(username: str, lang: str) -> bool:
     if not username:
+    pass
         return False
     lang = lang.lower()
     if lang not in SUPPORTED_LANGS:
+    pass
         return False
     key = LANG_OVERRIDE_PREFIX + username
     ok = _kv_set(key, lang)
     if ok:
+    pass
         _OVERRIDE_LANG_CACHE[username] = lang
     return ok
 
 def get_admin_override(username: str) -> str:
     if not username:
+    pass
         return ""
     if username in _OVERRIDE_LANG_CACHE:
+    pass
         return _OVERRIDE_LANG_CACHE[username]
     key = LANG_OVERRIDE_PREFIX + username
     v = _kv_get(key)
     if v:
+    pass
         _OVERRIDE_LANG_CACHE[username] = v
     return v or ""
 
 def resolve_effective_lang(username: str, context=None) -> str:
     if not username:
+    pass
         return DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
     ov = get_admin_override(username)
     if ov:
+    pass
         return ov.lower()
     st = get_user_lang_stored(username)
     if st:
+    pass
         return st.lower()
     # fallback to context.user_data if provided
     try:
+    pass
         if context and hasattr(context, "user_data"):
+    pass
             ctx_lang = context.user_data.get("lang")
             if ctx_lang:
+    pass
                 return ctx_lang.lower()
     except Exception:
         pass
@@ -4655,26 +5083,33 @@ def t(user_lang_or_update, key: str, **kwargs) -> str:
     lang = None
     try:
         if hasattr(user_lang_or_update, "effective_user") or hasattr(user_lang_or_update, "message"):
+    pass
             update = user_lang_or_update
             ctx = kwargs.pop("_context", None)
             username = None
             try:
                 username = update.effective_user.username if update and update.effective_user else None
             except Exception:
+    pass
                 username = None
             if username:
+    pass
                 lang = resolve_effective_lang(username, context=ctx)
         elif isinstance(user_lang_or_update, str) and len(user_lang_or_update) <= 3:
+    pass
             lang = user_lang_or_update.lower()
         else:
             # fallback to default
             lang = DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
     except Exception:
+    pass
         lang = DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
     if lang not in SUPPORTED_LANGS:
+    pass
         lang = "en"
     # Use TR dict if present
     try:
+    pass
         tr = TR.get(lang, TR.get("en", {}))
         txt_template = tr.get(key, TR.get("en", {}).get(key, ""))
         return txt_template.format(**kwargs)
@@ -4689,11 +5124,13 @@ async def _sync_user_lang(update, context):
     try:
         user = update.effective_user if hasattr(update, "effective_user") else None
         if not user or not getattr(user, "username", None):
+    pass
             return
         username = user.username
         eff = resolve_effective_lang(username, context=context)
         cur = context.user_data.get("lang")
         if cur != eff:
+    pass
             context.user_data["lang"] = eff
     except Exception:
         try:
@@ -4706,25 +5143,30 @@ async def _sync_user_lang(update, context):
 async def cmd_setlang(update, context):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
     args = context.args or []
     if not args:
+    pass
         await update.effective_chat.send_message("Usage: /setlang en|km")
         return
     lang = args[0].lower()
     if lang not in SUPPORTED_LANGS:
+    pass
         await update.effective_chat.send_message("Supported: " + ", ".join(SUPPORTED_LANGS))
         return
     user = update.effective_user
     uname = user.username if user else None
     if not uname:
+    pass
         await update.effective_chat.send_message("Cannot determine username; cannot persist language.")
         return
     ok = save_user_lang(uname, lang)
     context.user_data["lang"] = lang
     if ok:
+    pass
         await update.effective_chat.send_message(t(lang, "lang_set", lang=lang))
     else:
         await update.effective_chat.send_message("Failed to persist language setting.")
@@ -4733,6 +5175,7 @@ async def cmd_mylang(update, context):
     user = update.effective_user
     uname = user.username if user else None
     if not uname:
+    pass
         await update.effective_chat.send_message("No username found.")
         return
     eff = resolve_effective_lang(uname, context=context)
@@ -4741,6 +5184,7 @@ async def cmd_mylang(update, context):
 async def cmd_forcelang(update, context):
     try:
         if update.effective_message:
+    pass
             await update.effective_message.delete()
     except Exception:
         pass
@@ -4750,31 +5194,39 @@ async def cmd_forcelang(update, context):
     admins = []
     try:
         if os.getenv("BOT_ADMINS"):
+    pass
             admins = [x.strip() for x in os.getenv("BOT_ADMINS").split(",") if x.strip()]
         elif 'BOT_ADMINS_DEFAULT' in globals():
+    pass
             admins = [x.strip() for x in BOT_ADMINS_DEFAULT.split(",") if x.strip()]
     except Exception:
+    pass
         admins = []
     if not uname or uname not in admins:
+    pass
         await update.effective_chat.send_message("❌ You are not an admin for this operation.")
         return
     args = context.args or []
     if len(args) < 2:
+    pass
         await update.effective_chat.send_message("Usage: /forcelang <username> <en|km>")
         return
     target = args[0].strip()
     lang = args[1].lower().strip()
     if lang not in SUPPORTED_LANGS:
+    pass
         await update.effective_chat.send_message("Supported: " + ", ".join(SUPPORTED_LANGS))
         return
     ok = set_admin_override(target, lang)
     if ok:
+    pass
         await update.effective_chat.send_message(f"Set admin override for {target} → {lang}")
     else:
         await update.effective_chat.send_message("Failed to set admin override.")
 
 # Register handlers if application object is present
 try:
+    pass
     application.add_handler(CommandHandler("setlang", cmd_setlang))
     application.add_handler(CommandHandler("mylang", cmd_mylang))
     application.add_handler(CommandHandler("forcelang", cmd_forcelang))
@@ -4793,13 +5245,17 @@ except Exception:
 
 # Ensure TR has km entry – if missing, copy en (user can replace with more natural KH later)
 try:
+    pass
     if "TR" in globals() and isinstance(TR, dict):
+    pass
         if "km" not in TR:
+    pass
             TR["km"] = {}
         for k, v in TR.get("en", {}).items():
             if k not in TR["km"]:
-                # placeholder: copy English; earlier we may have partial translations; do not overwrite existing entries
+    pass
                 if not TR["km"].get(k):
+    pass
                     TR["km"][k] = v
 except Exception:
     pass
@@ -4833,6 +5289,7 @@ def _register_bot_commands(app):
 # If application is present, register commands now
 try:
     if 'application' in globals() and application is not None:
+    pass
         _register_bot_commands(application)
 except Exception:
     pass
