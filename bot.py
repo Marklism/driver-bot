@@ -3510,6 +3510,34 @@ async def _send_startup_debug(application):
     except Exception:
         pass
 
+
+# ===============================
+# REPORT HANDLER SELF-CHECK (LTS)
+# ===============================
+def _report_entry_self_check(application):
+    try:
+        cmds = []
+        for h in application.handlers.get(0, []):
+            try:
+                if hasattr(h, "command"):
+                    cmds.extend(h.command)
+            except Exception:
+                pass
+        expected = [
+            "ot_report",
+            "ot_monthly_report",
+            "mission_monthly_report",
+        ]
+        for c in expected:
+            if c in cmds:
+                print(f"[REPORT CHECK] /{c} OK")
+            else:
+                print(f"[REPORT CHECK] /{c} MISSING")
+    except Exception as e:
+        print("[REPORT CHECK] failed:", e)
+# ===============================
+
+
 def main():
     check_deployment_requirements()
     ensure_env()
