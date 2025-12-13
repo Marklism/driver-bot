@@ -4056,6 +4056,7 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
 
 # Register command handler if application exists
 try:
+    pass
 application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))
 except Exception:
     pass
@@ -4109,6 +4110,7 @@ async def chatid_command(update, context):
 
 # Register handler if dispatcher/application exists
 try:
+    pass
 application.add_handler(CommandHandler("chatid", chatid_command))
 except Exception:
     try:
@@ -4166,6 +4168,7 @@ async def chatid_command(update, context):
 
 # Register handler if dispatcher/application exists
 try:
+    pass
 application.add_handler(CommandHandler("chatid", chatid_command))
 except Exception:
     try:
@@ -4415,6 +4418,7 @@ async def forcelang_command(update, context):
 
 # Register handlers if application object exists (best-effort, non-invasive)
 try:
+    pass
 application.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
 application.add_handler(CommandHandler("setlang", setlang_command))
 application.add_handler(CommandHandler("mylang", mylang_command))
@@ -4707,6 +4711,7 @@ async def mission_report_command(update, context):
 
 # Register handlers
 try:
+    pass
 application.add_handler(CommandHandler("ot_report", ot_report_entry))
     except Exception:
     # safe fallback: expose register function
@@ -4997,6 +5002,7 @@ async def cmd_forcelang(update, context):
 
 # Register handlers if application object is present
 try:
+    pass
 application.add_handler(CommandHandler("setlang", cmd_setlang))
 application.add_handler(CommandHandler("mylang", cmd_mylang))
 application.add_handler(CommandHandler("forcelang", cmd_forcelang))
@@ -5135,6 +5141,7 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 # ---- Register handlers ----
 try:
+    pass
 application.add_handler(CommandHandler("lang", lang_command))
 application.add_handler(CommandHandler("reports", reports_menu))
 application.add_handler(CallbackQueryHandler(c_safe_callback, pattern="^(lang_|rep_)"))
@@ -5399,6 +5406,7 @@ async def mission_report_driver_callback(update, context):
     )
 
 try:
+    pass
 application.add_handler(CommandHandler("mission_report", mission_report_entry))
 application.add_handler(
         CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_BTN:")
@@ -5499,6 +5507,7 @@ async def mission_report_driver_callback(update, context):
     await context.bot.send_document(query.from_user.id, bio)
 
 try:
+    pass
 application.add_handler(CommandHandler("mission_report", mission_report_entry))
 application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:"))
 except Exception:
