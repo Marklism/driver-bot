@@ -1,6 +1,7 @@
 
-# === DRIVER BUTTON SELECTION ENABLED ===
-# /ot_report now triggers driver selection via InlineKeyboard from Drivers sheet
+# === /ot_report rewritten to DRIVER BUTTON MODE ===
+# Old parameter-based logic removed
+# New flow: /ot_report -> private driver selection -> callback generates CSV
 # === VERSION A: DRIVER BUTTON REPORTS & CSV SPECS APPLIED ===
 # ===============================
 # DRIVER BOT — LTS FROZEN VERSION
@@ -381,7 +382,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
     if not args:
-        await context.bot.send_message(chat_id=update.effective_user.id,text="Usage: /ot_report [username] YYYY-MM")
+        await context.bot.send_message(chat_id=update.effective_user.id,text="")
         return
 
     if len(args) == 1:
