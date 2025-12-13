@@ -3422,10 +3422,12 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
 
+    application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:")
 
+    application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
+ 
     application.add_handler(CallbackQueryHandler(plate_callback))
     # Clock In/Out buttons handler
-    application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
