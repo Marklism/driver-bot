@@ -5590,3 +5590,32 @@ except Exception:
     pass
 
 # ===== END V10 BOTCOMMAND RESET =====
+
+
+# ===============================
+# V11 — HARD RESET BOT COMMANDS (ALL SCOPES)
+# ===============================
+
+from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats
+
+async def _hard_reset_bot_commands(app):
+    try:
+        # 1️⃣ Clear default scope
+        await app.bot.set_my_commands([], scope=BotCommandScopeDefault())
+        # 2️⃣ Clear private chat scope
+        await app.bot.set_my_commands([], scope=BotCommandScopeAllPrivateChats())
+        # 3️⃣ Re-register minimal clean commands
+        await app.bot.set_my_commands([
+            BotCommand("mission_report", "Mission report (button mode)"),
+            BotCommand("ot_report", "OT report (button mode)"),
+            BotCommand("start", "Show menu"),
+        ], scope=BotCommandScopeDefault())
+    except Exception:
+        pass
+
+try:
+    application.post_init = _hard_reset_bot_commands
+except Exception:
+    pass
+
+# ===== END V11 HARD RESET =====
