@@ -2230,7 +2230,6 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
         [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"),
          InlineKeyboardButton("Leave", callback_data="leave_menu")],
-        [InlineKeyboardButton("Mission Report", callback_data="MENU_MISSION")],
     ]
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -5622,13 +5621,54 @@ except Exception:
 
 
 # ======================================================
-# V21 — MISSION REPORT (MENU-BASED, FINAL)
-# Entry: /menu -> Mission Report
+# V22 — FORCE OVERRIDE menu_command (SAFE)
 # ======================================================
+# This redefines menu_command AFTER the original one,
+# so Python will use THIS version at runtime.
+# No deletion, no regex, no structural risk.
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatAction
 from telegram.ext import CallbackQueryHandler
 
-def _mission_v21_days(start_dt, end_dt):
+async def menu_command(update, context):
+    try:
+        if update.effective_message:
+            await update.effective_message.delete()
+    except Exception:
+        pass
+
+    user_lang = context.user_data.get("lang", DEFAULT_LANG)
+    text = t(user_lang, "menu")
+
+    keyboard = [
+        [InlineKeyboardButton("Clock In", callback_data="clock_in"),
+         InlineKeyboardButton("Clock Out", callback_data="clock_out")],
+        [InlineKeyboardButton("Start trip (select plate)", callback_data="show_start"),
+         InlineKeyboardButton("End trip (select plate)", callback_data="show_end")],
+        [InlineKeyboardButton("Mission start", callback_data="show_mission_start"),
+         InlineKeyboardButton("Mission end", callback_data="show_mission_end")],
+        [InlineKeyboardButton("Mission Report", callback_data="MENU_MISSION")],
+        [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"),
+         InlineKeyboardButton("Leave", callback_data="leave_menu")],
+    ]
+
+    try:
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action=ChatAction.TYPING
+        )
+    except Exception:
+        pass
+
+    await update.effective_chat.send_message(
+        text=text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ---- Mission Report callbacks ----
+
+def _mission_v22_days(start_dt, end_dt):
     return (end_dt.date() - start_dt.date()).days + 1
 
 async def menu_mission_entry(update, context):
@@ -5641,10 +5681,10 @@ async def menu_mission_entry(update, context):
         await query.edit_message_text("❌ No drivers found.")
         return
 
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR21:{d}")] for d in drivers]
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR22:{d}")] for d in drivers]
     await query.edit_message_text(
         "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def menu_mission_driver(update, context):
@@ -5677,7 +5717,7 @@ async def menu_mission_driver(update, context):
             if not (month_start <= sdt < month_end):
                 continue
             idx += 1
-            dur = _mission_v21_days(sdt, edt)
+            dur = _mission_v22_days(sdt, edt)
 
             frm = (r[M_IDX_FROM] or "").upper()
             to = (r[M_IDX_TO] or "").upper()
@@ -5706,6 +5746,6 @@ async def menu_mission_driver(update, context):
     await context.bot.send_document(query.from_user.id, bio)
 
 application.add_handler(CallbackQueryHandler(menu_mission_entry, pattern=r"^MENU_MISSION$"))
-application.add_handler(CallbackQueryHandler(menu_mission_driver, pattern=r"^MR21:"))
+application.add_handler(CallbackQueryHandler(menu_mission_driver, pattern=r"^MR22:"))
 
-# ===== END V21 =====
+# ===== END V22 =====
