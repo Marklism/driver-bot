@@ -22,19 +22,30 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
 async def ot_report_entry(update, context):
-    drivers = []
     try:
         drivers = read_drivers_from_sheet()
     except Exception:
-        pass
-# ===== SAFE reply_private helper =====
-async def reply_private(update, context, text, reply_markup=None):
-    await context.bot.send_message(
-        chat_id=update.effective_user.id,
-        text=text,
-        reply_markup=reply_markup,
+        drivers = []
+
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+
+    buttons = [
+        [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
+        for d in drivers
+    ]
+
+    await reply_private(
+        update,
+        context,
+        "Select driver for OT report:",
+        reply_markup=InlineKeyboardMarkup(buttons),
     )
+
 # ===== END helper =====
 
 
