@@ -1,5 +1,4 @@
-from datetime import datetime, timedelta, time as time
-
+from datetime import datetime, timedelta, time as dtime
 
 def determine_ot_rate(dt: datetime, is_holiday: bool = False) -> str:
     """
@@ -276,6 +275,7 @@ try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
+from datetime import datetime, timedelta, time as dtime
 
 from typing import Optional, Dict, List, Any
 
@@ -677,6 +677,7 @@ import base64
 import logging
 import uuid
 import re
+from datetime import datetime, timedelta, time as dtime
 from typing import Optional, Dict, List, Any
 import urllib.request
 
@@ -1407,6 +1408,7 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
     idx_evening = headers.index("Evening OT") if "Evening OT" in headers else None
     # collect
     entries = {}
+    from datetime import datetime as _dt
     for row in vals[1:]:
         try:
             name = row[idx_name].strip()
@@ -3856,6 +3858,7 @@ def save_mission_cycles_to_sheet(mission_cycles):
 
 
 # === BEGIN: OT Summary integration (added) ===
+from datetime import datetime
 
 def compute_window_for_time(now_dt: Optional[datetime] = None):
     """Compute OT window start/end.
@@ -4464,6 +4467,7 @@ for k, v in list(TR.get("en", {}).items()):
 # - Does not change any existing logic elsewhere.
 #
 import csv
+from datetime import datetime, timedelta, time as dtime
 
 def _parse_date_guess(val):
     if not val:
@@ -5152,6 +5156,7 @@ application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=
 # OT REPORT PATCH V7
 # ======================
 import io, csv
+from datetime import timedelta
 
 def _calc_hours(row, idx_morning, idx_evening, idx_start, idx_end):
     try:
@@ -5272,3 +5277,138 @@ def _auto_close_previous_in(ws, driver, new_in_time):
             return
 
 # === CLOCK HANDLER END ===
+
+
+
+# ===============================
+# MISSION REPORT — DRIVER BUTTON MODE (BUTTON ONLY)
+# ===============================
+# Behavior:
+# /mission_report -> private chat -> select driver button
+# -> auto export CSV for driver's NATURAL MONTH (calendar month, by Start Date)
+# OT module untouched.
+
+from telegram.ext import CallbackQueryHandler, CommandHandler
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+def _mission_duration_days(start_dt, end_dt):
+    return (end_dt.date() - start_dt.date()).days + 1
+
+async def mission_report_entry(update, context):
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(d, callback_data=f"MR_BTN:{d}")]
+        for d in drivers
+    ]
+
+    await reply_private(
+        update,
+        context,
+        "Select driver:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+async def mission_report_driver_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+
+    driver = query.data.split(":", 1)[1]
+
+    ws = open_worksheet(MISSIONS_TAB)
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text="❌ Missions sheet empty."
+        )
+        return
+
+    data = rows[1:]
+
+    now = _now_dt()
+    y, m = now.year, now.month
+    month_start = datetime(y, m, 1)
+    month_end = datetime(y + 1, 1, 1) if m == 12 else datetime(y, m + 1, 1)
+
+    import csv, io
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "No.",
+        "Name",
+        "Plate",
+        "Start Date",
+        "End Date",
+        "Duration (days)",
+        "Mission Type",
+    ])
+
+    idx = 0
+
+    for r in data:
+        try:
+            if r[M_IDX_DRIVER].strip() != driver:
+                continue
+
+            sdt = datetime.fromisoformat(r[M_IDX_START])
+            edt = datetime.fromisoformat(r[M_IDX_END])
+
+            if not (month_start <= sdt < month_end):
+                continue
+
+            idx += 1
+            days = _mission_duration_days(sdt, edt)
+
+            frm = (r[M_IDX_FROM] or "").upper()
+            to = (r[M_IDX_TO] or "").upper()
+
+            if frm.startswith("SHV") and to.startswith("SHV"):
+                mtype = "PP mission"
+            elif frm.startswith("PP") and to.startswith("PP"):
+                mtype = "SHV mission"
+            else:
+                mtype = "SHV mission" if "SHV" in (frm + to) else "PP mission"
+
+            writer.writerow([
+                idx,
+                driver,
+                r[M_IDX_PLATE],
+                r[M_IDX_START],
+                r[M_IDX_END],
+                days,
+                mtype,
+            ])
+        except Exception:
+            continue
+
+    if idx == 0:
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text=f"❌ No missions for {driver} in current month."
+        )
+        return
+
+    bio = io.BytesIO(output.getvalue().encode("utf-8"))
+    bio.name = f"Mission_Report_{driver}_{y}-{str(m).zfill(2)}.csv"
+
+    await context.bot.send_document(
+        chat_id=query.from_user.id,
+        document=bio,
+        caption=f"Mission report for {driver} ({y}-{str(m).zfill(2)})"
+    )
+
+try:
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+    application.add_handler(
+        CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_BTN:")
+    )
+except Exception:
+    pass
+# ===== END MISSION REPORT BUTTON MODE =====
