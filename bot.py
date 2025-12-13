@@ -5564,3 +5564,29 @@ except Exception:
     pass
 
 # ===== END MISSION REPORT REBUILD =====
+
+
+# ===============================
+# V10 — FORCE CLEAR BOT COMMANDS
+# ===============================
+# This removes Telegram-side cached Usage like:
+# /mission_report month YYYY-MM
+
+from telegram import BotCommand
+
+async def _force_clear_bot_commands(app):
+    try:
+        await app.bot.set_my_commands([
+            BotCommand("mission_report", "Mission report (button mode)"),
+            BotCommand("ot_report", "OT report (button mode)"),
+            BotCommand("start", "Show menu"),
+        ])
+    except Exception:
+        pass
+
+try:
+    application.post_init = _force_clear_bot_commands
+except Exception:
+    pass
+
+# ===== END V10 BOTCOMMAND RESET =====
