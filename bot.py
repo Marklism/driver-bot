@@ -3829,7 +3829,7 @@ def load_mission_cycles_from_sheet():
     """Return current in-memory mission cycle mapping.
 
     This overrides the earlier implementation that read from Google
-    Sheets. The return value is a shallow copy so callers can't
+# (commented out invalid doc text)
     accidentally mutate the internal store without calling the
     save helper.
     """
@@ -3840,7 +3840,7 @@ def save_mission_cycles_to_sheet(mission_cycles):
     """Update the in-memory mission cycle mapping.
 
     This overrides the earlier implementation that wrote to Google
-    Sheets. It simply keeps everything in process memory.
+# (commented out invalid doc text)
     """
     _MISSION_CYCLE_STORE.clear()
     _MISSION_CYCLE_STORE.update(mission_cycles or {})
