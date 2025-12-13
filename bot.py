@@ -1456,12 +1456,12 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
         await update.effective_chat.send_message(text)
 
 async def mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /mission_monthly_report YYYY-MM username
+#     """ /mission_monthly_report YYYY-MM username
     Window: YYYY-MM-01 04:00 -> next month 01 04:00
     """
     args = context.args
     if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_monthly_report YYYY-MM username")
+#         await update.effective_chat.send_message("Usage: /mission_monthly_report YYYY-MM username")
         return
     ym = args[0]; username = args[1]
     ym_parsed = _parse_ym(ym)
@@ -3347,37 +3347,37 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_privately(update, context, "Language set to English.")
     else:
         await reply_privately(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
-async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    args = context.args
-    if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
-        return
-    mode = args[0].lower()
-    if mode == "month":
-        try:
-            y_m = args[1]
-            dt = datetime.strptime(y_m + "-01", "%Y-%m-%d")
-            start = datetime(dt.year, dt.month, 1)
-            if dt.month == 12:
-                end = datetime(dt.year + 1, 1, 1)
-            else:
-                end = datetime(dt.year, dt.month + 1, 1)
-            rows = mission_rows_for_period(start, end)
-            ok = write_mission_report_rows(rows, period_label=start.strftime("%Y-%m"))
-            counts = count_roundtrips_per_driver_month(start, end)
-            if ok:
-                await update.effective_chat.send_message(f"Monthly mission report for {start.strftime('%Y-%m')} created.")
-            else:
-                await update.effective_chat.send_message("❌ Failed to write mission report.")
-        except Exception:
-            await update.effective_chat.send_message("Invalid command. Usage: /mission_report month YYYY-MM")
-    else:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
+# async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     try:
+#         if update.effective_message:
+#             await update.effective_message.delete()
+#     except Exception:
+#         pass
+#     args = context.args
+#     if not args or len(args) < 2:
+#         await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
+#         return
+#     mode = args[0].lower()
+#     if mode == "month":
+#         try:
+#             y_m = args[1]
+#             dt = datetime.strptime(y_m + "-01", "%Y-%m-%d")
+#             start = datetime(dt.year, dt.month, 1)
+#             if dt.month == 12:
+#                 end = datetime(dt.year + 1, 1, 1)
+#             else:
+#                 end = datetime(dt.year, dt.month + 1, 1)
+#             rows = mission_rows_for_period(start, end)
+#             ok = write_mission_report_rows(rows, period_label=start.strftime("%Y-%m"))
+#             counts = count_roundtrips_per_driver_month(start, end)
+#             if ok:
+#                 await update.effective_chat.send_message(f"Monthly mission report for {start.strftime('%Y-%m')} created.")
+#             else:
+#                 await update.effective_chat.send_message("❌ Failed to write mission report.")
+#         except Exception:
+#             await update.effective_chat.send_message("Invalid command. Usage: /mission_report month YYYY-MM")
+#     else:
+#         await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -3563,7 +3563,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
+#     application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CommandHandler("lang", lang_command))
@@ -3592,7 +3592,7 @@ def register_ui_handlers(application):
                 BotCommand("end_trip", "End a trip (select plate)"),
                 BotCommand("menu", "Open trip menu"),
                 BotCommand("mission", "Quick mission menu"),
-                BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
+#                 BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
                 BotCommand("leave", "Record leave (admin)"),
                 BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
             ])
@@ -4610,33 +4610,33 @@ async def ot_report_command(update, context):
             pass
         await update.effective_chat.send_message(t(context, "ot_report_failed"))
 
-async def mission_report_command(update, context):
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    start, end = _compute_1_to_1_period(datetime.utcnow())
-    # read Mission sheet
-    try:
-        ws = open_mission_worksheet()
-    except Exception:
-        try:
-            ws = open_worksheet_by_name("Mission")
-        except Exception:
-            await update.effective_chat.send_message(t(context, "mission_report_no_sheet"))
-            return
-    try:
-        rows = ws.get_all_values()
-        if not rows or len(rows) < 2:
-            await update.effective_chat.send_message(t(context, "mission_report_no_data"))
-            return
-        headers = [c.strip().lower() for c in rows[0]]
-        idx_username = _safe_get_col_index(headers, ["username", "user", "driver", "id"])
-        idx_name = _safe_get_col_index(headers, ["name", "fullname", "driver_name"])
-        idx_start = _safe_get_col_index(headers, ["mission_start", "start", "start_date"])
-        idx_end = _safe_get_col_index(headers, ["mission_end", "end", "end_date"])
-        idx_desc = _safe_get_col_index(headers, ["description", "desc", "note"])
+# async def mission_report_command(update, context):
+#     try:
+#         if update.effective_message:
+#             await update.effective_message.delete()
+#     except Exception:
+#         pass
+#     start, end = _compute_1_to_1_period(datetime.utcnow())
+#     # read Mission sheet
+#     try:
+#         ws = open_mission_worksheet()
+#     except Exception:
+#         try:
+#             ws = open_worksheet_by_name("Mission")
+#         except Exception:
+#             await update.effective_chat.send_message(t(context, "mission_report_no_sheet"))
+#             return
+#     try:
+#         rows = ws.get_all_values()
+#         if not rows or len(rows) < 2:
+#             await update.effective_chat.send_message(t(context, "mission_report_no_data"))
+#             return
+#         headers = [c.strip().lower() for c in rows[0]]
+#         idx_username = _safe_get_col_index(headers, ["username", "user", "driver", "id"])
+#         idx_name = _safe_get_col_index(headers, ["name", "fullname", "driver_name"])
+#         idx_start = _safe_get_col_index(headers, ["mission_start", "start", "start_date"])
+#         idx_end = _safe_get_col_index(headers, ["mission_end", "end", "end_date"])
+#         idx_desc = _safe_get_col_index(headers, ["description", "desc", "note"])
 
         per_driver = {}
         for r in rows[1:]:
@@ -4709,13 +4709,13 @@ async def mission_report_command(update, context):
 # Register handlers
 try:
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
+#     application.add_handler(CommandHandler("mission_report", mission_report_command))
 except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
         try:
             app.add_handler(CommandHandler("ot_report", ot_report_entry))
-            app.add_handler(CommandHandler("mission_report", mission_report_command))
+#             app.add_handler(CommandHandler("mission_report", mission_report_command))
         except Exception:
             pass
     globals().setdefault("register_report_handlers", register_report_handlers)
@@ -5135,7 +5135,7 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "rep_otm":
         await q.edit_message_text("Use: /ot_monthly_report YYYY-MM <username>")
     elif data == "rep_mm":
-        await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
+#         await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
 
 # ---- Register handlers ----
 try:
@@ -5403,7 +5403,7 @@ async def mission_report_driver_callback(update, context):
     )
 
 try:
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+#     application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(
         CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_BTN:")
     )
@@ -5545,7 +5545,7 @@ async def mission_report_driver_callback(update, context):
 
 # --- FORCE OVERRIDE REGISTRATION (LAST WINS) ---
 try:
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+#     application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(
         CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:")
     )
@@ -5570,7 +5570,7 @@ except Exception:
 # V10 — FORCE CLEAR BOT COMMANDS
 # ===============================
 # This removes Telegram-side cached Usage like:
-# /mission_report month YYYY-MM
+# # /mission_report month YYYY-MM
 
 from telegram import BotCommand
 
@@ -5619,135 +5619,3 @@ except Exception:
     pass
 
 # ===== END V11 HARD RESET =====
-
-
-# ======================================================
-# V12 — MISSION REPORT (SIDECAR, BUTTON MODE, SAFE)
-# ======================================================
-# This module is ISOLATED.
-# - Does NOT modify or depend on old mission code
-# - Does NOT touch OT logic
-# - Button workflow mirrors /ot_report
-#
-# Usage:
-# /mission_report  -> driver buttons -> CSV (current natural month)
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler, CallbackQueryHandler
-
-def _mr2_duration_days(start_dt, end_dt):
-    # Calendar days, inclusive
-    return (end_dt.date() - start_dt.date()).days + 1
-
-async def mission_report_btn_entry(update, context):
-    driver_map = get_driver_map()
-    drivers = sorted(driver_map.keys())
-
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton(d, callback_data=f"MR2_DRIVER:{d}")]
-        for d in drivers
-    ]
-
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def mission_report_btn_driver(update, context):
-    query = update.callback_query
-    await query.answer()
-
-    driver = query.data.split(":", 1)[1]
-
-    ws = open_worksheet(MISSIONS_TAB)
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        await context.bot.send_message(query.from_user.id, "❌ No mission data.")
-        return
-
-    data = rows[1:]
-
-    now = _now_dt()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    month_end = (
-        month_start.replace(year=month_start.year + 1, month=1)
-        if month_start.month == 12
-        else month_start.replace(month=month_start.month + 1)
-    )
-
-    out = []
-    idx = 0
-
-    for r in data:
-        try:
-            if r[M_IDX_DRIVER].strip() != driver:
-                continue
-
-            sdt = datetime.fromisoformat(r[M_IDX_START])
-            edt = datetime.fromisoformat(r[M_IDX_END])
-
-            if not (month_start <= sdt < month_end):
-                continue
-
-            idx += 1
-            dur = _mr2_duration_days(sdt, edt)
-
-            frm = (r[M_IDX_FROM] or "").upper()
-            to = (r[M_IDX_TO] or "").upper()
-
-            if frm.startswith("SHV") and to.startswith("SHV"):
-                mtype = "PP mission"
-            elif frm.startswith("PP") and to.startswith("PP"):
-                mtype = "SHV mission"
-            else:
-                mtype = "SHV mission" if "SHV" in (frm + to) else "PP mission"
-
-            out.append([
-                idx,
-                driver,
-                r[M_IDX_PLATE],
-                r[M_IDX_START],
-                r[M_IDX_END],
-                dur,
-                mtype,
-            ])
-        except Exception:
-            continue
-
-    if not out:
-        await context.bot.send_message(
-            query.from_user.id,
-            f"❌ No missions for {driver} in current month."
-        )
-        return
-
-    import io, csv
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow([
-        "No.",
-        "Name",
-        "Plate",
-        "Start Date",
-        "End Date",
-        "Duration (days)",
-        "Mission Type",
-    ])
-    w.writerows(out)
-
-    bio = io.BytesIO(buf.getvalue().encode("utf-8"))
-    bio.name = f"Mission_Report_{driver}_{month_start.strftime('%Y-%m')}.csv"
-
-    await context.bot.send_document(query.from_user.id, bio)
-
-# --- Register sidecar handlers (no try / no override) ---
-application.add_handler(CommandHandler("mission_report", mission_report_btn_entry))
-application.add_handler(CallbackQueryHandler(mission_report_btn_driver, pattern=r"^MR2_DRIVER:"))
-
-# ===== END V12 SIDECAR MISSION REPORT =====
