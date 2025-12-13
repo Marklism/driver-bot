@@ -661,9 +661,9 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Register OT handlers (inserted)
 try:
     # These handlers implement Clock In/Out toggle and OT reporting
-application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
-application.add_handler(CommandHandler("ot_report", ot_report_entry))
-application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
+    application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
+    application.add_handler(CommandHandler("ot_report", ot_report_entry))
+    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
 except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
@@ -3558,32 +3558,33 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.exception("Error in handle_clock_button")
 
 def register_ui_handlers(application):
-application.add_handler(CommandHandler("menu", menu_command))
-application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
-application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
-application.add_handler(CommandHandler("mission_start", mission_start_command))
-application.add_handler(CommandHandler("mission_end", mission_end_command))
-application.add_handler(CommandHandler("leave", leave_command))
-application.add_handler(CommandHandler("setup_menu", setup_menu_command))
-application.add_handler(CommandHandler("lang", lang_command))
-application.add_handler(CommandHandler("ot_report", ot_report_entry))
-application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
+    application.add_handler(CommandHandler("menu", menu_command))
+    application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
+    application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
+    application.add_handler(CommandHandler("mission_start", mission_start_command))
+    application.add_handler(CommandHandler("mission_end", mission_end_command))
+    application.add_handler(CommandHandler("mission_report", mission_report_command))
+    application.add_handler(CommandHandler("leave", leave_command))
+    application.add_handler(CommandHandler("setup_menu", setup_menu_command))
+    application.add_handler(CommandHandler("lang", lang_command))
+    application.add_handler(CommandHandler("ot_report", ot_report_entry))
+    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
-application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
+    application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
 
-application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
+    application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
  
-application.add_handler(CallbackQueryHandler(plate_callback))
+    application.add_handler(CallbackQueryHandler(plate_callback))
     # Clock In/Out buttons handler
-application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
-application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
-application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
-application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
-application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
+    application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
+    application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
+    application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
+    application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
 
     
     # Debug command for runtime self-check
-application.add_handler(CommandHandler('debug_bot', debug_bot_command))
+    application.add_handler(CommandHandler('debug_bot', debug_bot_command))
     async def _set_cmds():
         try:
             await application.bot.set_my_commands([
@@ -4056,8 +4057,7 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
 
 # Register command handler if application exists
 try:
-    pass
-application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))
+    application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))
 except Exception:
     pass
 # === END: OT Summary integration ===
@@ -4110,8 +4110,7 @@ async def chatid_command(update, context):
 
 # Register handler if dispatcher/application exists
 try:
-    pass
-application.add_handler(CommandHandler("chatid", chatid_command))
+    application.add_handler(CommandHandler("chatid", chatid_command))
 except Exception:
     try:
         # older style: dispatcher
@@ -4168,8 +4167,7 @@ async def chatid_command(update, context):
 
 # Register handler if dispatcher/application exists
 try:
-    pass
-application.add_handler(CommandHandler("chatid", chatid_command))
+    application.add_handler(CommandHandler("chatid", chatid_command))
 except Exception:
     try:
         # older style: dispatcher
@@ -4418,11 +4416,10 @@ async def forcelang_command(update, context):
 
 # Register handlers if application object exists (best-effort, non-invasive)
 try:
-    pass
-application.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
-application.add_handler(CommandHandler("setlang", setlang_command))
-application.add_handler(CommandHandler("mylang", mylang_command))
-application.add_handler(CommandHandler("forcelang", forcelang_command))
+    application.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
+    application.add_handler(CommandHandler("setlang", setlang_command))
+    application.add_handler(CommandHandler("mylang", mylang_command))
+    application.add_handler(CommandHandler("forcelang", forcelang_command))
 except Exception:
     # If 'application' is not yet defined at import time, registration will be attempted in main()
     pass
@@ -4711,9 +4708,9 @@ async def mission_report_command(update, context):
 
 # Register handlers
 try:
-    pass
-application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    except Exception:
+    application.add_handler(CommandHandler("ot_report", ot_report_entry))
+    application.add_handler(CommandHandler("mission_report", mission_report_command))
+except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
         try:
@@ -5002,11 +4999,10 @@ async def cmd_forcelang(update, context):
 
 # Register handlers if application object is present
 try:
-    pass
-application.add_handler(CommandHandler("setlang", cmd_setlang))
-application.add_handler(CommandHandler("mylang", cmd_mylang))
-application.add_handler(CommandHandler("forcelang", cmd_forcelang))
-application.add_handler(MessageHandler(filters.ALL, _sync_user_lang), group=0)
+    application.add_handler(CommandHandler("setlang", cmd_setlang))
+    application.add_handler(CommandHandler("mylang", cmd_mylang))
+    application.add_handler(CommandHandler("forcelang", cmd_forcelang))
+    application.add_handler(MessageHandler(filters.ALL, _sync_user_lang), group=0)
 except Exception:
     # expose a function to register later
     def register_multilang(app):
@@ -5138,13 +5134,14 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("Use: /ot_report <username> YYYY-MM")
     elif data == "rep_otm":
         await q.edit_message_text("Use: /ot_monthly_report YYYY-MM <username>")
-    
+    elif data == "rep_mm":
+        await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
+
 # ---- Register handlers ----
 try:
-    pass
-application.add_handler(CommandHandler("lang", lang_command))
-application.add_handler(CommandHandler("reports", reports_menu))
-application.add_handler(CallbackQueryHandler(c_safe_callback, pattern="^(lang_|rep_)"))
+    application.add_handler(CommandHandler("lang", lang_command))
+    application.add_handler(CommandHandler("reports", reports_menu))
+    application.add_handler(CallbackQueryHandler(c_safe_callback, pattern="^(lang_|rep_)"))
 except Exception:
     pass
 
@@ -5406,9 +5403,8 @@ async def mission_report_driver_callback(update, context):
     )
 
 try:
-    pass
-application.add_handler(CommandHandler("mission_report", mission_report_entry))
-application.add_handler(
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+    application.add_handler(
         CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_BTN:")
     )
 except Exception:
@@ -5416,27 +5412,42 @@ except Exception:
 # ===== END MISSION REPORT BUTTON MODE =====
 
 
-# ===============================
-# MISSION REPORT — BUTTON MODE (V12 FINAL)
-# ===============================
-# /mission_report -> select driver -> CSV (natural month)
-# Old argument-based mission report has been physically removed.
+# ======================================================
+# MISSION REPORT — REBUILT FROM OT REPORT (BUTTON MODE)
+# ======================================================
+# Design principles:
+# - Copy OT report interaction model 1:1
+# - /mission_report -> private -> select driver button
+# - NO arguments, NO YYYY-MM parsing
+# - Natural calendar month by Start Date
+# - Duration = (End Date - Start Date).days + 1
+# - Legacy mission_report implementations are ignored, not deleted
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler, CallbackQueryHandler
+from telegram.ext import CallbackQueryHandler, CommandHandler
 
-def _mission_duration_days(start_dt, end_dt):
+def _mission_duration_days_calendar(start_dt, end_dt):
     return (end_dt.date() - start_dt.date()).days + 1
 
 async def mission_report_entry(update, context):
     driver_map = get_driver_map()
     drivers = sorted(driver_map.keys())
+
     if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
         return
 
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
-    await reply_private(update, context, "Select driver:", InlineKeyboardMarkup(keyboard))
+    keyboard = [
+        [InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")]
+        for d in drivers
+    ]
+
+    await reply_private(
+        update,
+        context,
+        "Select driver:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
 async def mission_report_driver_callback(update, context):
     query = update.callback_query
@@ -5454,7 +5465,214 @@ async def mission_report_driver_callback(update, context):
         await context.bot.send_message(query.from_user.id, "❌ No mission records.")
         return
 
+    header, data = rows[0], rows[1:]
+
+    now = _now_dt()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month_start.month == 12:
+        month_end = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        month_end = month_start.replace(month=month_start.month + 1)
+
+    out_rows = []
+    no = 0
+
+    for r in data:
+        try:
+            if r[M_IDX_DRIVER].strip() != driver:
+                continue
+
+            sdt = datetime.fromisoformat(r[M_IDX_START])
+            edt = datetime.fromisoformat(r[M_IDX_END])
+
+            if not (month_start <= sdt < month_end):
+                continue
+
+            no += 1
+            dur = _mission_duration_days_calendar(sdt, edt)
+
+            frm = (r[M_IDX_FROM] or "").upper()
+            to = (r[M_IDX_TO] or "").upper()
+
+            if frm.startswith("SHV") and to.startswith("SHV"):
+                mtype = "PP mission"
+            elif frm.startswith("PP") and to.startswith("PP"):
+                mtype = "SHV mission"
+            else:
+                mtype = "SHV mission" if "SHV" in (frm + to) else "PP mission"
+
+            out_rows.append([
+                no,
+                driver,
+                r[M_IDX_PLATE],
+                r[M_IDX_START],
+                r[M_IDX_END],
+                dur,
+                mtype,
+            ])
+        except Exception:
+            continue
+
+    if not out_rows:
+        await context.bot.send_message(
+            query.from_user.id,
+            f"❌ No missions for {driver} in current month."
+        )
+        return
+
+    import io, csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "No.",
+        "Name",
+        "Plate",
+        "Start Date",
+        "End Date",
+        "Duration (days)",
+        "Mission Type",
+    ])
+    w.writerows(out_rows)
+
+    bio = io.BytesIO(buf.getvalue().encode("utf-8"))
+    bio.name = f"Mission_Report_{driver}_{month_start.strftime('%Y-%m')}.csv"
+
+    await context.bot.send_document(
+        query.from_user.id,
+        bio,
+        caption=f"Mission report for {driver} ({month_start.strftime('%Y-%m')})"
+    )
+
+# --- FORCE OVERRIDE REGISTRATION (LAST WINS) ---
+try:
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+    application.add_handler(
+        CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:")
+    )
+except Exception:
+    pass
+
+# --- Override reports menu text to avoid old usage hint ---
+async def _override_rep_mm(update, context):
+    await mission_report_entry(update, context)
+
+try:
+    application.add_handler(
+        CallbackQueryHandler(_override_rep_mm, pattern=r"^rep_mm$")
+    )
+except Exception:
+    pass
+
+# ===== END MISSION REPORT REBUILD =====
+
+
+# ===============================
+# V10 — FORCE CLEAR BOT COMMANDS
+# ===============================
+# This removes Telegram-side cached Usage like:
+# /mission_report month YYYY-MM
+
+from telegram import BotCommand
+
+async def _force_clear_bot_commands(app):
+    try:
+        await app.bot.set_my_commands([
+            BotCommand("mission_report", "Mission report (button mode)"),
+            BotCommand("ot_report", "OT report (button mode)"),
+            BotCommand("start", "Show menu"),
+        ])
+    except Exception:
+        pass
+
+try:
+    application.post_init = _force_clear_bot_commands
+except Exception:
+    pass
+
+# ===== END V10 BOTCOMMAND RESET =====
+
+
+# ===============================
+# V11 — HARD RESET BOT COMMANDS (ALL SCOPES)
+# ===============================
+
+from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats
+
+async def _hard_reset_bot_commands(app):
+    try:
+        # 1️⃣ Clear default scope
+        await app.bot.set_my_commands([], scope=BotCommandScopeDefault())
+        # 2️⃣ Clear private chat scope
+        await app.bot.set_my_commands([], scope=BotCommandScopeAllPrivateChats())
+        # 3️⃣ Re-register minimal clean commands
+        await app.bot.set_my_commands([
+            BotCommand("mission_report", "Mission report (button mode)"),
+            BotCommand("ot_report", "OT report (button mode)"),
+            BotCommand("start", "Show menu"),
+        ], scope=BotCommandScopeDefault())
+    except Exception:
+        pass
+
+try:
+    application.post_init = _hard_reset_bot_commands
+except Exception:
+    pass
+
+# ===== END V11 HARD RESET =====
+
+
+# ======================================================
+# V12 — MISSION REPORT (SIDECAR, BUTTON MODE, SAFE)
+# ======================================================
+# This module is ISOLATED.
+# - Does NOT modify or depend on old mission code
+# - Does NOT touch OT logic
+# - Button workflow mirrors /ot_report
+#
+# Usage:
+# /mission_report  -> driver buttons -> CSV (current natural month)
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CommandHandler, CallbackQueryHandler
+
+def _mr2_duration_days(start_dt, end_dt):
+    # Calendar days, inclusive
+    return (end_dt.date() - start_dt.date()).days + 1
+
+async def mission_report_btn_entry(update, context):
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(d, callback_data=f"MR2_DRIVER:{d}")]
+        for d in drivers
+    ]
+
+    await reply_private(
+        update,
+        context,
+        "Select driver:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def mission_report_btn_driver(update, context):
+    query = update.callback_query
+    await query.answer()
+
+    driver = query.data.split(":", 1)[1]
+
+    ws = open_worksheet(MISSIONS_TAB)
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        await context.bot.send_message(query.from_user.id, "❌ No mission data.")
+        return
+
     data = rows[1:]
+
     now = _now_dt()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     month_end = (
@@ -5465,18 +5683,24 @@ async def mission_report_driver_callback(update, context):
 
     out = []
     idx = 0
+
     for r in data:
         try:
             if r[M_IDX_DRIVER].strip() != driver:
                 continue
+
             sdt = datetime.fromisoformat(r[M_IDX_START])
             edt = datetime.fromisoformat(r[M_IDX_END])
+
             if not (month_start <= sdt < month_end):
                 continue
+
             idx += 1
-            dur = _mission_duration_days(sdt, edt)
+            dur = _mr2_duration_days(sdt, edt)
+
             frm = (r[M_IDX_FROM] or "").upper()
             to = (r[M_IDX_TO] or "").upper()
+
             if frm.startswith("SHV") and to.startswith("SHV"):
                 mtype = "PP mission"
             elif frm.startswith("PP") and to.startswith("PP"):
@@ -5485,32 +5709,45 @@ async def mission_report_driver_callback(update, context):
                 mtype = "SHV mission" if "SHV" in (frm + to) else "PP mission"
 
             out.append([
-                idx, driver, r[M_IDX_PLATE],
-                r[M_IDX_START], r[M_IDX_END],
-                dur, mtype
+                idx,
+                driver,
+                r[M_IDX_PLATE],
+                r[M_IDX_START],
+                r[M_IDX_END],
+                dur,
+                mtype,
             ])
         except Exception:
             continue
 
     if not out:
-        await context.bot.send_message(query.from_user.id, f"❌ No missions for {driver}.")
+        await context.bot.send_message(
+            query.from_user.id,
+            f"❌ No missions for {driver} in current month."
+        )
         return
 
     import io, csv
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["No.","Name","Plate","Start Date","End Date","Duration(days)","Mission Type"])
+    w.writerow([
+        "No.",
+        "Name",
+        "Plate",
+        "Start Date",
+        "End Date",
+        "Duration (days)",
+        "Mission Type",
+    ])
     w.writerows(out)
 
     bio = io.BytesIO(buf.getvalue().encode("utf-8"))
     bio.name = f"Mission_Report_{driver}_{month_start.strftime('%Y-%m')}.csv"
+
     await context.bot.send_document(query.from_user.id, bio)
 
-try:
-    pass
-application.add_handler(CommandHandler("mission_report", mission_report_entry))
-application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:"))
-except Exception:
-    pass
+# --- Register sidecar handlers (no try / no override) ---
+application.add_handler(CommandHandler("mission_report", mission_report_btn_entry))
+application.add_handler(CallbackQueryHandler(mission_report_btn_driver, pattern=r"^MR2_DRIVER:"))
 
-# ===== END MISSION REPORT V12 =====
+# ===== END V12 SIDECAR MISSION REPORT =====
