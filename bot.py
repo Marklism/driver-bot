@@ -3818,11 +3818,9 @@ def main():
             try:
                 # Build command list for Telegram API
                 cmds_payload = [
-                    {"command": "start", "description": "Show menu"},
-                    {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
+                    {"command": "menu", "description": "Open menu"},
+                    {"command": "ot_report", "description": "OT report"},
                     {"command": "leave", "description": "Request leave"},
-                    {"command": "finance", "description": "Add finance record"},
-                    {"command": "mission_end", "description": "End mission"},
                     {"command": "clock_in", "description": "Clock In"},
                     {"command": "clock_out", "description": "Clock Out"}
                 ]
