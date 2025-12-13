@@ -3443,7 +3443,7 @@ def register_ui_handlers(application):
 
     application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
  
-    application.add_handler(CallbackQueryHandler(plate_callback),block=False)
+    application.add_handler(CallbackQueryHandler(plate_callback))
     # Clock In/Out buttons handler
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
