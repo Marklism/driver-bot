@@ -664,7 +664,6 @@ try:
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("mission_report", mission_report_entry))
-    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
 except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
@@ -1372,13 +1371,12 @@ def _parse_ym(ym:str):
     except Exception:
         return None
 
-async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_monthly_report YYYY-MM username
     Window: YYYY-MM-16 04:00 -> next month 16 04:00
     """
     args = context.args
     if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /ot_monthly_report YYYY-MM username")
+        # legacy command removed (ot_monthly_report deprecated)
         return
     ym = args[0]
     username = args[1]
@@ -3657,7 +3655,6 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("mission_report", mission_report_entry))
-    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
     application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:"))
