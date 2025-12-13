@@ -1,3 +1,16 @@
+
+# === BEGIN: Language helpers (SAFE) ===
+def _get_lang(context):
+    try:
+        return context.user_data.get("lang", "en")
+    except Exception:
+        return "en"
+
+def _lang_header(lang, title_en, title_km):
+    if lang == "km":
+        return f"{title_km}\n"
+    return f"{title_en}\n"
+# === END: Language helpers ===
 # ===============================
 # DRIVER BOT — LTS FROZEN VERSION
 # ===============================
