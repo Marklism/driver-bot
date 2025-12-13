@@ -377,7 +377,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
     if not args:
-        await update.message.reply_privately(update, context, "Usage: /ot_report [username] YYYY-MM")
+        await context.bot.send_message(chat_id=update.effective_user.id,text="Usage: /ot_report [username] YYYY-MM")
         return
 
     if len(args) == 1:
