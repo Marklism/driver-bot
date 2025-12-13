@@ -1,4 +1,6 @@
-# === FINAL INTEGRATED VERSION (A_FINAL) ===
+
+# === DRIVER BUTTON SELECTION ENABLED ===
+# /ot_report now triggers driver selection via InlineKeyboard from Drivers sheet
 # === VERSION A: DRIVER BUTTON REPORTS & CSV SPECS APPLIED ===
 # ===============================
 # DRIVER BOT — LTS FROZEN VERSION
@@ -4947,10 +4949,3 @@ except Exception:
     pass
 
 # === END C FINAL SAFE ADDON ===
-# === FINAL FEATURES CONFIRMED ===
-# - Driver selection via Drivers sheet (InlineKeyboard)
-# - OT CSV export (16th 04:00 to next 16th 04:00)
-# - Mission Monthly Summary CSV (calendar month, duration in days)
-# - Language persisted per user
-# - Admin finance summary restricted to admins
-# NOTE: Logic implemented inline with existing handlers.
