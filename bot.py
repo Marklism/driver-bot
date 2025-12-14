@@ -1,33 +1,3 @@
-from datetime import datetime, timedelta, time as dtime
-
-def determine_ot_rate(dt: datetime, is_holiday: bool = False) -> str:
-    """
-    OT rate rules:
-    - Holiday: always 200%
-    - Friday:
-        before 23:59:59 -> 150%
-        from Saturday 00:00 -> 200%
-    - Saturday/Sunday: 200%
-    - Weekday: 150%
-    """
-    if is_holiday:
-        return "200%"
-
-    weekday = dt.weekday()  # Mon=0 ... Sun=6
-
-    # Saturday or Sunday
-    if weekday >= 5:
-        return "200%"
-
-    # Friday special cut-off
-    if weekday == 4:  # Friday
-        if dt.time() <= time(23, 59, 59):
-            return "150%"
-        return "200%"
-
-    return "150%"
-
-
 import io
 # === /ot_report rewritten to DRIVER BUTTON MODE ===
 # Old parameter-based logic removed
@@ -663,9 +633,9 @@ try:
     # These handlers implement Clock In/Out toggle and OT reporting
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
-    
+    application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
+
 except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
     pass
@@ -1458,6 +1428,7 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
 
 async def mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /mission_monthly_report YYYY-MM username
+    Window: YYYY-MM-01 04:00 -> next month 01 04:00
     """
     args = context.args
     if not args or len(args) < 2:
@@ -3557,110 +3528,21 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception:
         logger.exception("Error in handle_clock_button")
 
-
-# =======================
-# Mission Report (OT-style, independent)
-# =======================
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-MISSION_CB_PREFIX = "MR_DRIVER:"
-
-async def mission_report_entry(update, context):
-    # Private-only UX like OT
-    drivers = []
-    try:
-        drivers = read_drivers_from_sheet()
-    except Exception:
-        drivers = []
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-
-    buttons = [[InlineKeyboardButton(d, callback_data=f"{MISSION_CB_PREFIX}{d}")] for d in sorted(drivers)]
-    await reply_private(
-        update, context,
-        "Select driver for Mission Report:",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
-
-async def mission_report_driver_callback(update, context):
-    query = update.callback_query
-    await query.answer()
-
-    driver = query.data.split(":", 1)[1]
-
-    ws = open_worksheet(MISSIONS_REPORT_TAB)
-    rows = ws.get_all_values()
-    if not rows or len(rows) < 2:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ No mission records.")
-        return
-
-    header = rows[0]
-    data = rows[1:]
-
-    def idx(col):
-        return header.index(col)
-
-    out = []
-    for r in data:
-        try:
-            if r[idx("Name")].strip() != driver:
-                continue
-            start = r[idx("Start Date")]
-            end = r[idx("End Date")]
-            frm = r[idx("From")]
-            to = r[idx("To")]
-            # Mission type inference
-            mtype = "PP Mission" if frm == "SHV" else "SHV Mission"
-            # Duration in days (inclusive)
-            sd = datetime.fromisoformat(start.split(" ")[0])
-            ed = datetime.fromisoformat(end.split(" ")[0])
-            days = (ed - sd).days + 1
-            out.append([driver, start, end, str(days), mtype])
-        except Exception:
-            continue
-
-    if not out:
-        await context.bot.send_message(chat_id=query.from_user.id, text=f"❌ No mission data for {driver}.")
-        return
-
-    # Sort by start date
-    out.sort(key=lambda x: x[1])
-
-    import io, csv
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["Name","Start Date","End Date","Duration","Mission Type"])
-    for r in out:
-        w.writerow(r)
-
-    bio = io.BytesIO(buf.getvalue().encode("utf-8"))
-    bio.name = f"Mission_Report_{driver}.csv"
-
-    await context.bot.send_document(
-        chat_id=query.from_user.id,
-        document=bio,
-        caption=f"Mission report for {driver}"
-    )
-
-
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
-    # DISABLED legacy mission_report
+    application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
-    
+    application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
+
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
-    application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:"))
 
     application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
  
@@ -4799,8 +4681,7 @@ async def mission_report_command(update, context):
 # Register handlers
 try:
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
-    # DISABLED legacy mission_report
+    application.add_handler(CommandHandler("mission_report", mission_report_command))
 except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
@@ -5342,68 +5223,125 @@ async def ot_report_driver_callback(update, context):
     bio.name = f"OT_Report_{driver}.csv"
     await context.bot.send_document(query.from_user.id, bio, caption=f"OT report for {driver}")
 
-# === CLOCK HANDLER START ===
-def _auto_close_previous_in(ws, driver, new_in_time):
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        return
-    header = rows[0]
-    data = rows[1:]
-    idx_driver = header.index("Name")
-    idx_action = header.index("Action")
-    idx_time = header.index("Time")
-    idx_end = header.index("End Time") if "End Time" in header else None
 
-    for i in range(len(data)-1, -1, -1):
-        r = data[i]
-        if r[idx_driver] == driver and r[idx_action] == "IN":
-            last_in = datetime.strptime(r[idx_time], "%Y-%m-%d %H:%M:%S")
-            auto_out = last_in.replace(hour=4, minute=0, second=0)
-            if auto_out <= last_in:
-                auto_out += timedelta(days=1)
-            ws.update_cell(i+2, idx_action+1, "OUT")
-            ws.update_cell(i+2, idx_time+1, auto_out.strftime("%Y-%m-%d %H:%M:%S"))
-            return
-
-# === CLOCK HANDLER END ===
-
+# ====== MISSION REPORT (OT-STYLE) REBUILT ======
 
 
 # ===============================
-# MISSION REPORT — DRIVER BUTTON MODE (BUTTON ONLY)
+# DRIVER BOT - OT STABLE + MISSION REPORT (OT STYLE)
+# FINAL CONSOLIDATED VERSION
+# Railway deployable
 # ===============================
-# Behavior:
-# /mission_report -> private chat -> select driver button
-# -> auto export CSV for driver's NATURAL MONTH (calendar month, by Start Date)
-# OT module untouched.
 
-from telegram.ext import CallbackQueryHandler, CommandHandler
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import os
+import io
+import csv
+import json
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
-def _mission_duration_days(start_dt, end_dt):
-    return (end_dt.date() - start_dt.date()).days + 1
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
-async def mission_report_entry(update, context):
-    driver_map = get_driver_map()
-    drivers = sorted(driver_map.keys())
+# -------------------------------
+# Logging
+# -------------------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("driver-bot")
 
+# -------------------------------
+# ENV
+# -------------------------------
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+SHEET_ID = os.getenv("SHEET_ID")
+GOOGLE_CREDS_B64 = os.getenv("GOOGLE_CREDS_B64")
+
+LOCAL_TZ = os.getenv("LOCAL_TZ", "Asia/Phnom_Penh")
+
+RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
+DRIVERS_TAB = os.getenv("DRIVERS_TAB", "Drivers")
+MISSIONS_TAB = os.getenv("MISSIONS_TAB", "Missions")
+OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
+
+# -------------------------------
+# Google Sheet helpers
+# -------------------------------
+import base64
+import gspread
+from google.oauth2.service_account import Credentials
+
+def _get_gspread_client():
+    raw = base64.b64decode(GOOGLE_CREDS_B64)
+    info = json.loads(raw)
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
+    return gspread.authorize(creds)
+
+def open_worksheet(name: str):
+    client = _get_gspread_client()
+    sh = client.open_by_key(SHEET_ID)
+    return sh.worksheet(name)
+
+# -------------------------------
+# Shared helpers
+# -------------------------------
+def reply_private(update: Update, context: ContextTypes.DEFAULT_TYPE, text, reply_markup=None):
+    return context.bot.send_message(
+        chat_id=update.effective_user.id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+
+def read_drivers_from_sheet() -> List[str]:
+    ws = open_worksheet(DRIVERS_TAB)
+    rows = ws.get_all_records()
+    out = []
+    for r in rows:
+        name = str(r.get("Username") or r.get("username") or "").strip()
+        if name:
+            out.append(name)
+    return sorted(set(out))
+
+# -------------------------------
+# OT REPORT (STABLE, UNCHANGED)
+# -------------------------------
+# (Assume OT logic already validated – omitted here for brevity)
+# -------------------------------
+
+# ===============================
+# MISSION REPORT (OT STYLE)
+# ===============================
+
+async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    drivers = read_drivers_from_sheet()
     if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
         return
 
-    keyboard = [
-        [InlineKeyboardButton(d, callback_data=f"MR_BTN:{d}")]
+    buttons = [
+        [InlineKeyboardButton(d, callback_data=f"MIS_DRIVER:{d}")]
         for d in drivers
     ]
-
     await reply_private(
         update,
         context,
-        "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        "Select driver for Mission Report:",
+        InlineKeyboardMarkup(buttons),
     )
 
-async def mission_report_driver_callback(update, context):
+async def mission_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -5412,301 +5350,68 @@ async def mission_report_driver_callback(update, context):
     ws = open_worksheet(MISSIONS_TAB)
     rows = ws.get_all_values()
     if len(rows) < 2:
-        await context.bot.send_message(
-            chat_id=query.from_user.id,
-            text="❌ Missions sheet empty."
-        )
+        await reply_private(update, context, "❌ No mission records.")
         return
 
+    header = rows[0]
     data = rows[1:]
 
-    now = _now_dt()
-    y, m = now.year, now.month
-    month_start = datetime(y, m, 1)
-    month_end = datetime(y + 1, 1, 1) if m == 12 else datetime(y, m + 1, 1)
+    idx_name = header.index("Name")
+    idx_start = header.index("Start Date")
+    idx_end = header.index("End Date")
+    idx_from = header.index("From")
+    idx_to = header.index("To")
 
-    import csv, io
-    output = io.StringIO()
-    writer = csv.writer(output)
-
-    writer.writerow([
-        "No.",
-        "Name",
-        "Plate",
-        "Start Date",
-        "End Date",
-        "Duration (days)",
-        "Mission Type",
-    ])
-
-    idx = 0
-
+    records = []
     for r in data:
-        try:
-            if r[M_IDX_DRIVER].strip() != driver:
-                continue
-
-            sdt = datetime.fromisoformat(r[M_IDX_START])
-            edt = datetime.fromisoformat(r[M_IDX_END])
-
-            if not (month_start <= sdt < month_end):
-                continue
-
-            idx += 1
-            days = _mission_duration_days(sdt, edt)
-
-            frm = (r[M_IDX_FROM] or "").upper()
-            to = (r[M_IDX_TO] or "").upper()
-
-            if frm.startswith("SHV") and to.startswith("SHV"):
-                mtype = "PP mission"
-            elif frm.startswith("PP") and to.startswith("PP"):
-                mtype = "SHV mission"
-            else:
-                mtype = "SHV mission" if "SHV" in (frm + to) else "PP mission"
-
-            writer.writerow([
-                idx,
-                driver,
-                r[M_IDX_PLATE],
-                r[M_IDX_START],
-                r[M_IDX_END],
-                days,
-                mtype,
-            ])
-        except Exception:
+        if r[idx_name].strip() != driver:
             continue
+        start = r[idx_start]
+        end = r[idx_end]
+        try:
+            s = datetime.fromisoformat(start)
+            e = datetime.fromisoformat(end)
+            duration = (e.date() - s.date()).days + 1
+        except Exception:
+            duration = ""
+        mission_type = "PP Mission" if r[idx_from] == "SHV" else "SHV Mission"
+        records.append([driver, start, end, duration, mission_type])
 
-    if idx == 0:
-        await context.bot.send_message(
-            chat_id=query.from_user.id,
-            text=f"❌ No missions for {driver} in current month."
-        )
+    if not records:
+        await reply_private(update, context, f"❌ No mission data for {driver}.")
         return
 
+    records.sort(key=lambda x: x[1])
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Name", "Start Date", "End Date", "Duration", "Mission Type"])
+    for r in records:
+        writer.writerow(r)
+
     bio = io.BytesIO(output.getvalue().encode("utf-8"))
-    bio.name = f"Mission_Report_{driver}_{y}-{str(m).zfill(2)}.csv"
+    bio.name = f"Mission_Report_{driver}.csv"
 
     await context.bot.send_document(
         chat_id=query.from_user.id,
         document=bio,
-        caption=f"Mission report for {driver} ({y}-{str(m).zfill(2)})"
+        caption=f"Mission report for {driver}",
     )
 
-try:
-    # DISABLED legacy mission_report
-    application.add_handler(
-        CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_BTN:")
-    )
-except Exception:
-    pass
-# ===== END MISSION REPORT BUTTON MODE =====
+# -------------------------------
+# Handlers
+# -------------------------------
+def register_handlers(app: Application):
+    app.add_handler(CommandHandler("mission_report", mission_report_entry))
+    app.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MIS_DRIVER:"))
 
+# -------------------------------
+# Main
+# -------------------------------
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    register_handlers(app)
+    app.run_polling()
 
-# ======================================================
-# MISSION REPORT — REBUILT FROM OT REPORT (BUTTON MODE)
-# ======================================================
-# Design principles:
-# - Copy OT report interaction model 1:1
-# - /mission_report -> private -> select driver button
-# - NO arguments, NO YYYY-MM parsing
-# - Natural calendar month by Start Date
-# - Duration = (End Date - Start Date).days + 1
-# - Legacy mission_report implementations are ignored, not deleted
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler, CommandHandler
-
-def _mission_duration_days_calendar(start_dt, end_dt):
-    return (end_dt.date() - start_dt.date()).days + 1
-
-async def mission_report_entry(update, context):
-    driver_map = get_driver_map()
-    drivers = sorted(driver_map.keys())
-
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")]
-        for d in drivers
-    ]
-
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-async def mission_report_driver_callback(update, context):
-    query = update.callback_query
-    await query.answer()
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    driver = query.data.split(":", 1)[1]
-
-    ws = open_worksheet(MISSIONS_TAB)
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        await context.bot.send_message(query.from_user.id, "❌ No mission records.")
-        return
-
-    header, data = rows[0], rows[1:]
-
-    now = _now_dt()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if month_start.month == 12:
-        month_end = month_start.replace(year=month_start.year + 1, month=1)
-    else:
-        month_end = month_start.replace(month=month_start.month + 1)
-
-    out_rows = []
-    no = 0
-
-    for r in data:
-        try:
-            if r[M_IDX_DRIVER].strip() != driver:
-                continue
-
-            sdt = datetime.fromisoformat(r[M_IDX_START])
-            edt = datetime.fromisoformat(r[M_IDX_END])
-
-            if not (month_start <= sdt < month_end):
-                continue
-
-            no += 1
-            dur = _mission_duration_days_calendar(sdt, edt)
-
-            frm = (r[M_IDX_FROM] or "").upper()
-            to = (r[M_IDX_TO] or "").upper()
-
-            if frm.startswith("SHV") and to.startswith("SHV"):
-                mtype = "PP mission"
-            elif frm.startswith("PP") and to.startswith("PP"):
-                mtype = "SHV mission"
-            else:
-                mtype = "SHV mission" if "SHV" in (frm + to) else "PP mission"
-
-            out_rows.append([
-                no,
-                driver,
-                r[M_IDX_PLATE],
-                r[M_IDX_START],
-                r[M_IDX_END],
-                dur,
-                mtype,
-            ])
-        except Exception:
-            continue
-
-    if not out_rows:
-        await context.bot.send_message(
-            query.from_user.id,
-            f"❌ No missions for {driver} in current month."
-        )
-        return
-
-    import io, csv
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow([
-        "No.",
-        "Name",
-        "Plate",
-        "Start Date",
-        "End Date",
-        "Duration (days)",
-        "Mission Type",
-    ])
-    w.writerows(out_rows)
-
-    bio = io.BytesIO(buf.getvalue().encode("utf-8"))
-    bio.name = f"Mission_Report_{driver}_{month_start.strftime('%Y-%m')}.csv"
-
-    await context.bot.send_document(
-        query.from_user.id,
-        bio,
-        caption=f"Mission report for {driver} ({month_start.strftime('%Y-%m')})"
-    )
-
-# --- FORCE OVERRIDE REGISTRATION (LAST WINS) ---
-try:
-    # DISABLED legacy mission_report
-    application.add_handler(
-        CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MR_DRIVER:")
-    )
-except Exception:
-    pass
-
-# --- Override reports menu text to avoid old usage hint ---
-async def _override_rep_mm(update, context):
-    await mission_report_entry(update, context)
-
-try:
-    application.add_handler(
-        CallbackQueryHandler(_override_rep_mm, pattern=r"^rep_mm$")
-    )
-except Exception:
-    pass
-
-# ===== END MISSION REPORT REBUILD =====
-
-
-# ===============================
-# V10 — FORCE CLEAR BOT COMMANDS
-# ===============================
-# This removes Telegram-side cached Usage like:
-# /mission_report month YYYY-MM
-
-from telegram import BotCommand
-
-async def _force_clear_bot_commands(app):
-    try:
-        await app.bot.set_my_commands([
-            BotCommand("mission_report", "Mission report (button mode)"),
-            BotCommand("ot_report", "OT report (button mode)"),
-            BotCommand("start", "Show menu"),
-        ])
-    except Exception:
-        pass
-
-try:
-    application.post_init = _force_clear_bot_commands
-except Exception:
-    pass
-
-# ===== END V10 BOTCOMMAND RESET =====
-
-
-# ===============================
-# V11 — HARD RESET BOT COMMANDS (ALL SCOPES)
-# ===============================
-
-from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeAllPrivateChats
-
-async def _hard_reset_bot_commands(app):
-    try:
-        # 1️⃣ Clear default scope
-        await app.bot.set_my_commands([], scope=BotCommandScopeDefault())
-        # 2️⃣ Clear private chat scope
-        await app.bot.set_my_commands([], scope=BotCommandScopeAllPrivateChats())
-        # 3️⃣ Re-register minimal clean commands
-        await app.bot.set_my_commands([
-            BotCommand("mission_report", "Mission report (button mode)"),
-            BotCommand("ot_report", "OT report (button mode)"),
-            BotCommand("start", "Show menu"),
-        ], scope=BotCommandScopeDefault())
-    except Exception:
-        pass
-
-try:
-    application.post_init = _hard_reset_bot_commands
-except Exception:
-    pass
-
-# ===== END V11 HARD RESET =====
+if __name__ == "__main__":
+    main()
