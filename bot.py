@@ -1,3 +1,34 @@
+from datetime import datetime, timedelta, time as time
+
+
+def determine_ot_rate(dt: datetime, is_holiday: bool = False) -> str:
+    """
+    OT rate rules:
+    - Holiday: always 200%
+    - Friday:
+        before 23:59:59 -> 150%
+        from Saturday 00:00 -> 200%
+    - Saturday/Sunday: 200%
+    - Weekday: 150%
+    """
+    if is_holiday:
+        return "200%"
+
+    weekday = dt.weekday()  # Mon=0 ... Sun=6
+
+    # Saturday or Sunday
+    if weekday >= 5:
+        return "200%"
+
+    # Friday special cut-off
+    if weekday == 4:  # Friday
+        if dt.time() <= time(23, 59, 59):
+            return "150%"
+        return "200%"
+
+    return "150%"
+
+
 import io
 # === /ot_report rewritten to DRIVER BUTTON MODE ===
 # Old parameter-based logic removed
@@ -245,7 +276,6 @@ try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
-from datetime import datetime, timedelta, time as dtime
 
 from typing import Optional, Dict, List, Any
 
@@ -647,7 +677,6 @@ import base64
 import logging
 import uuid
 import re
-from datetime import datetime, timedelta, time as dtime
 from typing import Optional, Dict, List, Any
 import urllib.request
 
@@ -1378,7 +1407,6 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
     idx_evening = headers.index("Evening OT") if "Evening OT" in headers else None
     # collect
     entries = {}
-    from datetime import datetime as _dt
     for row in vals[1:]:
         try:
             name = row[idx_name].strip()
@@ -3563,10 +3591,6 @@ def register_ui_handlers(application):
                 BotCommand("start_trip", "Start a trip (select plate)"),
                 BotCommand("end_trip", "End a trip (select plate)"),
                 BotCommand("menu", "Open trip menu"),
-                BotCommand("mission", "Quick mission menu"),
-                BotCommand("mission_report", "Generate mission report: /mission_report month YYYY-MM"),
-                BotCommand("leave", "Record leave (admin)"),
-                BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
             ])
         except Exception:
             logger.exception("Failed to set bot commands.")
@@ -3828,7 +3852,6 @@ def save_mission_cycles_to_sheet(mission_cycles):
 
 
 # === BEGIN: OT Summary integration (added) ===
-from datetime import datetime
 
 def compute_window_for_time(now_dt: Optional[datetime] = None):
     """Compute OT window start/end.
@@ -4437,7 +4460,6 @@ for k, v in list(TR.get("en", {}).items()):
 # - Does not change any existing logic elsewhere.
 #
 import csv
-from datetime import datetime, timedelta, time as dtime
 
 def _parse_date_guess(val):
     if not val:
@@ -5126,7 +5148,6 @@ application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=
 # OT REPORT PATCH V7
 # ======================
 import io, csv
-from datetime import timedelta
 
 def _calc_hours(row, idx_morning, idx_evening, idx_start, idx_end):
     try:
@@ -5223,195 +5244,83 @@ async def ot_report_driver_callback(update, context):
     bio.name = f"OT_Report_{driver}.csv"
     await context.bot.send_document(query.from_user.id, bio, caption=f"OT report for {driver}")
 
+# === CLOCK HANDLER START ===
+def _auto_close_previous_in(ws, driver, new_in_time):
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        return
+    header = rows[0]
+    data = rows[1:]
+    idx_driver = header.index("Name")
+    idx_action = header.index("Action")
+    idx_time = header.index("Time")
+    idx_end = header.index("End Time") if "End Time" in header else None
 
-# ====== MISSION REPORT (OT-STYLE) REBUILT ======
+    for i in range(len(data)-1, -1, -1):
+        r = data[i]
+        if r[idx_driver] == driver and r[idx_action] == "IN":
+            last_in = datetime.strptime(r[idx_time], "%Y-%m-%d %H:%M:%S")
+            auto_out = last_in.replace(hour=4, minute=0, second=0)
+            if auto_out <= last_in:
+                auto_out += timedelta(days=1)
+            ws.update_cell(i+2, idx_action+1, "OUT")
+            ws.update_cell(i+2, idx_time+1, auto_out.strftime("%Y-%m-%d %H:%M:%S"))
+            return
+
+# === CLOCK HANDLER END ===
 
 
-# ===============================
-# DRIVER BOT - OT STABLE + MISSION REPORT (OT STYLE)
-# FINAL CONSOLIDATED VERSION
-# Railway deployable
-# ===============================
+# =========================
+# MISSION REPORT (OT-STYLE)
+# =========================
+import io, csv
 
-import os
-import io
-import csv
-import json
-import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
-
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-
-# -------------------------------
-# Logging
-# -------------------------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("driver-bot")
-
-# -------------------------------
-# ENV
-# -------------------------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-SHEET_ID = os.getenv("SHEET_ID")
-GOOGLE_CREDS_B64 = os.getenv("GOOGLE_CREDS_B64")
-
-LOCAL_TZ = os.getenv("LOCAL_TZ", "Asia/Phnom_Penh")
-
-RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
-DRIVERS_TAB = os.getenv("DRIVERS_TAB", "Drivers")
-MISSIONS_TAB = os.getenv("MISSIONS_TAB", "Missions")
-OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
-
-# -------------------------------
-# Google Sheet helpers
-# -------------------------------
-import base64
-import gspread
-from google.oauth2.service_account import Credentials
-
-def _get_gspread_client():
-    raw = base64.b64decode(GOOGLE_CREDS_B64)
-    info = json.loads(raw)
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    return gspread.authorize(creds)
-
-def open_worksheet(name: str):
-    client = _get_gspread_client()
-    sh = client.open_by_key(SHEET_ID)
-    return sh.worksheet(name)
-
-# -------------------------------
-# Shared helpers
-# -------------------------------
-def reply_private(update: Update, context: ContextTypes.DEFAULT_TYPE, text, reply_markup=None):
-    return context.bot.send_message(
-        chat_id=update.effective_user.id,
-        text=text,
-        reply_markup=reply_markup,
-    )
-
-def read_drivers_from_sheet() -> List[str]:
-    ws = open_worksheet(DRIVERS_TAB)
-    rows = ws.get_all_records()
-    out = []
-    for r in rows:
-        name = str(r.get("Username") or r.get("username") or "").strip()
-        if name:
-            out.append(name)
-    return sorted(set(out))
-
-# -------------------------------
-# OT REPORT (STABLE, UNCHANGED)
-# -------------------------------
-# (Assume OT logic already validated – omitted here for brevity)
-# -------------------------------
-
-# ===============================
-# MISSION REPORT (OT STYLE)
-# ===============================
-
-async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    drivers = read_drivers_from_sheet()
+async def mission_report_entry(update, context):
+    drivers = []
+    try:
+        drivers = list(get_driver_map().keys())
+    except Exception:
+        drivers = []
     if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
         return
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    buttons = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
+    await reply_private(update, context, "Select driver for Mission Report:", InlineKeyboardMarkup(buttons))
 
-    buttons = [
-        [InlineKeyboardButton(d, callback_data=f"MIS_DRIVER:{d}")]
-        for d in drivers
-    ]
-    await reply_private(
-        update,
-        context,
-        "Select driver for Mission Report:",
-        InlineKeyboardMarkup(buttons),
-    )
-
-async def mission_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    driver = query.data.split(":", 1)[1]
-
+async def mission_report_driver_callback(update, context):
+    q = update.callback_query
+    await q.answer()
+    driver = q.data.split(":",1)[1]
     ws = open_worksheet(MISSIONS_TAB)
     rows = ws.get_all_values()
     if len(rows) < 2:
-        await reply_private(update, context, "❌ No mission records.")
+        await context.bot.send_message(chat_id=q.from_user.id, text="❌ No mission data.")
         return
-
     header = rows[0]
     data = rows[1:]
-
-    idx_name = header.index("Name")
-    idx_start = header.index("Start Date")
-    idx_end = header.index("End Date")
-    idx_from = header.index("From")
-    idx_to = header.index("To")
-
-    records = []
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["Name","Start Date","End Date","Duration(days)","Mission Type"])
     for r in data:
-        if r[idx_name].strip() != driver:
-            continue
-        start = r[idx_start]
-        end = r[idx_end]
         try:
-            s = datetime.fromisoformat(start)
-            e = datetime.fromisoformat(end)
-            duration = (e.date() - s.date()).days + 1
+            if r[header.index("Name")] != driver:
+                continue
+            sd = r[header.index("Start Date")]
+            ed = r[header.index("End Date")]
+            mt = r[header.index("Mission Type")]
+            if sd and ed:
+                from datetime import datetime
+                d1 = datetime.fromisoformat(sd.split()[0])
+                d2 = datetime.fromisoformat(ed.split()[0])
+                dur = (d2 - d1).days + 1
+            else:
+                dur = ""
+            w.writerow([driver, sd, ed, dur, mt])
         except Exception:
-            duration = ""
-        mission_type = "PP Mission" if r[idx_from] == "SHV" else "SHV Mission"
-        records.append([driver, start, end, duration, mission_type])
-
-    if not records:
-        await reply_private(update, context, f"❌ No mission data for {driver}.")
-        return
-
-    records.sort(key=lambda x: x[1])
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Name", "Start Date", "End Date", "Duration", "Mission Type"])
-    for r in records:
-        writer.writerow(r)
-
-    bio = io.BytesIO(output.getvalue().encode("utf-8"))
+            continue
+    out.seek(0)
+    bio = io.BytesIO(out.getvalue().encode())
     bio.name = f"Mission_Report_{driver}.csv"
+    await context.bot.send_document(chat_id=q.from_user.id, document=bio)
 
-    await context.bot.send_document(
-        chat_id=query.from_user.id,
-        document=bio,
-        caption=f"Mission report for {driver}",
-    )
-
-# -------------------------------
-# Handlers
-# -------------------------------
-def register_handlers(app: Application):
-    app.add_handler(CommandHandler("mission_report", mission_report_entry))
-    app.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern=r"^MIS_DRIVER:"))
-
-# -------------------------------
-# Main
-# -------------------------------
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    register_handlers(app)
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
