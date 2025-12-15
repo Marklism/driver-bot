@@ -2987,7 +2987,7 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 pass
 
-       except Exception:
+        except Exception:
             pass
     else:
         pass
