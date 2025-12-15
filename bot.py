@@ -2976,12 +2976,21 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 end = datetime(dt.year + 1, 1, 1)
             else:
                 end = datetime(dt.year, dt.month + 1, 1)
+
             rows = mission_rows_for_period(start, end)
             counts = count_roundtrips_per_driver_month(start, end)
+
+            # TODO: legacy logic removed, keep placeholder
+            ok = False
             if ok:
+                pass
             else:
-        except Exception:
+                pass
+
+       except Exception:
+            pass
     else:
+        pass
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
