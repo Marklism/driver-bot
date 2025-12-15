@@ -3099,7 +3099,9 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
             rows = mission_rows_for_period(prev_month_start, prev_month_end)
             counts = count_roundtrips_per_driver_month(prev_month_start, prev_month_end)
             if ok:
+                pass
         except Exception:
+            pass
 
 def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]:
     totals: Dict[str, int] = {}
