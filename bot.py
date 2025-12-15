@@ -574,87 +574,6 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         # Fallback: ignore edit errors
         pass
-async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /ot_report [driver] YYYY-MM """
-    args = context.args
-    if not args:
-        await context.bot.send_message(chat_id=update.effective_user.id,text="")
-        return
-
-    if len(args) == 1:
-        driver = update.effective_user.username
-        ym = args[0]
-    else:
-        driver = args[0]
-        ym = args[1]
-
-    try:
-        year, month = map(int, ym.split("-"))
-        month_start = datetime(year, month, 1)
-        if month == 12:
-            month_end = datetime(year + 1, 1, 1)
-        else:
-            month_end = datetime(year, month + 1, 1)
-    except Exception:
-        await update.message.reply_text("Invalid month format. Use YYYY-MM.")
-        return
-
-    ws = open_worksheet(OT_TAB)
-    vals = ws.get_all_values()
-    if len(vals) <= 1:
-        await update.message.reply_text("No OT records.")
-        return
-
-    records = []
-    for row in vals[1:]:
-        if len(row) < 4:
-            continue
-        d = row[O_IDX_DATE]
-        r_driver = row[O_IDX_DRIVER]
-        ts = row[O_IDX_TIME]
-        if r_driver != driver:
-            continue
-        try:
-            dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            continue
-        if month_start <= dt < month_end:
-            records.append((dt, row))
-
-    if not records:
-        await update.message.reply_text(f"No OT for {driver} in {ym}.")
-        return
-
-    records.sort(key=lambda x: x[0])
-
-    shifts = []
-    pending_start = None
-
-    for dt, row in records:
-        action = row[O_IDX_ACTION]
-        if action == "IN":
-            pending_start = dt
-        elif action == "OUT":
-            if pending_start:
-                shifts.append((pending_start, dt))
-                pending_start = None
-
-    if pending_start:
-        shifts.append((pending_start, month_end))
-
-    total_ot = 0.0
-    detail_lines = []
-
-    for st, ed in shifts:
-        ot = compute_ot_for_shift(st, ed)
-        total_ot += ot
-        detail_lines.append(f"{st} → {ed}: {ot}h")
-
-    result = f"OT Report for {driver} ({ym}):\n"
-    result += "\n".join(detail_lines)
-    result += f"\n\nTotal OT: **{round(total_ot, 2)} hours**"
-
-    await update.message.reply_text(result)
 # ---------------------------------------------------------
 # Driver / Mission / Leave / Finance Helpers
 
@@ -663,8 +582,6 @@ try:
     # These handlers implement Clock In/Out toggle and OT reporting
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
-    application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
 
 except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
@@ -751,7 +668,6 @@ RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
 DRIVERS_TAB = os.getenv("DRIVERS_TAB", "Drivers")
 SUMMARY_TAB = os.getenv("SUMMARY_TAB", "Summary")
 MISSIONS_TAB = os.getenv("MISSIONS_TAB", "Missions")
-MISSIONS_REPORT_TAB = os.getenv("MISSIONS_REPORT_TAB", "Missions_Report")
 LEAVE_TAB = os.getenv("LEAVE_TAB", "Driver_Leave")
 
 # OT tab name (created if missing)
@@ -1126,7 +1042,6 @@ SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/a
 HEADERS_BY_TAB: Dict[str, List[str]] = {
     RECORDS_TAB: ["Date", "Driver", "Plate", "Start DateTime", "End DateTime", "Duration"],
     MISSIONS_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
-    MISSIONS_REPORT_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
     SUMMARY_TAB: ["Date", "PeriodType", "TotalsJSON", "HumanSummary"],
     DRIVERS_TAB: ["Username", "Plates"],
     LEAVE_TAB: ["Driver", "Start Date", "End Date", "Leave Days", "Reason", "Notes"],
@@ -1165,7 +1080,7 @@ TR = {
         "invalid_amount": "Invalid amount — please send a numeric value like `23.5`.",
         "invalid_odo": "Invalid odometer — please send numeric KM like `12345` or `12345KM`.",
         "confirm_recorded": "{typ} recorded for {plate}: {amount}",
-        "leave_prompt": "Reply to this message: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]\nExample: markpeng1 2025-12-01 2025-12-05 annual_leave",
+        "leave_prompt": "Reply to this message: <driver_username> <-DD> <-DD> <reason> [notes]\nExample: markpeng1 2025-12-01 2025-12-05 annual_leave",
         "leave_confirm": "Leave recorded for {driver}: {start} to {end} ({reason})",
         "enter_odo_km": "Enter odometer reading (KM) for {plate}:",
         "enter_fuel_cost": "Enter fuel cost in $ for {plate}: (optionally add `inv:INV123 paid:yes`)",
@@ -1191,7 +1106,7 @@ TR = {
         "invalid_amount": "ចំនួនមិនត្រឹមត្រូវ — សូមផ្ញើលេខដូចជា `23.5`។",
         "invalid_odo": "Odometer មិនត្រឹមត្រូវ — សូមផ្ញើលេខ KM ដូចជា `12345` ឬ `12345KM`។",
         "confirm_recorded": "{typ} ត្រូវបានកត់ត្រាសម្រាប់ {plate}: {amount}",
-        "leave_prompt": "ឆ្លើយតបទៅសារ​នេះ៖ <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <មូលហេតុ> [កំណត់សំគាល់]\nឧទាហរណ៍: markpeng1 2025-12-01 2025-12-05 annual_leave",
+        "leave_prompt": "ឆ្លើយតបទៅសារ​នេះ៖ <driver_username> <-DD> <-DD> <មូលហេតុ> [កំណត់សំគាល់]\nឧទាហរណ៍: markpeng1 2025-12-01 2025-12-05 annual_leave",
         "leave_confirm": "ការសុំច្បាប់ត្រូវបានកត់ត្រាសម្រាប់ {driver}: {start} ដល់ {end} ({reason})",
         "enter_odo_km": "សូមបញ្ចូល Odometer (KM) សម្រាប់ {plate}:",
         "enter_fuel_cost": "សូមបញ្ចូលថ្លៃប្រេង (USD) សម្រាប់ {plate}: (អាចបញ្ចូល `inv:INV123 paid:yes`)",
@@ -1357,188 +1272,6 @@ def open_worksheet(tab: str = ""):
 
 
 
-# === BEGIN: Monthly OT and Mission Reports ===
-def _add_months(year:int, month:int, months:int):
-    y = year + (month - 1 + months) // 12
-    m = (month - 1 + months) % 12 + 1
-    return y, m
-
-def _parse_ym(ym:str):
-    try:
-        parts = ym.split("-")
-        y = int(parts[0]); m = int(parts[1])
-        return y,m
-    except Exception:
-        return None
-
-async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /ot_monthly_report YYYY-MM username
-    Window: YYYY-MM-16 04:00 -> next month 16 04:00
-    """
-    args = context.args
-    if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /ot_monthly_report YYYY-MM username")
-        return
-    ym = args[0]
-    username = args[1]
-    ym_parsed = _parse_ym(ym)
-    if not ym_parsed:
-        await update.effective_chat.send_message("Invalid YYYY-MM")
-        return
-    y,m = ym_parsed
-    start_dt = datetime.datetime(y,m,16,4,0)
-    ny, nm = _add_months(y,m,1)
-    end_dt = datetime.datetime(ny,nm,16,4,0)
-    try:
-        ws = open_worksheet(OT_RECORD_TAB)
-        vals = ws.get_all_values()
-    except Exception:
-        await update.effective_chat.send_message("Failed to open OT records sheet.")
-        return
-    if not vals or len(vals) < 2:
-        await update.effective_chat.send_message("No OT records.")
-        return
-    headers = vals[0]
-    # map headers
-    idx_name = headers.index("Name") if "Name" in headers else 0
-    idx_type = headers.index("Type") if "Type" in headers else 1
-    idx_start = headers.index("Start Date") if "Start Date" in headers else 2
-    idx_morning = headers.index("Morning OT") if "Morning OT" in headers else None
-    idx_evening = headers.index("Evening OT") if "Evening OT" in headers else None
-    # collect
-    entries = {}
-    for row in vals[1:]:
-        try:
-            name = row[idx_name].strip()
-            if name != username:
-                continue
-            typ = row[idx_type].strip()
-            start_raw = row[idx_start].strip() if len(row) > idx_start else ""
-            sd = None
-            try:
-                sd = datetime.datetime.strptime(start_raw, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                try:
-                    sd = datetime.datetime.strptime(start_raw, "%Y-%m-%d")
-                except Exception:
-                    continue
-            if not (start_dt <= sd < end_dt):
-                continue
-            h = 0.0
-            if idx_morning is not None and len(row) > idx_morning:
-                try: h += float(row[idx_morning] or 0)
-                except: pass
-            if idx_evening is not None and len(row) > idx_evening:
-                try: h += float(row[idx_evening] or 0)
-                except: pass
-            entries.setdefault((name,typ), []).append((sd, h))
-        except Exception:
-            continue
-    if not entries:
-        await update.effective_chat.send_message("No OT records in window for user.")
-        return
-    # format message
-    lines=[]
-    for (name,typ), recs in entries.items():
-        recs.sort(key=lambda x: x[0])
-        date_parts = "; ".join([f"{r[0].strftime('%Y-%m-%d %H:%M:%S')} ({r[1]:.2f}h)" for r in recs])
-        total = sum(r[1] for r in recs)
-        lines.append(f"{name}, {typ}, {date_parts}, Total: {total:.2f}h")
-    text = "\n".join(lines)
-    # send as file if too long
-    if len(text) > 4000:
-        bio = io.BytesIO(text.encode("utf-8"))
-        bio.name = f"ot_report_{ym}_{username}.txt"
-        bio.seek(0)
-        await update.effective_chat.send_document(bio)
-    else:
-        await update.effective_chat.send_message(text)
-
-async def mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /mission_monthly_report YYYY-MM username
-    Window: YYYY-MM-01 04:00 -> next month 01 04:00
-    """
-    args = context.args
-    if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_monthly_report YYYY-MM username")
-        return
-    ym = args[0]; username = args[1]
-    ym_parsed = _parse_ym(ym)
-    if not ym_parsed:
-        await update.effective_chat.send_message("Invalid YYYY-MM")
-        return
-    y,m = ym_parsed
-    start_dt = datetime.datetime(y,m,1,4,0)
-    ny,nm = _add_months(y,m,1)
-    end_dt = datetime.datetime(ny,nm,1,4,0)
-    try:
-        ws = open_worksheet(MISSIONS_TAB)
-        vals = ws.get_all_values()
-    except Exception:
-        await update.effective_chat.send_message("Failed to open MISSIONS sheet.")
-        return
-    if not vals or len(vals) < 2:
-        await update.effective_chat.send_message("No mission records.")
-        return
-    headers = vals[0]
-    # use M_IDX_* constants if present else fallback mapping
-    entries=[]
-    for row in vals[1:]:
-        try:
-            rdriver = str(row[M_IDX_DRIVER]).strip() if len(row)>M_IDX_DRIVER else ""
-            if rdriver != username:
-                continue
-            sraw = row[M_IDX_START].strip() if len(row)>M_IDX_START else ""
-            eraw = row[M_IDX_END].strip() if len(row)>M_IDX_END else ""
-            sdt=None; edt=None
-            try:
-                sdt = datetime.datetime.strptime(sraw, "%Y-%m-%d %H:%M:%S")
-            except:
-                try:
-                    sdt = datetime.datetime.strptime(sraw, "%Y-%m-%d")
-                except:
-                    continue
-            try:
-                edt = datetime.datetime.strptime(eraw, "%Y-%m-%d %H:%M:%S")
-            except:
-                try:
-                    edt = datetime.datetime.strptime(eraw, "%Y-%m-%d")
-                except:
-                    continue
-            if not (start_dt <= sdt < end_dt):
-                continue
-            days = (edt.date() - sdt.date()).days + 1
-            # description infer
-            frm = str(row[M_IDX_FROM]).strip().upper() if len(row)>M_IDX_FROM else ""
-            to = str(row[M_IDX_TO]).strip().upper() if len(row)>M_IDX_TO else ""
-            desc = "Unknown"
-            if frm.startswith("PP") and to.startswith("PP"):
-                # PP-...-PP -> SHV mission
-                desc = "SHV mission"
-            elif frm.startswith("SHV") and to.startswith("SHV"):
-                desc = "PP mission"
-            else:
-                # try to infer from route fields
-                if "SHV" in frm or "SHV" in to:
-                    desc = "SHV mission"
-                elif "PP" in frm or "PP" in to:
-                    desc = "PP mission"
-            entries.append((rdriver, sdt.date().isoformat(), edt.date().isoformat(), days, desc))
-        except Exception:
-            continue
-    if not entries:
-        await update.effective_chat.send_message("No missions in window for user.")
-        return
-    # format CSV lines
-    lines = ["Name, Mission Start Date, Mission End Date, Duration(day), Description"]
-    for e in entries:
-        lines.append(f"{e[0]}, {e[1]}, {e[2]}, {e[3]}, {e[4]}")
-    text = "\n".join(lines)
-    bio = io.BytesIO(text.encode("utf-8"))
-    bio.name = f"mission_report_{ym}_{username}.csv"
-    bio.seek(0)
-    await update.effective_chat.send_document(bio)
-# === END: Monthly OT and Mission Reports ===
 
 
 
@@ -1964,127 +1697,6 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
         logger.exception("Failed to update mission end: %s", e)
         return {"ok": False, "message": "Failed to write mission end to sheet: " + str(e)}
 
-def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
-    ws = open_worksheet(MISSIONS_TAB)
-    out = []
-    try:
-        vals, start_idx = _missions_get_values_and_data_rows(ws)
-        for r in vals[start_idx:]:
-            r = _ensure_row_length(r, M_MANDATORY_COLS)
-            start = str(r[M_IDX_START]).strip()
-            if not start:
-                continue
-            s_dt = parse_ts(start)
-            if not s_dt:
-                continue
-            if start_date <= s_dt < end_date:
-                out.append([r[M_IDX_GUID], r[M_IDX_NO], r[M_IDX_NAME], r[M_IDX_PLATE], r[M_IDX_START], r[M_IDX_END], r[M_IDX_DEPART], r[M_IDX_ARRIVAL], r[M_IDX_STAFF], r[M_IDX_ROUNDTRIP], r[M_IDX_RETURN_START], r[M_IDX_RETURN_END]])
-        return out
-    except Exception:
-        logger.exception("Failed to fetch mission rows")
-        return []
-
-def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
-    try:
-        ws = open_worksheet(MISSIONS_REPORT_TAB)
-        ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
-        ws.append_row(HEADERS_BY_TAB.get(MISSIONS_REPORT_TAB, []), value_input_option="USER_ENTERED")
-        for r in rows:
-            r = _ensure_row_length(r, M_MANDATORY_COLS)
-            ws.append_row(r, value_input_option="USER_ENTERED")
-        rt_counts: Dict[str, int] = {}
-        for r in rows:
-            name = r[2] if len(r) > 2 else ""
-            roundtrip = str(r[9]).strip().lower() if len(r) > 9 else ""
-            if name and roundtrip == "yes":
-                rt_counts[name] = rt_counts.get(name, 0) + 1
-        ws.append_row(["Roundtrip Summary by Driver:"], value_input_option="USER_ENTERED")
-        if rt_counts:
-            ws.append_row(["Driver", "Roundtrip Count"], value_input_option="USER_ENTERED")
-            for driver, cnt in sorted(rt_counts.items(), key=lambda x: (-x[1], x[0])):
-                ws.append_row([driver, cnt], value_input_option="USER_ENTERED")
-        else:
-            ws.append_row(["No roundtrips found in this period."], value_input_option="USER_ENTERED")
-        return True
-    except Exception:
-        logger.exception("Failed to write mission report to sheet.")
-        return False
-
-def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
-    try:
-        ws = open_worksheet(MISSIONS_TAB)
-        vals, start_idx = _missions_get_values_and_data_rows(ws)
-        for r in vals[start_idx:]:
-            r = _ensure_row_length(r, M_MANDATORY_COLS)
-            start = str(r[M_IDX_START]).strip()
-            if not start:
-                continue
-            s_dt = parse_ts(start)
-            if not s_dt or not (start_date <= s_dt < end_date):
-                continue
-            rt = str(r[M_IDX_ROUNDTRIP]).strip().lower()
-            if rt != "yes":
-                continue
-            name = str(r[M_IDX_NAME]).strip() or "Unknown"
-            counts[name] = counts.get(name, 0) + 1
-    except Exception:
-        logger.exception("Failed to count roundtrips per driver")
-    return counts
-
-def count_trips_for_day(driver: str, date_dt: datetime) -> int:
-    cnt = 0
-    try:
-        ws = open_worksheet(RECORDS_TAB)
-        vals = ws.get_all_values()
-        if not vals:
-            return 0
-        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
-        for r in vals[start_idx:]:
-            if len(r) < COL_START:
-                continue
-            dr = r[1] if len(r) > 1 else ""
-            start_ts = r[3] if len(r) > 3 else ""
-            end_ts = r[4] if len(r) > 4 else ""
-            if dr != driver:
-                continue
-            if not start_ts or not end_ts:
-                continue
-            s_dt = parse_ts(start_ts)
-            if not s_dt:
-                continue
-            if s_dt.date() == date_dt.date():
-                cnt += 1
-    except Exception:
-        logger.exception("Failed to count trips for day")
-    return cnt
-
-def count_trips_for_month(driver: str, month_start: datetime, month_end: datetime) -> int:
-    cnt = 0
-    try:
-        ws = open_worksheet(RECORDS_TAB)
-        vals = ws.get_all_values()
-        if not vals:
-            return 0
-        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
-        for r in vals[start_idx:]:
-            if len(r) < COL_START:
-                continue
-            dr = r[1] if len(r) > 1 else ""
-            start_ts = r[3] if len(r) > 3 else ""
-            end_ts = r[4] if len(r) > 4 else ""
-            if dr != driver:
-                continue
-            if not start_ts or not end_ts:
-                continue
-            s_dt = parse_ts(start_ts)
-            if not s_dt:
-                continue
-            if month_start <= s_dt < month_end:
-                cnt += 1
-    except Exception:
-        logger.exception("Failed to count trips for month")
-    return cnt
 
 AMOUNT_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*$', re.I)
 ODO_RE = re.compile(r'^\s*(\d+)(?:\s*km)?\s*$', re.I)
@@ -2594,7 +2206,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 pass
             try:
-                await context.bot.send_message(chat_id=user.id, text="Invalid leave format. Please send: <driver> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
+                await context.bot.send_message(chat_id=user.id, text="Invalid leave format. Please send: <driver> <-DD> <-DD> <reason> [notes]")
             except Exception:
                 pass
             try:
@@ -2617,7 +2229,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 pass
             try:
-                await context.bot.send_message(chat_id=user.id, text="Invalid dates. Use YYYY-MM-DD.")
+                await context.bot.send_message(chat_id=user.id, text="Invalid dates. Use -DD.")
             except Exception:
                 pass
             try:
@@ -2776,7 +2388,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 pass
             try:
-                await context.bot.send_message(chat_id=user.id, text="Invalid dates. Use YYYY-MM-DD.")
+                await context.bot.send_message(chat_id=user.id, text="Invalid dates. Use -DD.")
             except Exception:
                 pass
             try:
@@ -2969,7 +2581,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             context.user_data["pending_leave"] = {"prompt_chat": q.message.chat.id, "prompt_msg_id": q.message.message_id, "origin": {"chat": q.message.chat.id, "msg_id": q.message.message_id}}
             try:
-                await q.edit_message_text("Leave entry pending. Please reply in chat with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
+                await q.edit_message_text("Leave entry pending. Please reply in chat with: <driver_username> <-DD> <-DD> <reason> [notes]")
             except Exception:
                 pass
         except Exception:
@@ -3346,7 +2958,6 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_privately(update, context, "Language set to English.")
     else:
         await reply_privately(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
-async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -3354,7 +2965,6 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
         pass
     args = context.args
     if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
         return
     mode = args[0].lower()
     if mode == "month":
@@ -3367,16 +2977,11 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
             else:
                 end = datetime(dt.year, dt.month + 1, 1)
             rows = mission_rows_for_period(start, end)
-            ok = write_mission_report_rows(rows, period_label=start.strftime("%Y-%m"))
             counts = count_roundtrips_per_driver_month(start, end)
             if ok:
-                await update.effective_chat.send_message(f"Monthly mission report for {start.strftime('%Y-%m')} created.")
             else:
-                await update.effective_chat.send_message("❌ Failed to write mission report.")
         except Exception:
-            await update.effective_chat.send_message("Invalid command. Usage: /mission_report month YYYY-MM")
     else:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -3483,12 +3088,9 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
             prev_month_end = first_of_this_month
             prev_month_start = (first_of_this_month - timedelta(days=1)).replace(day=1)
             rows = mission_rows_for_period(prev_month_start, prev_month_end)
-            ok = write_mission_report_rows(rows, period_label=prev_month_start.strftime("%Y-%m"))
             counts = count_roundtrips_per_driver_month(prev_month_start, prev_month_end)
             if ok:
-                await context.bot.send_message(chat_id=chat_id, text=f"Auto-generated mission report for {prev_month_start.strftime('%Y-%m')}.")
         except Exception:
-            logger.exception("Failed to auto-generate monthly mission report on day 1.")
 
 def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]:
     totals: Dict[str, int] = {}
@@ -3562,13 +3164,10 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("setup_menu", setup_menu_command))
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
-    application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
 
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
 
@@ -3699,7 +3298,6 @@ def _report_entry_self_check(application):
         expected = [
             "ot_report",
             "ot_monthly_report",
-            "mission_monthly_report",
         ]
         for c in expected:
             if c in cmds:
@@ -3723,10 +3321,8 @@ def main():
                 # Build command list for Telegram API
                 cmds_payload = [
                     {"command": "start", "description": "Show menu"},
-                    {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
+                    {"command": "ot_report", "description": "OT report: /ot_report [username] "},
                     {"command": "leave", "description": "Request leave"},
-                    {"command": "finance", "description": "Add finance record"},
-                    {"command": "mission_end", "description": "End mission"},
                     {"command": "clock_in", "description": "Clock In"},
                     {"command": "clock_out", "description": "Clock Out"}
                 ]
@@ -4442,274 +4038,14 @@ for k, v in list(TR.get("en", {}).items()):
 
 # === END: MULTILANG EXTENSION ===
 
-
-
-
-# === BEGIN: OT & MISSION REPORTS EXTENSION (ADDED) ===
-# Adds commands:
-#   /ot_report   - generate per-driver OT reports for the most recently completed 16th->16th period
-#   /mission_report - generate per-driver Mission reports for the most recently completed 1st->1st period
-#
-# Behavior assumptions (non-invasive):
-# - Reads Google Sheets worksheets named "OT" and "Mission" respectively.
-# - Expected columns (case-insensitive):
-#   OT sheet: username, name, date, hours, ot_type (ot_type values expected like "150%" or "200%")
-#   Mission sheet: username, name, mission_start, mission_end, description (optional)
-# - If sheets or columns are not found, handlers will reply with an explanatory message and not modify other logic.
-# - Generates CSV files per driver in /tmp and sends them as documents when possible.
-# - Does not change any existing logic elsewhere.
-#
-import csv
-
-def _parse_date_guess(val):
-    if not val:
-        return None
-    if isinstance(val, datetime):
-        return val
-    s = str(val).strip()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y", "%Y.%m.%d"):
-        try:
-            return datetime.strptime(s, fmt)
-        except Exception:
-            continue
-    # Last resort: try numeric Excel serial? skip
-    try:
-        return datetime.fromisoformat(s)
-    except Exception:
-        return None
-
-def _compute_16_to_16_period(reference_dt=None):
-    # Period: from 16th 04:00 (inclusive) of month M to 16th 04:00 of month M+1 (exclusive)
-    now = reference_dt or datetime.utcnow()
-    # Use the month that ends most recently: if now < current_month 16 04:00, then period is previous month's 16->current 16.
-    this_month_16 = datetime(year=now.year, month=now.month, day=16, hour=4)
-    if now < this_month_16:
-        # use previous month
-        end = this_month_16
-        # compute prev month 16 04:00
-        prev_month = (this_month_16.replace(day=1) - timedelta(days=1)).replace(day=16, hour=4)
-        start = prev_month
-    else:
-        # now >= this_month_16 -> period is this_month_16 -> next_month_16
-        start = this_month_16
-        # next month
-        y = now.year + (1 if now.month == 12 else 0)
-        m = 1 if now.month == 12 else now.month + 1
-        end = datetime(year=y, month=m, day=16, hour=4)
-    return start, end
-
-def _compute_1_to_1_period(reference_dt=None):
-    # Period: from 1st 04:00 (inclusive) of month M to 1st 04:00 of month M+1 (exclusive)
-    now = reference_dt or datetime.utcnow()
-    this_month_1 = datetime(year=now.year, month=now.month, day=1, hour=4)
-    if now < this_month_1:
-        end = this_month_1
-        prev = (this_month_1.replace(day=1) - timedelta(days=1)).replace(day=1, hour=4)
-        start = prev
-    else:
-        start = this_month_1
-        y = now.year + (1 if now.month == 12 else 0)
-        m = 1 if now.month == 12 else now.month + 1
-        end = datetime(year=y, month=m, day=1, hour=4)
-    return start, end
-
-def _safe_get_col_index(rowkeys, candidates):
-    # rowkeys: list of header names (lower). candidates: list of possible names. Return index or -1
-    for i, h in enumerate(rowkeys):
-        if h in candidates:
-            return i
-    return -1
-
-async def ot_report_command(update, context):
-    # delete invoking message if possible
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    start, end = _compute_16_to_16_period(datetime.utcnow())
-    # read OT sheet
-    try:
-        ws = open_ot_worksheet()  # expected helper in original code; if missing, try open_worksheet("OT")
-    except Exception:
-        try:
-            ws = open_worksheet_by_name("OT")
-        except Exception:
-            await update.effective_chat.send_message(t(context, "ot_report_no_sheet"))
-            return
-    try:
-        rows = ws.get_all_values()
-        if not rows or len(rows) < 2:
-            await update.effective_chat.send_message(t(context, "ot_report_no_data"))
-            return
-        headers = [c.strip().lower() for c in rows[0]]
-        idx_username = _safe_get_col_index(headers, ["username", "user", "driver", "id"])
-        idx_name = _safe_get_col_index(headers, ["name", "fullname", "driver_name"])
-        idx_date = _safe_get_col_index(headers, ["date", "ot_date", "datetime"])
-        idx_hours = _safe_get_col_index(headers, ["hours", "hour", "ot_hours"])
-        idx_ot_type = _safe_get_col_index(headers, ["ot_type", "type", "ot"])
-
-        per_driver = {}
-        for r in rows[1:]:
-            try:
-                username = r[idx_username].strip() if idx_username!=-1 and idx_username < len(r) else ""
-                name = r[idx_name].strip() if idx_name!=-1 and idx_name < len(r) else ""
-                date_raw = r[idx_date].strip() if idx_date!=-1 and idx_date < len(r) else ""
-                hours_raw = r[idx_hours].strip() if idx_hours!=-1 and idx_hours < len(r) else ""
-                ot_type_raw = r[idx_ot_type].strip() if idx_ot_type!=-1 and idx_ot_type < len(r) else ""
-                dt = _parse_date_guess(date_raw)
-                if not dt:
-                    continue
-                # consider timezone? assume sheet times are local; compare naive UTC ranges by converting start/end to dates
-                if not (start <= dt < end):
-                    continue
-                hours = float(hours_raw) if hours_raw else 0.0
-                ot_type = ot_type_raw or ""
-                per_driver.setdefault(username, {"name": name or username, "entries": []})
-                per_driver[username]["entries"].append((dt, ot_type, hours))
-            except Exception:
-                continue
-        if not per_driver:
-            await update.effective_chat.send_message(t(context, "ot_report_no_records", start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")))
-            return
-        # For each driver generate CSV and send
-        sent = 0
-        files = []
-        for username, data in per_driver.items():
-            name = data.get("name") or username
-            entries = sorted(data.get("entries", []), key=lambda x: x[0])
-            csv_path = f"/tmp/ot_report_{username}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.csv"
-            with open(csv_path, "w", newline='', encoding="utf-8") as cf:
-                writer = csv.writer(cf)
-                writer.writerow(["Name","OT Type","OT Date","OT(Hour)"])
-                for dt, ot_type, hours in entries:
-                    writer.writerow([name, ot_type, dt.strftime("%Y-%m-%d %H:%M"), f"{hours:.2f}"])
-            files.append(csv_path)
-            sent += 1
-        # Create zip of all CSVs
-        zip_path = f"/tmp/ot_reports_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.zip"
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for p in files:
-                zf.write(p, arcname=os.path.basename(p))
-        # send zip to chat
-        try:
-            await update.effective_chat.send_document(open(zip_path, "rb"))
-        except Exception:
-            await update.effective_chat.send_message(t(context, "ot_report_sent_files", count=sent))
-        # cleanup left to host environment
-    except Exception as e:
-        try:
-            logger.exception("ot_report failed: %s", e)
-        except Exception:
-            pass
-        await update.effective_chat.send_message(t(context, "ot_report_failed"))
-
-async def mission_report_command(update, context):
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    start, end = _compute_1_to_1_period(datetime.utcnow())
-    # read Mission sheet
-    try:
-        ws = open_mission_worksheet()
-    except Exception:
-        try:
-            ws = open_worksheet_by_name("Mission")
-        except Exception:
-            await update.effective_chat.send_message(t(context, "mission_report_no_sheet"))
-            return
-    try:
-        rows = ws.get_all_values()
-        if not rows or len(rows) < 2:
-            await update.effective_chat.send_message(t(context, "mission_report_no_data"))
-            return
-        headers = [c.strip().lower() for c in rows[0]]
-        idx_username = _safe_get_col_index(headers, ["username", "user", "driver", "id"])
-        idx_name = _safe_get_col_index(headers, ["name", "fullname", "driver_name"])
-        idx_start = _safe_get_col_index(headers, ["mission_start", "start", "start_date"])
-        idx_end = _safe_get_col_index(headers, ["mission_end", "end", "end_date"])
-        idx_desc = _safe_get_col_index(headers, ["description", "desc", "note"])
-
-        per_driver = {}
-        for r in rows[1:]:
-            try:
-                username = r[idx_username].strip() if idx_username!=-1 and idx_username < len(r) else ""
-                name = r[idx_name].strip() if idx_name!=-1 and idx_name < len(r) else ""
-                s_raw = r[idx_start].strip() if idx_start!=-1 and idx_start < len(r) else ""
-                e_raw = r[idx_end].strip() if idx_end!=-1 and idx_end < len(r) else ""
-                desc = r[idx_desc].strip() if idx_desc!=-1 and idx_desc < len(r) else ""
-                s_dt = _parse_date_guess(s_raw)
-                e_dt = _parse_date_guess(e_raw)
-                if not s_dt or not e_dt:
-                    continue
-                # include mission if any overlap with period
-                if e_dt < start or s_dt >= end:
-                    continue
-                duration_days = (e_dt.date() - s_dt.date()).days + 1
-                # determine mission type based on description sequence heuristics
-                # Simple rule as requested: if description contains pattern "PP-SHV-PP" or similar, decide accordingly.
-                desc_upper = desc.upper()
-                mission_type = "PP Mission" if "PP" in desc_upper and "SHV" not in desc_upper else "SHV mission" if "SHV" in desc_upper and "PP" not in desc_upper else None
-                # heuristic for mixed sequences: check tokens
-                tokens = re.split(r"[\s,;\/\-]+", desc_upper)
-                if not mission_type:
-                    # find pattern e.g., PP SHV PP -> treat as SHV mission (per requirement)
-                    seq = "".join([t for t in tokens if t in ("PP","SHV")])
-                    if "PPSHVP P" in seq:
-                        mission_type = "SHV mission"
-                    else:
-                        # fallback: if starts with PP and alternates, choose PP mission
-                        if seq.startswith("PP") and seq.endswith("PP"):
-                            mission_type = "PP Mission"
-                        elif seq.startswith("SHV") and seq.endswith("SHV"):
-                            mission_type = "SHV mission"
-                        else:
-                            mission_type = "PP Mission" if "PP" in seq else ("SHV mission" if "SHV" in seq else "Unknown")
-                per_driver.setdefault(username, {"name": name or username, "missions": []})
-                per_driver[username]["missions"].append((s_dt, e_dt, duration_days, mission_type, desc))
-            except Exception:
-                continue
-        if not per_driver:
-            await update.effective_chat.send_message(t(context, "mission_report_no_records", start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")))
-            return
-        files = []
-        for username, data in per_driver.items():
-            name = data.get("name") or username
-            missions = sorted(data.get("missions", []), key=lambda x: x[0])
-            csv_path = f"/tmp/mission_report_{username}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.csv"
-            with open(csv_path, "w", newline='', encoding="utf-8") as cf:
-                writer = csv.writer(cf)
-                writer.writerow(["Name","Mission Start Date","Mission End Date","Duration(day)","Description","Mission Type"])
-                for s_dt, e_dt, dur, mtype, desc in missions:
-                    writer.writerow([name, s_dt.strftime("%Y-%m-%d"), e_dt.strftime("%Y-%m-%d"), str(dur), desc, mtype])
-            files.append(csv_path)
-        zip_path = f"/tmp/mission_reports_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.zip"
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for p in files:
-                zf.write(p, arcname=os.path.basename(p))
-        try:
-            await update.effective_chat.send_document(open(zip_path, "rb"))
-        except Exception:
-            await update.effective_chat.send_message(t(context, "mission_report_sent_files", count=len(files)))
-    except Exception as e:
-        try:
-            logger.exception("mission_report failed: %s", e)
-        except Exception:
-            pass
-        await update.effective_chat.send_message(t(context, "mission_report_failed"))
-
 # Register handlers
 try:
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
 except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
         try:
             app.add_handler(CommandHandler("ot_report", ot_report_entry))
-            app.add_handler(CommandHandler("mission_report", mission_report_command))
         except Exception:
             pass
     globals().setdefault("register_report_handlers", register_report_handlers)
@@ -4722,15 +4058,8 @@ try:
     TR_k.setdefault("ot_report_no_records", "មិនមានកំណត់ត្រា OT ក្នុងកាលបរិច្ឆេទ {start} ដល់ {end}។")
     TR_k.setdefault("ot_report_sent_files", "OT reports generated: {count}")
     TR_k.setdefault("ot_report_failed", "បរាជ័យក្នុងការបង្កើត OT report។")
-    TR_k.setdefault("mission_report_no_sheet", "សូមទោស: មិន​មានសន្លឹក Mission នៅក្នុង Google Sheets។")
-    TR_k.setdefault("mission_report_no_data", "មិនមានទិន្នន័យ Mission ទេ។")
-    TR_k.setdefault("mission_report_no_records", "មិនមានកំណត់ត្រា Mission ក្នុងកាលបរិច្ឆេទ {start} ដល់ {end}។")
-    TR_k.setdefault("mission_report_sent_files", "Mission reports generated: {count}")
-    TR_k.setdefault("mission_report_failed", "បរាជ័យក្នុងការបង្កើត Mission report។")
 except Exception:
     pass
-
-# === END: OT & MISSION REPORTS EXTENSION ===
 
 
 # === BEGIN: MULTILANG PERSISTENCE & COMMANDS (ADDED) ===
@@ -5101,7 +4430,6 @@ async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("OT Report", callback_data="rep_ot")],
         [InlineKeyboardButton("OT Monthly Report", callback_data="rep_otm")],
-        [InlineKeyboardButton("Mission Monthly Report", callback_data="rep_mm")],
         [
             InlineKeyboardButton("English", callback_data="lang_en"),
             InlineKeyboardButton("Khmer", callback_data="lang_km"),
@@ -5125,11 +4453,10 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["lang"] = "km"
         await q.edit_message_text("Language set to Khmer")
     elif data == "rep_ot":
-        await q.edit_message_text("Use: /ot_report <username> YYYY-MM")
+        await q.edit_message_text("Use: /ot_report <username> ")
     elif data == "rep_otm":
-        await q.edit_message_text("Use: /ot_monthly_report YYYY-MM <username>")
+        await q.edit_message_text("Use: /ot_monthly_report  <username>")
     elif data == "rep_mm":
-        await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
 
 # ---- Register handlers ----
 try:
@@ -5271,55 +4598,850 @@ def _auto_close_previous_in(ws, driver, new_in_time):
 
 
 # =========================
-# MISSION REPORT (OT-STYLE)
+# Mission Report V9 (M-03)
+# Period calculation only (Natural Month)
 # =========================
-import io, csv
 
-async def mission_report_entry(update, context):
-    drivers = []
+def get_mission_period(year: int, month: int):
+    """
+    Natural month period:
+    From: YYYY-MM-01 00:00:00
+    To:   YYYY-MM-last 23:59:59
+    """
+    period_start = datetime(year, month, 1, 0, 0, 0)
+    if month == 12:
+        next_month = datetime(year + 1, 1, 1, 0, 0, 0)
+    else:
+        next_month = datetime(year, month + 1, 1, 0, 0, 0)
+    period_end = next_month - timedelta(seconds=1)
+    return period_start, period_end
+
+
+
+
+# =========================
+# Mission Report V9 (M-06)
+# Mission Days calculation (PURE FUNCTION)
+# =========================
+
+def compute_mission_days(start_dt, end_dt):
+    """
+    Compute mission days using date-based rule only.
+
+    Rule:
+        mission_days = (end_date - start_date) + 1
+
+    Notes:
+        - Only dates are considered (ignore time)
+        - Same start/end date => 1 day
+        - This function is pure and has no side effects
+    """
+    start_date = start_dt.date()
+    end_date = end_dt.date()
+    return (end_date - start_date).days + 1
+
+
+# =========================
+# Mission Report V9 (M-07)
+# Mission Type determination (PURE FUNCTION)
+# =========================
+
+def determine_mission_type(start_city: str, end_city: str):
+    """
+    Determine mission type based on CLOSED round-trip endpoints only.
+
+    Valid closed loops:
+      - SHV -> PP -> SHV  => 'PP Mission'
+      - PP  -> SHV -> PP  => 'SHV Mission'
+
+    Input semantics:
+      - start_city: round-trip start city
+      - end_city:   round-trip end city
+      - This function MUST be called only after a round-trip is confirmed.
+
+    Return:
+      - 'PP Mission'
+      - 'SHV Mission'
+      - None (if not a valid closed loop)
+    """
+    if not start_city or not end_city:
+        return None
+
+    sc = start_city.strip().upper()
+    ec = end_city.strip().upper()
+
+    if sc == ec == "SHV":
+        return "PP Mission"
+    if sc == ec == "PP":
+        return "SHV Mission"
+
+    return None
+
+
+# =========================
+# Mission Report V9 (M-15)
+# Mission data read (READ-ONLY, STRICT)
+# =========================
+
+def read_mission_records(period_start, period_end, driver):
+    """
+    Read mission records from MISSIONS_TAB (READ-ONLY, STRICT).
+
+    M-15 constraints:
+      - READ ONLY
+      - Real sheet I/O allowed
+      - Filter ONLY by driver name
+      - NO autofix
+      - NO pairing
+      - NO datetime parsing / NO interpretation
+      - NO data reshaping
+      - Return RAW rows (list of lists), header excluded
+    """
+    ws = open_worksheet(MISSIONS_TAB)
+    rows = ws.get_all_values()
+
+    if not rows or len(rows) < 2:
+        return []
+
+    header = rows[0]
+
+    # locate driver/name column (strict, no reshaping)
     try:
-        drivers = list(get_driver_map().keys())
-    except Exception:
-        drivers = []
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    buttons = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
-    await reply_private(update, context, "Select driver for Mission Report:", InlineKeyboardMarkup(buttons))
+        idx_name = header.index("Name")
+    except ValueError:
+        # schema error: return empty but do not transform data
+        return []
+
+    results = []
+
+    for r in rows[1:]:
+        if len(r) <= idx_name:
+            continue
+        if r[idx_name].strip() != driver:
+            continue
+
+        # return raw row as-is
+        results.append(r)
+
+    return results
+
+
+# =========================
+# Mission Report V9 (M-18)
+# Mission table schema freeze (HEADER → INDEX)
+# =========================
+
+# Canonical Mission sheet headers (ORDER IS FROZEN)
+MISSION_HEADERS = [
+    "GUID",           # 0
+    "No.",            # 1
+    "Name",           # 2
+    "Plate",          # 3
+    "Start Date",     # 4
+    "End Date",       # 5
+    "Departure",      # 6
+    "Arrival",        # 7
+    "Staff Name",     # 8
+    "Roundtrip",      # 9
+    "Return Start",   # 10
+    "Return End",     # 11
+]
+
+# Header → index mapping (FROZEN)
+M_IDX_GUID = 0
+M_IDX_NO = 1
+M_IDX_NAME = 2
+M_IDX_PLATE = 3
+M_IDX_START = 4
+M_IDX_END = 5
+M_IDX_DEPARTURE = 6
+M_IDX_ARRIVAL = 7
+M_IDX_STAFF = 8
+M_IDX_ROUNDTRIP = 9
+M_IDX_RETURN_START = 10
+M_IDX_RETURN_END = 11
+
+M_MANDATORY_COLS = len(MISSION_HEADERS)
+
+
+def validate_mission_header(header_row):
+    """
+    Validate Mission sheet header against frozen schema.
+
+    M-18 constraints:
+      - NO mutation
+      - NO auto-fix
+      - Strict equality check (order + name)
+    """
+    if not header_row:
+        return False
+    normalized = [str(c).strip() for c in header_row]
+    return normalized[:M_MANDATORY_COLS] == MISSION_HEADERS
+
+# =========================
+# Mission Report V9 (M-21)
+# Mission Days calculation (REAL, PURE)
+# =========================
+
+from datetime import datetime
+
+def apply_mission_days(round_trips):
+    """
+    Apply mission_days to paired round-trips.
+
+    M-21 constraints (STRICT):
+      - Input: output of M-20 (paired round-trips)
+      - Do NOT modify input objects
+      - Do NOT determine mission type
+      - Do NOT adjust start/end times
+      - Use date-based rule ONLY:
+          mission_days = (end_date - start_date) + 1
+      - Ignore hours/minutes/seconds
+
+    Expected keys in round_trips:
+      - start_dt (ISO string)
+      - end_dt   (ISO string)
+
+    Output:
+      - New list with 'mission_days' injected
+    """
+    if not round_trips:
+        return []
+
+    enriched = []
+
+    for rt in round_trips:
+        start_raw = rt.get("start_dt")
+        end_raw = rt.get("end_dt")
+
+        if not start_raw or not end_raw:
+            # skip invalid pair silently
+            continue
+
+        try:
+            start_date = datetime.fromisoformat(start_raw).date()
+            end_date = datetime.fromisoformat(end_raw).date()
+        except Exception:
+            continue
+
+        mission_days = (end_date - start_date).days + 1
+
+        enriched.append({
+            **rt,
+            "mission_days": mission_days,
+        })
+
+    return enriched
+
+# =========================
+# Mission Report V9 (M-22)
+# Mission Type determination (REAL, PURE)
+# =========================
+
+def apply_mission_type(round_trips):
+    """
+    Determine mission type for each round-trip.
+
+    M-22 constraints (STRICT):
+      - Input: output of M-21 (round-trips with mission_days)
+      - Do NOT modify input objects
+      - Do NOT recalculate mission_days
+      - Do NOT adjust start/end times
+      - Do NOT guess based on button clicks
+
+    Rule (FROZEN):
+      - Only look at CLOSED round-trip endpoints
+      - If start_city == end_city == 'SHV' -> 'PP Mission'
+      - If start_city == end_city == 'PP'  -> 'SHV Mission'
+      - Else -> None (invalid / skip later)
+
+    Expected keys:
+      - start_city
+      - end_city
+
+    Output:
+      - New list with 'type' injected
+    """
+    if not round_trips:
+        return []
+
+    enriched = []
+
+    for rt in round_trips:
+        start_city = rt.get("start_city")
+        end_city = rt.get("end_city")
+
+        mission_type = None
+        if start_city and end_city:
+            sc = str(start_city).strip().upper()
+            ec = str(end_city).strip().upper()
+
+            if sc == ec == "SHV":
+                mission_type = "PP Mission"
+            elif sc == ec == "PP":
+                mission_type = "SHV Mission"
+
+        enriched.append({
+            **rt,
+            "type": mission_type,
+        })
+
+    return enriched
+
+# =========================
+# Mission Report V9 (M-23)
+# CSV rows fill + TOTAL (OT V9 aligned)
+# =========================
+
+import io
+import csv
+
+def export_mission_csv(driver, period, missions):
+    """
+    Export Mission Report CSV with rows and TOTAL.
+
+    M-23 constraints (STRICT):
+      - Input: output of M-22 (missions with mission_days + type)
+      - Do NOT modify mission objects
+      - Do NOT sort missions here (sorting upstream)
+      - Do NOT send file
+      - OT V9 CSV structure alignment REQUIRED
+
+    CSV Structure (FROZEN):
+      Driver,<driver>
+      Period,<period_start> → <period_end>
+
+      Plate,Start Date,End Date,Mission Day(s),From,To,Type
+      <rows...>
+
+      TOTAL MISSION DAY(s),<sum>
+    """
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    period_start, period_end = period
+
+    # Header block (OT V9 aligned)
+    writer.writerow(["Driver", driver])
+    writer.writerow(["Period", f"{period_start} → {period_end}"])
+    writer.writerow([])
+
+    # Table header
+    writer.writerow([
+        "Plate",
+        "Start Date",
+        "End Date",
+        "Mission Day(s)",
+        "From",
+        "To",
+        "Type",
+    ])
+
+    total_days = 0
+
+    for m in missions:
+        days = m.get("mission_days")
+        if days:
+            total_days += days
+
+        writer.writerow([
+            m.get("plate"),
+            m.get("start_dt"),
+            m.get("end_dt"),
+            days,
+            m.get("from"),
+            m.get("to"),
+            m.get("type"),
+        ])
+
+    writer.writerow([])
+    writer.writerow(["TOTAL MISSION DAY(s)", total_days])
+
+    return output.getvalue()
+
+# =========================
+# Mission Report V9 (M-24)
+# Callback full wiring (OT V9 aligned)
+# =========================
 
 async def mission_report_driver_callback(update, context):
     q = update.callback_query
     await q.answer()
-    driver = q.data.split(":",1)[1]
-    ws = open_worksheet(MISSIONS_TAB)
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        await context.bot.send_message(chat_id=q.from_user.id, text="❌ No mission data.")
-        return
-    header = rows[0]
-    data = rows[1:]
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(["Name","Start Date","End Date","Duration(days)","Mission Type"])
-    for r in data:
+
+    # OT V9：确保私聊路径
+    await reply_private(update, context)
+
+    # OT V9：防抖（按钮点一次即禁用）
+    if q.message and q.message.reply_markup:
+        await q.message.edit_reply_markup(reply_markup=None)
+
+    # Driver
+    driver = q.data.split(":", 1)[1]
+
+    # ---------- Period（M-03） ----------
+    period_start, period_end = get_mission_period_from_context(context)
+    period = (period_start, period_end)
+
+    # ---------- Read records（M-15） ----------
+    records = read_mission_records(period_start, period_end, driver)
+
+    # ---------- Auto-fix（M-19，仅 23:59:59） ----------
+    # 使用 report_time 作为唯一时间基准
+    report_time = period_end
+    records = autofix_mission_records(records, driver, report_time)
+
+    # ---------- Pair round-trips（M-20） ----------
+    round_trips = pair_mission_round_trips(records)
+
+    # ---------- Mission Days（M-21） ----------
+    with_days = apply_mission_days(round_trips)
+
+    # ---------- Mission Type（M-22） ----------
+    missions = apply_mission_type(with_days)
+
+    # ---------- CSV Export（M-23） ----------
+    csv_content = export_mission_csv(driver, period, missions)
+
+    # ---------- Send CSV（OT V9 私聊方式） ----------
+    bio = io.BytesIO(csv_content.encode("utf-8"))
+    bio.name = f"Mission_Report_{driver}_{period_start:%Y-%m}.csv"
+
+    await update.effective_chat.send_document(document=bio, caption=f"Mission report for {driver}")
+
+# =========================
+# Mission Report V9 (M-25)
+# Clock-out integration (OPTIONAL, SAFE, BACKWARD-COMPATIBLE)
+# =========================
+
+from copy import deepcopy
+from datetime import datetime, timedelta, time
+
+def autofix_mission_records(records, driver, report_time, clock_map=None):
+    """
+    Auto-fix mission records — Scenario A with OPTIONAL clock-out (M-25).
+
+    Inputs:
+      - records: raw mission rows (list[list])
+      - driver: driver name
+      - report_time: period_end (唯一时间基准)
+      - clock_map: OPTIONAL
+          { "YYYY-MM-DD": "YYYY-MM-DD HH:MM:SS" }
+
+    Priority (FROZEN):
+      1) clock-out (if provided)
+      2) same-day 23:59:59
+
+    Constraints:
+      - Do NOT mutate input records
+      - Use ONLY M-18 indices
+      - Do NOT use return start/end
+      - Do NOT use datetime.now()
+      - MUST work even if clock_map is None
+    """
+    if not records:
+        return []
+
+    fixed = deepcopy(records)
+
+    for r in fixed:
+        if len(r) < M_MANDATORY_COLS:
+            continue
+
+        start_raw = r[M_IDX_START]
+        end_raw = r[M_IDX_END]
+
+        # Only: has start, missing end
+        if not start_raw or end_raw:
+            continue
+
         try:
-            if r[header.index("Name")] != driver:
-                continue
-            sd = r[header.index("Start Date")]
-            ed = r[header.index("End Date")]
-            mt = r[header.index("Mission Type")]
-            if sd and ed:
-                from datetime import datetime
-                d1 = datetime.fromisoformat(sd.split()[0])
-                d2 = datetime.fromisoformat(ed.split()[0])
-                dur = (d2 - d1).days + 1
-            else:
-                dur = ""
-            w.writerow([driver, sd, ed, dur, mt])
+            start_dt = datetime.fromisoformat(start_raw)
         except Exception:
             continue
-    out.seek(0)
-    bio = io.BytesIO(out.getvalue().encode())
-    bio.name = f"Mission_Report_{driver}.csv"
-    await context.bot.send_document(chat_id=q.from_user.id, document=bio)
+
+        # threshold = next-day 04:00
+        threshold = datetime.combine(
+            start_dt.date() + timedelta(days=1),
+            time(4, 0, 0)
+        )
+        if report_time < threshold:
+            continue
+
+        # Priority 1: clock-out (OPTIONAL)
+        clock_out_raw = None
+        if clock_map:
+            day_key = start_dt.date().isoformat()
+            clock_out_raw = clock_map.get(day_key)
+
+        if clock_out_raw:
+            r[M_IDX_END] = clock_out_raw
+            continue
+
+        # Priority 2: same-day 23:59:59
+        r[M_IDX_END] = datetime.combine(
+            start_dt.date(),
+            time(23, 59, 59)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+
+    return fixed
+
+# ===== BEGIN M-27 INTEGRATION =====
+# =========================
+# Mission Report V9 (M-27)
+# Final integration: M-26 Clock schema + M-25 + M-24
+# =========================
+
+from copy import deepcopy
+from datetime import datetime, timedelta, time
+import io
+import csv
+
+# ============================================================
+# M-18: Mission table schema (FROZEN)
+# =========================================================
+MISSION_HEADERS = [
+    "GUID",
+    "No.",
+    "Name",
+    "Plate",
+    "Start Date",
+    "End Date",
+    "Departure",
+    "Arrival",
+    "Staff Name",
+    "Roundtrip",
+    "Return Start",
+    "Return End",
+]
+
+M_IDX_GUID = 0
+M_IDX_NO = 1
+M_IDX_NAME = 2
+M_IDX_PLATE = 3
+M_IDX_START = 4
+M_IDX_END = 5
+M_IDX_DEPARTURE = 6
+M_IDX_ARRIVAL = 7
+M_IDX_STAFF = 8
+M_IDX_ROUNDTRIP = 9
+M_IDX_RETURN_START = 10
+M_IDX_RETURN_END = 11
+
+M_MANDATORY_COLS = len(MISSION_HEADERS)
+
+# ============================================================
+# M-26: Clock / Driver_OT schema (FROZEN)
+# =========================================================
+CLOCK_HEADERS = [
+    "Date",
+    "Driver",
+    "Action",
+    "Timestamp",
+    "ClockType",
+]
+
+C_IDX_DATE = 0
+C_IDX_DRIVER = 1
+C_IDX_ACTION = 2
+C_IDX_TIMESTAMP = 3
+C_IDX_TYPE = 4
+
+C_MANDATORY_COLS = len(CLOCK_HEADERS)
+
+CLOCK_TAB = "Driver_OT"
+
+
+def validate_clock_header(header_row):
+    if not header_row:
+        return False
+    normalized = [str(c).strip() for c in header_row]
+    return normalized[:C_MANDATORY_COLS] == CLOCK_HEADERS
+
+# ============================================================
+# M-25: Clock-out map builder (Driver_OT aligned)
+# =========================================================
+def build_clock_map(period_start, period_end, driver):
+    ws = open_worksheet(CLOCK_TAB)
+    rows = ws.get_all_values()
+
+    if not rows or len(rows) < 2:
+        return {}
+
+    header = rows[0]
+    if not validate_clock_header(header):
+        return {}
+
+    clock_map = {}
+
+    for r in rows[1:]:
+        if len(r) < C_MANDATORY_COLS:
+            continue
+
+        if r[C_IDX_DRIVER].strip() != driver:
+            continue
+
+        if str(r[C_IDX_ACTION]).strip().upper() != "OUT":
+            continue
+
+        ts_raw = r[C_IDX_TIMESTAMP]
+        if not ts_raw:
+            continue
+
+        try:
+            ts_dt = datetime.fromisoformat(ts_raw)
+        except Exception:
+            continue
+
+        if not (period_start <= ts_dt <= period_end):
+            continue
+
+        day_key = ts_dt.date().isoformat()
+
+        if day_key not in clock_map or ts_dt > datetime.fromisoformat(clock_map[day_key]):
+            clock_map[day_key] = ts_raw
+
+    return clock_map
+
+# ============================================================
+# M-25: Auto-fix Scenario A (clock-out / 23:59:59)
+# =========================================================
+def autofix_mission_records(records, driver, report_time, clock_map=None):
+    if not records:
+        return []
+
+    fixed = deepcopy(records)
+
+    for r in fixed:
+        if len(r) < M_MANDATORY_COLS:
+            continue
+
+        start_raw = r[M_IDX_START]
+        end_raw = r[M_IDX_END]
+
+        if not start_raw or end_raw:
+            continue
+
+        try:
+            start_dt = datetime.fromisoformat(start_raw)
+        except Exception:
+            continue
+
+        threshold = datetime.combine(
+            start_dt.date() + timedelta(days=1),
+            time(4, 0, 0)
+        )
+
+        if report_time < threshold:
+            continue
+
+        clock_out_raw = None
+        if clock_map:
+            clock_out_raw = clock_map.get(start_dt.date().isoformat())
+
+        if clock_out_raw:
+            r[M_IDX_END] = clock_out_raw
+        else:
+            r[M_IDX_END] = datetime.combine(
+                start_dt.date(),
+                time(23, 59, 59)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+
+    return fixed
+
+# ============================================================
+# M-21: Mission days
+# =========================================================
+def apply_mission_days(round_trips):
+    out = []
+    for rt in round_trips:
+        try:
+            sd = datetime.fromisoformat(rt["start_dt"]).date()
+            ed = datetime.fromisoformat(rt["end_dt"]).date()
+        except Exception:
+            continue
+
+        out.append({
+            **rt,
+            "mission_days": (ed - sd).days + 1
+        })
+    return out
+
+# ============================================================
+# M-22: Mission type
+# =========================================================
+def apply_mission_type(round_trips):
+    out = []
+    for rt in round_trips:
+        sc = str(rt.get("start_city", "")).upper()
+        ec = str(rt.get("end_city", "")).upper()
+        mtype = None
+        if sc == ec == "SHV":
+            mtype = "PP Mission"
+        elif sc == ec == "PP":
+            mtype = "SHV Mission"
+
+        out.append({**rt, "type": mtype})
+    return out
+
+# ============================================================
+# M-23: CSV export
+# =========================================================
+def export_mission_csv(driver, period, missions):
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    period_start, period_end = period
+
+    writer.writerow(["Driver", driver])
+    writer.writerow(["Period", f"{period_start} → {period_end}"])
+    writer.writerow([])
+
+    writer.writerow([
+        "Plate",
+        "Start Date",
+        "End Date",
+        "Mission Day(s)",
+        "From",
+        "To",
+        "Type",
+    ])
+
+    total = 0
+    for m in missions:
+        d = m.get("mission_days") or 0
+        total += d
+        writer.writerow([
+            m.get("plate"),
+            m.get("start_dt"),
+            m.get("end_dt"),
+            d,
+            m.get("from"),
+            m.get("to"),
+            m.get("type"),
+        ])
+
+    writer.writerow([])
+    writer.writerow(["TOTAL MISSION DAY(s)", total])
+
+    return output.getvalue()
+
+# ============================================================
+# M-24: Callback wiring (OT V9 aligned)
+# =========================================================
+async def mission_report_driver_callback(update, context):
+    q = update.callback_query
+    await q.answer()
+
+    await reply_private(update, context)
+
+    if q.message and q.message.reply_markup:
+        await q.message.edit_reply_markup(reply_markup=None)
+
+    driver = q.data.split(":", 1)[1]
+
+    period_start, period_end = get_mission_period_from_context(context)
+    period = (period_start, period_end)
+
+    records = read_mission_records(period_start, period_end, driver)
+
+    clock_map = build_clock_map(period_start, period_end, driver)
+
+    records = autofix_mission_records(
+        records,
+        driver,
+        report_time=period_end,
+        clock_map=clock_map
+    )
+
+    trips = pair_mission_round_trips(records)
+    trips = apply_mission_days(trips)
+    trips = apply_mission_type(trips)
+
+    csv_content = export_mission_csv(driver, period, trips)
+
+    bio = io.BytesIO(csv_content.encode("utf-8"))
+    bio.name = f"Mission_Report_{driver}_{period_start:%Y-%m}.csv"
+
+    await update.effective_chat.send_document(
+        document=bio,
+        caption=f"Mission report for {driver}"
+    )
+
+# ===== END M-27 INTEGRATION =====
+
+
+# ===== M27 STATE MACHINE OVERRIDE =====
+
+# =========================
+# M27-STATE-MACHINE
+# Mission round-trip pairing using OT V9 state machine model
+# =========================
+
+from datetime import datetime
+
+def pair_mission_round_trips(records):
+    """
+    OT V9–equivalent state machine pairing.
+
+    Rules:
+      - Single open_trip state
+      - Scan records in chronological order
+      - New outbound overrides previous open outbound
+      - Return closes only the current open outbound
+      - No searching, no backtracking
+    """
+    if not records:
+        return []
+
+    # Prepare sortable list
+    rows = []
+    for r in records:
+        if len(r) < M_MANDATORY_COLS:
+            continue
+        start_raw = r[M_IDX_START]
+        if not start_raw:
+            continue
+        try:
+            start_dt = datetime.fromisoformat(start_raw)
+        except Exception:
+            continue
+        rows.append((start_dt, r))
+
+    # Sort by time ascending
+    rows.sort(key=lambda x: x[0])
+
+    open_row = None
+    trips = []
+
+    for _, r in rows:
+        dep = r[M_IDX_DEPARTURE]
+        arr = r[M_IDX_ARRIVAL]
+        plate = r[M_IDX_PLATE]
+
+        # Outbound opens state
+        if open_row is None:
+            open_row = r
+            continue
+
+        # Check if this row closes the open outbound
+        if (
+            open_row[M_IDX_PLATE] == plate and
+            open_row[M_IDX_DEPARTURE] == arr and
+            open_row[M_IDX_ARRIVAL] == dep and
+            r[M_IDX_END]
+        ):
+            trips.append({
+                "plate": plate,
+                "start_dt": open_row[M_IDX_START],
+                "end_dt": r[M_IDX_END],
+                "from": open_row[M_IDX_DEPARTURE],
+                "to": open_row[M_IDX_ARRIVAL],
+                "start_city": open_row[M_IDX_DEPARTURE],
+                "end_city": open_row[M_IDX_DEPARTURE],
+            })
+            open_row = None
+        else:
+            # OT V9 behavior: override open state
+            open_row = r
+
+    return trips
