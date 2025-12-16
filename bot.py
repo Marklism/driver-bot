@@ -4495,6 +4495,7 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "rep_otm":
         await q.edit_message_text("Use: /ot_monthly_report  <username>")
     elif data == "rep_mm":
+        pass
 
 # ---- Register handlers ----
 try:
