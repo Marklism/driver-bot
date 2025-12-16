@@ -2979,9 +2979,13 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rows = mission_rows_for_period(start, end)
             counts = count_roundtrips_per_driver_month(start, end)
             if ok:
+                pass
             else:
+                pass
         except Exception:
+            pass
     else:
+        pass
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -3091,6 +3095,7 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
             counts = count_roundtrips_per_driver_month(prev_month_start, prev_month_end)
             if ok:
         except Exception:
+            pass
 
 def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]:
     totals: Dict[str, int] = {}
@@ -4623,6 +4628,7 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "rep_otm":
         await q.edit_message_text("Use: /ot_monthly_report  <username>")
     elif data == "rep_mm":
+        pass
 
 # ---- Register handlers ----
 try:
