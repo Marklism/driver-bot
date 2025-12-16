@@ -4204,6 +4204,7 @@ def _safe_get_col_index(rowkeys, candidates):
         try:
             await update.effective_chat.send_document(open(zip_path, "rb"))
         except Exception:
+            pass
     except Exception as e:
         try:
         except Exception:
