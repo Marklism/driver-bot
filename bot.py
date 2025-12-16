@@ -3013,9 +3013,11 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ok:
                 pass
             else:
+                pass
         except Exception:
             pass
     else:
+        pass
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
