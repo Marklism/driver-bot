@@ -3011,8 +3011,10 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rows = mission_rows_for_period(start, end)
             counts = count_roundtrips_per_driver_month(start, end)
             if ok:
+                pass
             else:
         except Exception:
+            pass
     else:
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
