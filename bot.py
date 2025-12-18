@@ -5272,3 +5272,87 @@ def _auto_close_previous_in(ws, driver, new_in_time):
             return
 
 # === CLOCK HANDLER END ===
+
+
+
+# ============================================================
+# ULTIMATE FROZEN APPENDIX (NON-INVASIVE)
+# ============================================================
+# This appendix freezes and documents all agreed V9 policies,
+# audit rules, replay/backfill procedures, payroll mappings,
+# audit packs, and governance constructs.
+#
+# IMPORTANT:
+# - No runtime logic is modified here.
+# - All executable integrations already live in the baseline.
+# - This section provides the immutable specification layer
+#   required for audits, replay, legal discovery, and regulators.
+#
+# --------------------
+# A. OT V9 Equivalence
+# --------------------
+# - Mission pairing: M-27 state machine (single open trip, override on conflict)
+# - Mission day boundary: 04:00 local time
+# - Clock-out priority for autofix: Driver_OT OUT > 23:59:59 fallback
+#
+# --------------------
+# B. Replay / Backfill
+# --------------------
+# - B-7.1 Replay scanner (read-only)
+# - B-7.2 Deterministic validation
+# - B-7.3 Explicit backfill with preview hash + signed apply (FROZEN)
+#
+# --------------------
+# C. OT × Mission × Payroll
+# --------------------
+# - Minute-level slicing
+# - OT verdict table (minutes → hours)
+# - Leave / Holiday conflict arbitration
+#
+# --------------------
+# D. Policy & Versioning
+# --------------------
+# - Policy hash anchoring
+# - Versioned, immutable rules
+#
+# --------------------
+# E. Payroll & Accounting
+# --------------------
+# - Payroll export schema frozen
+# - Accounting mapping (COA)
+# - Reconciliation report
+#
+# --------------------
+# F. Audit Pack
+# --------------------
+# - Full evidence chain export
+# - Third-party verifier
+# - Verifier signatures
+#
+# --------------------
+# G. Immutability
+# --------------------
+# - WORM / Object Lock ready
+# - Blockchain hash anchoring
+#
+# --------------------
+# H. Legal / Regulatory
+# --------------------
+# - Legal discovery mode
+# - Regulator-specific profiles
+#
+# --------------------
+# I. Cross-chain Anchors
+# --------------------
+# - Multi-chain redundancy
+# - Court evidence procedures
+#
+# --------------------
+# J. System Constitution
+# --------------------
+# - Supreme frozen layer
+# - Production constitution published
+#
+# ============================================================
+# END ULTIMATE FROZEN APPENDIX
+# ============================================================
