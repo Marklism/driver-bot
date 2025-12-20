@@ -971,7 +971,7 @@ def open_bot_state_worksheet():
     elif sheet_id:
         sh = gc.open_by_key(sheet_id)
     else:
-    tab = os.getenv("BOT_STATE_TAB") or "Bot_State"
+        tab = os.getenv("BOT_STATE_TAB") or "Bot_State"
     try:
         ws = sh.worksheet(tab)
     except Exception:
