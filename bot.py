@@ -5589,3 +5589,113 @@ for _name in list(globals().keys()):
     ):
         globals()[_name] = _legacy_mission_report_killed
 # ============================================
+
+
+
+# ===============================
+# M-REPORT (Monthly Mission Summary, OT-style)
+# Command: /m_report
+# ===============================
+import io, csv
+from datetime import datetime
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CommandHandler, CallbackQueryHandler
+
+async def m_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Private entry similar to OT report
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+    kb = [[InlineKeyboardButton(d, callback_data=f"MRPT_DRIVER:{d}")] for d in drivers]
+    await reply_private(update, context, "Select driver for M-report (current month):",
+                        reply_markup=InlineKeyboardMarkup(kb))
+
+async def m_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    driver = q.data.split(":", 1)[1]
+
+    # Current month window
+    now = datetime.now()
+    y, m = now.year, now.month
+
+    ws = open_worksheet(MISSIONS_TAB)
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        await context.bot.send_message(chat_id=q.from_user.id, text="❌ No mission records.")
+        return
+
+    header = rows[0]
+    data = rows[1:]
+
+    # Resolve indices safely
+    def idx(name, fallback):
+        try:
+            return header.index(name)
+        except Exception:
+            return fallback
+
+    IDX_NAME = idx("Name", M_IDX_NAME)
+    IDX_PLATE = idx("Plate", M_IDX_PLATE)
+    IDX_START = idx("Start Date", M_IDX_START)
+    IDX_END = idx("End Date", M_IDX_END)
+    IDX_DEP = idx("Departure", M_IDX_DEPART)
+    IDX_ARR = idx("Arrival", M_IDX_ARRIVAL)
+    IDX_RT = idx("Roundtrip", M_IDX_ROUNDTRIP if 'M_IDX_ROUNDTRIP' in globals() else None)
+
+    missions = []
+    mission_days = set()
+
+    for r in data:
+        if len(r) <= IDX_NAME:
+            continue
+        if str(r[IDX_NAME]).strip() != driver:
+            continue
+        try:
+            sd = datetime.fromisoformat(str(r[IDX_START])[:19])
+        except Exception:
+            continue
+        if sd.year != y or sd.month != m:
+            continue
+
+        missions.append(r)
+        mission_days.add(sd.date())
+
+    if not missions:
+        await context.bot.send_message(chat_id=q.from_user.id,
+                                       text=f"❌ No missions for {driver} in {y}-{m:02d}.")
+        return
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["Driver", "Month", "Year"])
+    writer.writerow([driver, f"{m:02d}", y])
+    writer.writerow([])
+    writer.writerow(["Total Missions", len(missions)])
+    writer.writerow(["Mission Days", len(mission_days)])
+    writer.writerow([])
+    writer.writerow(["Plate", "Start", "End", "Departure", "Arrival", "Roundtrip"])
+
+    for r in missions:
+        writer.writerow([
+            r[IDX_PLATE] if len(r) > IDX_PLATE else "",
+            r[IDX_START] if len(r) > IDX_START else "",
+            r[IDX_END] if len(r) > IDX_END else "",
+            r[IDX_DEP] if len(r) > IDX_DEP else "",
+            r[IDX_ARR] if len(r) > IDX_ARR else "",
+            r[IDX_RT] if IDX_RT is not None and len(r) > IDX_RT else "",
+        ])
+
+    bio = io.BytesIO(out.getvalue().encode("utf-8"))
+    bio.name = f"M_Report_{driver}_{y}-{m:02d}.csv"
+    await context.bot.send_document(chat_id=q.from_user.id, document=bio,
+                                    caption=f"M-report for {driver} ({y}-{m:02d})")
+
+# Register handlers (standalone, no Reports menu)
+application.add_handler(CommandHandler("m_report", m_report_entry))
+application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MRPT_DRIVER:"))
+
+print("✅ M-report (monthly mission summary) loaded")
+# ===============================
