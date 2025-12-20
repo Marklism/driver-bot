@@ -3734,22 +3734,9 @@ def main():
             try:
                 # Build command list for Telegram API
                 cmds_payload = [
-        {"command": "start", "description": "Show menu"},
-        {"command": "ot_report", "description": "OT report: /ot_report [usernameYYYY-MM"},
-        {"command": "m_report", "description": "Monthly mission report (CSV)"},
-        {"command": "mission_monthly_report", "description": "Monthly mission report (legacy)"},
-        {"command": "leave", "description": "Request leave"},
-        {"command": "finance", "description": "Add finance record"},
-        {"command": "mission_end", "description": "End mission"},
-        {"command": "clock_in", "description": "Clock In"},
-        {"command": "clock_out", "description": "Clock Out"},
-    YYYY-MM"},
-                    {"command": "leave", "description": "Request leave"},
-                    {"command": "finance", "description": "Add finance record"},
-                    {"command": "mission_end", "description": "End mission"},
-                    {"command": "clock_in", "description": "Clock In"},
-                    {"command": "clock_out", "description": "Clock Out"}
-                ]
+                    {"command": "start", "description": "Show menu"},
+                    {"command": "ot_report", "description": "OT report: /ot_report [usernameYYYY-MM"},
+                    {"command": "m_report", "description": "Monthly mission report (CSV)"},]
                 try:
                     import json, urllib.request
                     url = f"https://api.telegram.org/bot{token_tmp}/setMyCommands"
