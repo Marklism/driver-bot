@@ -709,7 +709,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 try:
     # These handlers implement Clock In/Out toggle and OT reporting
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
-    application.add_handler(CommandHandler(\"m_report\", m_report_entry))
+    application.add_handler(CommandHandler("m_report", m_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     # [DISABLED] legacy mission_monthly_report handler
 
