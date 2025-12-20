@@ -3589,7 +3589,9 @@ def register_ui_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
     application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
-
+    # Register handlers (must be before run_polling)
+    application.add_handler(CommandHandler("m_report", m_report_entry))
+    application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MREP:"))
     
     # Debug command for runtime self-check
     application.add_handler(CommandHandler('debug_bot', debug_bot_command))
