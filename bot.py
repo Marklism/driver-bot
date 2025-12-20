@@ -293,6 +293,9 @@ OT_RECORD_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning O
 # HOLIDAY FREEZE (2026 = 26 DAYS) + ENV MERGE
 # =========================
 
+# --- FIX: ensure OT_HOLIDAYS is defined before use ---
+OT_HOLIDAYS = set()
+
 def _load_ot_holidays():
     base = set(OT_HOLIDAYS)
     raw = os.getenv("OT_HOLIDAYS") or os.getenv("HOLIDAYS")
