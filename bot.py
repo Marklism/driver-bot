@@ -1668,6 +1668,29 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             ws.append_row(row)
         except Exception:
             logger.exception("Failed to append leave row")
+
+    # --- LEAVE NOTICE ENHANCEMENT: split cross-year summary ---
+    try:
+        if sd_dt and ed_dt:
+            from collections import defaultdict
+            ym_days = defaultdict(int)
+            cur2 = sd_dt
+            while cur2 <= ed_dt:
+                if not (_is_weekend(cur2) or _is_holiday(cur2)):
+                    ym_days[(cur2.year, cur2.month)] += 1
+                cur2 += timedelta(days=1)
+
+            # build notification text (do not change main confirmation line)
+            lines = []
+            for (y, m) in sorted(ym_days.keys()):
+                month_name = datetime(y, m, 1).strftime("%B")
+                lines.append(
+                    f"Total leave days for {driver}: {ym_days[(y,m)]} day(s) in {month_name} and {ym_days[(y,m)]} day(s) in {y}."
+                )
+            if lines:
+                await context.bot.send_message(chat_id=user.id, text="\n".join(lines))
+    except Exception:
+        pass
     # success
     return True
 
