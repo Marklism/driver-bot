@@ -1,142 +1,97 @@
-#!/usr/bin/env python3
-import os
-import logging
-import csv
-import io
-from datetime import datetime, timedelta
 
-import gspread
-from google.oauth2.service_account import Credentials
+# ================= A5 FIXED: OT REPORT (Drivers-based buttons) =================
+# Buttons source: Drivers!Username
+# Data source: OT Record
+# Period: 16th 04:00 -> next 16th 04:00
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    BotCommand,
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
+from datetime import datetime, timedelta, time as dtime
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
+import csv, io, os
 
-# -------------------- BASIC SETUP --------------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("driver-bot")
+LOCAL_TZ = os.getenv("LOCAL_TZ", "Asia/Phnom_Penh")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-SHEET_ID = os.getenv("SHEET_ID")
-CREDS_B64 = os.getenv("GOOGLE_CREDS_B64")
-
-# -------------------- GOOGLE SHEET --------------------
-def get_gs_client():
-    import base64, json
-    info = json.loads(base64.b64decode(CREDS_B64))
-    scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    return gspread.authorize(creds)
-
-def load_ot_records():
-    client = get_gs_client()
-    sh = client.open_by_key(SHEET_ID)
-    ws = sh.worksheet("OT Record")
-    return ws.get_all_records()
-
-# -------------------- PERIOD LOGIC --------------------
-def parse_period(anchor_ym: str):
-    """
-    anchor_ym: YYYY-MM
-    Period = 16th 04:00 of anchor month
-          -> 16th 04:00 of next month
-    """
-    start = datetime.strptime(anchor_ym + "-16 04:00", "%Y-%m-%d %H:%M")
-    # move to next month
-    if start.month == 12:
-        end = start.replace(year=start.year + 1, month=1)
+def _parse_period(yyyymm: str):
+    base = datetime.strptime(yyyymm, "%Y-%m")
+    start = base.replace(day=16, hour=4, minute=0, second=0)
+    if base.month == 12:
+        end = start.replace(year=base.year + 1, month=1)
     else:
-        end = start.replace(month=start.month + 1)
+        end = start.replace(month=base.month + 1)
     return start, end
 
-# -------------------- COMMANDS --------------------
-async def ot_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ot_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: /ot_report YYYY-MM")
         return
 
-    anchor = context.args[0]
+    yyyymm = context.args[0]
     try:
-        start, end = parse_period(anchor)
+        start, end = _parse_period(yyyymm)
     except Exception:
         await update.message.reply_text("Invalid format. Use YYYY-MM")
         return
 
-    rows = load_ot_records()
-    drivers = sorted({r.get("driver") for r in rows if r.get("driver")})
+    # --- LOAD DRIVERS ---
+    drivers_rows = read_sheet("Drivers")
+    usernames = [r.get("Username") for r in drivers_rows if r.get("Username")]
 
-    context.user_data["ot_anchor"] = anchor
+    if not usernames:
+        await update.message.reply_text("No drivers found in Drivers sheet.")
+        return
 
     keyboard = [
-        [InlineKeyboardButton(d, callback_data=f"otdrv|{d}")]
-        for d in drivers
+        [InlineKeyboardButton(u, callback_data=f"otrep|{yyyymm}|{u}")]
+        for u in usernames
     ]
 
-    await update.message.reply_text(
-        f"OT Report period:\n{start} → {end}\nSelect driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+    text = (
+        "OT Report period:\n"
+        f"{start:%Y-%m-%d %H:%M:%S} → {end:%Y-%m-%d %H:%M:%S}\n\n"
+        "Select driver:"
     )
 
-async def ot_driver_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-    driver = query.data.split("|", 1)[1]
-    anchor = context.user_data.get("ot_anchor")
-    start, end = parse_period(anchor)
+async def ot_report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
-    rows = load_ot_records()
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["driver", "date", "ot_hours"])
+    _, yyyymm, username = q.data.split("|")
+    start, end = _parse_period(yyyymm)
 
+    rows = read_sheet("OT Record")
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["Username", "Date", "OT_Hours"])
+
+    total = 0.0
     for r in rows:
-        if r.get("driver") != driver:
+        if r.get("Username") != username:
             continue
         try:
-            ts = datetime.fromisoformat(str(r.get("date")))
+            ts = datetime.fromisoformat(r.get("DateTime"))
         except Exception:
             continue
         if start <= ts < end:
-            writer.writerow([
-                driver,
-                r.get("date"),
-                r.get("ot_hours", r.get("ot", ""))
-            ])
+            h = float(r.get("OT_Hours") or 0)
+            total += h
+            writer.writerow([username, ts.date(), f"{h:.2f}"])
 
-    output.seek(0)
-    await query.message.reply_document(
-        document=io.BytesIO(output.getvalue().encode("utf-8")),
-        filename=f"ot_{driver}_{anchor}.csv",
-        caption=f"OT Report for {driver}\n{start} → {end}",
+    out.seek(0)
+    filename = f"ot_{username}_{yyyymm}.csv"
+    await q.message.reply_document(
+        document=io.BytesIO(out.getvalue().encode()),
+        filename=filename,
+        caption=f"{username} total OT: {total:.2f} hour(s)"
     )
 
-# -------------------- MAIN --------------------
-def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN missing")
+def register_ot_report(application):
+    application.add_handler(CommandHandler("ot_report", ot_report_entry))
+    application.add_handler(CallbackQueryHandler(ot_report_callback, pattern=r"^otrep\|"))
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("ot_report", ot_report))
-    app.add_handler(CallbackQueryHandler(ot_driver_selected, pattern=r"^otdrv\|"))
-
-    app.bot.delete_webhook(drop_pending_updates=True)
-    app.bot.set_my_commands([
-        BotCommand("ot_report", "OT report (16th 04:00 → next 16th 04:00)"),
-    ])
-
-    logger.info("A5 OT REPORT (button + custom period) LOADED")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+# ================= END A5 FIX =================
