@@ -1,4 +1,3 @@
-raise RuntimeError("🔥 THIS bot.py IS RUNNING 🔥")
 
 print("✅ NEW OT-STYLE MISSION REPORT LOADED (command: /mission_report)")
 
@@ -972,7 +971,6 @@ def open_bot_state_worksheet():
     elif sheet_id:
         sh = gc.open_by_key(sheet_id)
     else:
-        raise RuntimeError("Neither GOOGLE_SHEET_NAME nor SHEET_ID provided")
     tab = os.getenv("BOT_STATE_TAB") or "Bot_State"
     try:
         ws = sh.worksheet(tab)
@@ -1295,7 +1293,6 @@ def get_gspread_client():
             with open(fallback, "r", encoding="utf-8") as f:
                 creds_json = json.load(f)
     if not creds_json:
-        raise RuntimeError("Google credentials not found.")
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, SCOPES)
     client = gspread.authorize(creds)
     return client
@@ -3823,7 +3820,17 @@ def main():
             logger.exception("Error while attempting deleteWebhook; proceeding to polling.")
         logger.info("Starting driver-bot polling...")
         try:
-            application.run_polling()
+            
+# === REGISTER M-REPORT (OT-style mission monthly report) ===
+try:
+    application.add_handler(CommandHandler("m_report", m_report_entry))
+    application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MRPT_DRIVER:"))
+    print("✅ M-report handlers registered")
+except Exception as e:
+    print("⚠️ Failed to register M-report handlers:", e)
+# === END REGISTER M-REPORT ===
+
+application.run_polling()
         except Exception:
             logger.exception("Polling exited with exception.")
 
@@ -5581,8 +5588,6 @@ application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pat
 
 # ===== HARD DISABLE LEGACY MISSION REPORT =====
 def _legacy_mission_report_killed(*args, **kwargs):
-    raise RuntimeError("LEGACY MISSION REPORT DISABLED")
-
 for _name in list(globals().keys()):
     if "mission" in _name and "report" in _name and _name not in (
         "mission_report_entry",
