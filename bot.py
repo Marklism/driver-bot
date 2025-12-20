@@ -3735,7 +3735,7 @@ def main():
                 # Build command list for Telegram API
                 cmds_payload = [
         {"command": "start", "description": "Show menu"},
-        {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
+        {"command": "ot_report", "description": "OT report: /ot_report [usernameYYYY-MM"},
         {"command": "m_report", "description": "Monthly mission report (CSV)"},
         {"command": "mission_monthly_report", "description": "Monthly mission report (legacy)"},
         {"command": "leave", "description": "Request leave"},
@@ -3743,7 +3743,7 @@ def main():
         {"command": "mission_end", "description": "End mission"},
         {"command": "clock_in", "description": "Clock In"},
         {"command": "clock_out", "description": "Clock Out"},
-    ] YYYY-MM"},
+    YYYY-MM"},
                     {"command": "leave", "description": "Request leave"},
                     {"command": "finance", "description": "Add finance record"},
                     {"command": "mission_end", "description": "End mission"},
