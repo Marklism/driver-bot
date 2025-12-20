@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os
 import logging
+import csv
+import io
 import asyncio
 from telegram import Update, BotCommand
 from telegram.ext import (
@@ -59,6 +61,32 @@ async def clock_in(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def clock_out(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Clock OUT recorded.")
 
+
+# -------------------- OT CSV (SAFE ADDITION) --------------------
+async def ot_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Minimal OT CSV export.
+    Schema placeholder to validate download flow without touching business logic.
+    Usage: /ot_csv YYYY-MM
+    """
+    if not context.args:
+        await update.message.reply_text("Usage: /ot_csv YYYY-MM")
+        return
+
+    month = context.args[0]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["driver", "date", "ot_hours"])
+    # Placeholder rows (safe, no data mutation)
+    writer.writerow(["example_driver", f"{month}-01", "0.00"])
+
+    output.seek(0)
+    await update.message.reply_document(
+        document=io.BytesIO(output.getvalue().encode("utf-8")),
+        filename=f"ot_report_{month}.csv",
+        caption="OT CSV export (placeholder)"
+    )
+
 # -------------------- MAIN --------------------
 async def main():
     if not BOT_TOKEN:
@@ -67,6 +95,7 @@ async def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Register handlers
+    application.add_handler(CommandHandler("ot_csv", ot_csv))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("debug_bot", debug_bot))
     application.add_handler(CommandHandler("ot_report", ot_report))
