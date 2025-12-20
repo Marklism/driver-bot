@@ -359,6 +359,7 @@ OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
 OT_RECORD_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning OT", "Evening OT", "Note"]
 
 # OT holidays configuration: default includes 2025-12-29; extend via OT_HOLIDAYS or HOLIDAYS env vars
+\1
 
 # =========================
 # HOLIDAY FREEZE (2026 = 26 DAYS) + ENV MERGE
