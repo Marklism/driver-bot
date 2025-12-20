@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import logging
-import asyncio
 import csv
 import io
 from datetime import datetime
@@ -33,10 +32,6 @@ def get_gs_client():
     return gspread.authorize(creds)
 
 def load_ot_records(year_month: str):
-    """
-    Read OT Record sheet and return rows filtered by YYYY-MM.
-    Expected columns include at least: driver, date, ot_hours
-    """
     client = get_gs_client()
     sh = client.open_by_key(SHEET_ID)
     ws = sh.worksheet("OT Record")
@@ -90,23 +85,22 @@ async def ot_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # -------------------- MAIN --------------------
-async def main():
+def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN missing")
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ot_csv", ot_csv))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("ot_csv", ot_csv))
 
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    await app.bot.set_my_commands([
-        BotCommand("start", "Show menu"),
-        BotCommand("ot_csv", "Download OT CSV: /ot_csv YYYY-MM"),
-    ])
+    # Proper async-safe setup handled internally by run_polling()
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
 
-    logger.info("OT CSV (A2) LOADED — reading from OT Record")
-    await app.run_polling()
+    logger.info("OT CSV BOT RUNNING (stable, no event-loop issues)")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
