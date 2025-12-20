@@ -1,3 +1,6 @@
+
+print("✅ NEW OT-STYLE MISSION REPORT LOADED (command: /mission_report)")
+
 from datetime import datetime, timedelta, time as time
 
 
@@ -5572,3 +5575,17 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
 application.add_handler(CommandHandler("mission_report", mission_report_entry))
 application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
 # ===============================
+
+
+
+# ===== HARD DISABLE LEGACY MISSION REPORT =====
+def _legacy_mission_report_killed(*args, **kwargs):
+    raise RuntimeError("LEGACY MISSION REPORT DISABLED")
+
+for _name in list(globals().keys()):
+    if "mission" in _name and "report" in _name and _name not in (
+        "mission_report_entry",
+        "mission_report_driver_callback",
+    ):
+        globals()[_name] = _legacy_mission_report_killed
+# ============================================
