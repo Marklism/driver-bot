@@ -2,6 +2,7 @@
 print("✅ NEW OT-STYLE MISSION REPORT LOADED (command: /mission_report)")
 
 from datetime import datetime, timedelta, time as time
+from datetime import time as dtime
 
 
 def determine_ot_rate(dt: datetime, is_holiday: bool = False) -> str:
@@ -3822,7 +3823,17 @@ def main():
             logger.exception("Error while attempting deleteWebhook; proceeding to polling.")
         logger.info("Starting driver-bot polling...")
         try:
-            application.run_polling()
+            
+# === REGISTER M-REPORT (OT-style monthly mission summary) ===
+try:
+    application.add_handler(CommandHandler("m_report", m_report_entry))
+    application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MRPT_DRIVER:"))
+    logger.info("M-report handlers registered and active")
+except Exception:
+    logger.exception("Failed to register M-report handlers")
+# === END REGISTER M-REPORT ===
+
+application.run_polling()
         except Exception:
             logger.exception("Polling exited with exception.")
 
