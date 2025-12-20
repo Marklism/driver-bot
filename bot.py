@@ -5524,3 +5524,51 @@ def split_mission_ot_minutes(mission_start, mission_end, ot_segments):
     return minutes
 
 # === END B-7 + C-4.16 ===
+
+
+# ======================
+# MISSION REPORT (OT-STYLE BUTTON + CSV)
+# ======================
+
+import io, csv
+
+# ---- Disable legacy mission command ----
+async def mission_monthly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await reply_privately(update, context, "❌ /mission_monthly_report 已废弃，请使用 Reports → Mission Monthly Report")
+
+# ---- Entry from Reports menu ----
+async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    drivers = get_all_drivers()  # existing helper
+    kb = []
+    for d in drivers:
+        kb.append([InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")])
+    await update.callback_query.edit_message_text(
+        "Select driver for Mission Report",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
+
+# ---- Driver selected ----
+async def mission_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    driver = q.data.split(":", 1)[1]
+
+    rows = get_mission_rows_by_driver(driver)  # existing data access
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "Driver", "Plate", "Start", "End", "Departure", "Arrival", "Year", "Month"
+    ])
+    for r in rows:
+        writer.writerow(r)
+
+    buf.seek(0)
+    await q.message.reply_document(
+        document=io.BytesIO(buf.getvalue().encode("utf-8")),
+        filename=f"mission_report_{driver}.csv"
+    )
+
+# ---- Register mission handlers ----
+application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report))
+application.add_handler(CallbackQueryHandler(mission_report_entry, pattern="^rep_mm$"))
+application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
