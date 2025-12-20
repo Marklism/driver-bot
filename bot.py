@@ -108,7 +108,6 @@ async def ot_report_entry(update, context):
     )
 
 def _calc_hours_fallback(r, idx_morning, idx_evening, idx_start, idx_end):
-    try:
         m = float(r[idx_morning] or 0)
         ev = float(r[idx_evening] or 0)
         if m + ev > 0:
@@ -116,7 +115,6 @@ def _calc_hours_fallback(r, idx_morning, idx_evening, idx_start, idx_end):
         s = datetime.fromisoformat(r[idx_start])
         e2 = datetime.fromisoformat(r[idx_end])
         return round((e2 - s).total_seconds() / 3600, 2)
-    except Exception:
         return 0
 
 async def ot_report_driver_callback(update, context):
@@ -154,7 +152,6 @@ async def ot_report_driver_callback(update, context):
         typ = r[idx_type].strip()
 
         # ===== 核心修复点 =====
-        try:
             m = float(r[idx_morning] or 0)
             e = float(r[idx_evening] or 0)
             hours = m + e
@@ -163,7 +160,6 @@ async def ot_report_driver_callback(update, context):
                 s = datetime.fromisoformat(r[idx_start])
                 en = datetime.fromisoformat(r[idx_end])
                 hours = round((en - s).total_seconds() / 3600, 2)
-        except Exception as ex:
             # 直接跳过坏行，但不炸整个 driver
             continue
 
@@ -270,15 +266,10 @@ def check_deployment_requirements():
     # Try importing some optional modules to give clearer messages
     optional_checks = ["gspread", "oauth2client", "zoneinfo", "httpx"]
     for mod in optional_checks:
-        try:
             __import__(mod)
-        except Exception as e:
             print(f"Note: optional module import failed: {mod} -> {e}")
     print("=== DEPLOYMENT CHECK COMPLETE ===")
-
-try:
     from zoneinfo import ZoneInfo
-except Exception:
     ZoneInfo = None
 
 from typing import Optional, Dict, List, Any
@@ -391,12 +382,8 @@ def record_clock_entry(driver: str, action: str, note: str = ""):
     ws = open_worksheet(OT_TAB)
 
     # Ensure headers exist
-    try:
         ensure_sheet_headers_match(ws, OT_HEADERS)
-    except Exception:
-        try:
             logger.exception("Failed to ensure/update OT_TAB headers")
-        except Exception:
             pass
 
     row = [
@@ -490,9 +477,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     rec = record_clock_entry(driver, action)
 
     # parse timestamp
-    try:
         ts_dt = datetime.strptime(rec[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-    except Exception:
         ts_dt = _now_dt()
 
     is_weekend = _is_weekend(ts_dt)
@@ -509,12 +494,9 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # Helper: append one OT record row
     def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
-        try:
             tab_name = OT_RECORD_TAB
             ws = open_worksheet(tab_name)
-            try:
                 ensure_sheet_headers_match(ws, OT_RECORD_HEADERS)
-            except Exception:
                 pass
             day_str = (start_dt or end_dt).strftime("%Y-%m-%d") if (start_dt or end_dt) else ""
             row = [
@@ -527,11 +509,8 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 f"{evening_h:.2f}" if evening_h > 0 else "",
                 note_str,
             ]
-            try:
                 ws.append_row(row, value_input_option="USER_ENTERED")
-            except Exception:
                 ws.append_row(row)
-        except Exception:
             logger.exception("Failed to append OT record row for %s", driver)
 
     # --- Normal weekdays OT rules ---
@@ -579,9 +558,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         if action == "OUT":
             start_dt = None
             if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
-                try:
                     start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-                except Exception:
                     start_dt = None
             if start_dt is not None:
                 # Full shift as OT
@@ -600,17 +577,14 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # --- Notifications & user feedback ---
     if should_notify and total_ot > 0 and chat is not None:
-        try:
             if weekday_msg:
                 msg = f"💰Driver {driver}: OT today: {total_ot:.2f} hour(s)."
             else:
                 msg = f"💰Driver {driver}: OT today: {total_ot:.2f} hour(s)."
             await context.bot.send_message(chat_id=chat.id, text=msg)
-        except Exception:
             logger.exception("Failed to send OT notification")
 
     # Edit the inline-button message as a confirmation
-    try:
         if total_ot > 0:
             await query.edit_message_text(
                 f"🌟Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}. OT: {total_ot:.2f} hour(s)."
@@ -619,7 +593,6 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text(
                 f"🌟Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}."
             )
-    except Exception:
         # Fallback: ignore edit errors
         pass
 async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -635,15 +608,12 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         driver = args[0]
         ym = args[1]
-
-    try:
         year, month = map(int, ym.split("-"))
         month_start = datetime(year, month, 1)
         if month == 12:
             month_end = datetime(year + 1, 1, 1)
         else:
             month_end = datetime(year, month + 1, 1)
-    except Exception:
         await update.message.reply_text("Invalid month format. Use YYYY-MM.")
         return
 
@@ -662,9 +632,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ts = row[O_IDX_TIME]
         if r_driver != driver:
             continue
-        try:
             dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-        except Exception:
             continue
         if month_start <= dt < month_end:
             records.append((dt, row))
@@ -707,14 +675,11 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Driver / Mission / Leave / Finance Helpers
 
 # Register OT handlers (inserted)
-try:
     # These handlers implement Clock In/Out toggle and OT reporting
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     # [DISABLED] legacy mission_monthly_report handler
-
-except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
     pass
 
@@ -730,10 +695,7 @@ import urllib.request
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-
-try:
     from zoneinfo import ZoneInfo
-except Exception:
     ZoneInfo = None
 
 from telegram import (
@@ -787,7 +749,6 @@ DEFAULT_LANG = os.getenv("LANG", "en").lower()
 
 # --- Added: Holiday list from environment variable ---
 # Format: HOLIDAYS="2025-12-25,2025-12-31"
-try:
     _raw_holidays = os.getenv("HOLIDAYS", "") or ""
     HOLIDAYS = {
     # 2025
@@ -806,7 +767,6 @@ try:
     "2026-11-09", "2026-11-23", "2026-11-24", "2026-11-25",
     "2026-12-29",
 }
-except Exception:
     HOLIDAYS = set()
 
 SUPPORTED_LANGS = ("en", "km")
@@ -884,9 +844,7 @@ def _get_gspread_client():
     if not b64:
         raise RuntimeError('Google credentials not provided (GOOGLE_CREDS_B64 / GOOGLE_CREDS_BASE64)')
     info = json.loads(base64.b64decode(b64))
-    try:
         creds = service_account.Credentials.from_service_account_info(info, scopes=_GSPREAD_SCOPES)
-    except Exception:
         creds = service_account.Credentials.from_service_account_info(info)
     return gspread.authorize(creds)
 def open_bot_state_worksheet():
@@ -897,22 +855,18 @@ def open_bot_state_worksheet():
     else: raise RuntimeError('Provide GOOGLE_SHEET_NAME or SHEET_ID')
     tab = os.getenv('BOT_STATE_TAB') or 'Bot_State'
     try: ws = sh.worksheet(tab)
-    except Exception:
         ws = sh.add_worksheet(tab, rows=100, cols=10); ws.update('A1:B1',[['Key','Value']])
     return ws
 def load_mission_cycles_from_sheet():
     global _LOADED_MISSION_CYCLES
-    try:
         ws = open_bot_state_worksheet(); records = ws.get_all_records()
         for r in records:
             k = r.get('Key') or r.get('key'); v = r.get('Value') or r.get('value')
             if k == 'mission_cycle' and v:
                 _LOADED_MISSION_CYCLES = json.loads(v); return _LOADED_MISSION_CYCLES
-    except Exception:
         pass
     _LOADED_MISSION_CYCLES = {}; return _LOADED_MISSION_CYCLES
 def save_mission_cycles_to_sheet(mdict):
-    try:
         ws = open_bot_state_worksheet(); records = ws.get_all_records(); found=None
         for idx,r in enumerate(records,start=2):
             k = r.get('Key') or r.get('key')
@@ -920,7 +874,6 @@ def save_mission_cycles_to_sheet(mdict):
         j=json.dumps(mdict, ensure_ascii=False)
         if found: ws.update(f'B{found}', j)
         else: ws.append_row(['mission_cycle', j])
-    except Exception:
         try: logger.exception('Failed to save mission cycles to sheet')
         except Exception: pass
 # --- END: ENV NAMES NORMALIZATION & Bot-state persistence helpers ---
@@ -928,27 +881,17 @@ def save_mission_cycles_to_sheet(mdict):
 # Top-level OT writer (moved out of nested scope to avoid indentation issues)
 def _write_ot_rows(rows):
     logger.info("Entering _write_ot_rows")
-    try:
         # Prefer the configured OT_RECORD_TAB; fall back to legacy OT_SUM_TAB or default "OT record"
         tab_name = OT_RECORD_TAB or os.getenv("OT_SUM_TAB") or "OT record"
         ws = open_worksheet(tab_name)
         headers = OT_RECORD_HEADERS
-        try:
             ensure_sheet_headers_match(ws, headers)
-        except Exception:
-            try:
                 logger.exception("Failed to ensure/update OT record headers")
-            except Exception:
                 pass
         for r in rows:
-            try:
                 ws.append_row(r, value_input_option='USER_ENTERED')
-            except Exception:
-                try:
                     ws.append_row(r)
-                except Exception:
                     logger.exception("Failed to append OT calc row %s", r)
-    except Exception:
         logger.exception("Failed writing OT calc rows")
 
 _LOADED_MISSION_CYCLES = {}
@@ -974,9 +917,7 @@ def open_bot_state_worksheet():
     else:
         raise RuntimeError("Neither GOOGLE_SHEET_NAME nor SHEET_ID provided")
     tab = os.getenv("BOT_STATE_TAB") or "Bot_State"
-    try:
         ws = sh.worksheet(tab)
-    except Exception:
         # create worksheet if missing
         ws = sh.add_worksheet(tab, rows=100, cols=10)
         # set headers
@@ -985,7 +926,6 @@ def open_bot_state_worksheet():
 
 def load_mission_cycles_from_sheet():
     global _LOADED_MISSION_CYCLES
-    try:
         ws = open_bot_state_worksheet()
         records = ws.get_all_records()
         for r in records:
@@ -993,21 +933,17 @@ def load_mission_cycles_from_sheet():
             v = r.get("Value") or r.get("value")
             if k and v:
                 if k == "mission_cycle":
-                    try:
                         _LOADED_MISSION_CYCLES = json.loads(v)
-                    except Exception:
                         _LOADED_MISSION_CYCLES = {}
                     return _LOADED_MISSION_CYCLES
         # if not found, keep empty dict
         _LOADED_MISSION_CYCLES = {}
         return _LOADED_MISSION_CYCLES
-    except Exception:
         # don't crash startup; leave empty
         _LOADED_MISSION_CYCLES = {}
         return _LOADED_MISSION_CYCLES
 
 def save_mission_cycles_to_sheet(mdict):
-    try:
         ws = open_bot_state_worksheet()
         records = ws.get_all_records()
         found_row = None
@@ -1021,7 +957,6 @@ def save_mission_cycles_to_sheet(mdict):
             ws.update(f"B{found_row}", json_val)
         else:
             ws.append_row(["mission_cycle", json_val])
-    except Exception as e:
         logger.exception("Failed to save mission cycles to sheet: %s", e)
 # --- END: Bot state persistence ---
 
@@ -1039,9 +974,7 @@ class GoogleApiQueue:
 
     def _worker(self):
         while not self._stop.is_set():
-            try:
                 func, args, kwargs, resp_q = self._q.get(timeout=0.1)
-            except queue.Empty:
                 continue
             # Ensure minimum interval between requests
             now = time.time()
@@ -1050,12 +983,10 @@ class GoogleApiQueue:
                 time.sleep(self._min_interval - since)
             attempt = 0
             while True:
-                try:
                     result = func(*args, **kwargs)
                     self._last_time = time.time()
                     resp_q.put((True, result))
                     break
-                except Exception as e:
                     attempt += 1
                     # If likely a rate-limit / transient error, retry with backoff up to max_retries;
                     # otherwise return error after retries.
@@ -1074,9 +1005,7 @@ class GoogleApiQueue:
 
     def stop(self):
         self._stop.set()
-        try:
             self._thread.join(timeout=1.0)
-        except Exception:
             pass
 
 # Singleton queue instance (used by WorksheetProxy)
@@ -1269,7 +1198,6 @@ def t(user_lang: Optional[str], key: str, **kwargs) -> str:
     return TR.get(lang, TR["en"]).get(key, TR["en"].get(key, "")).format(**kwargs)
 
 def _load_creds_from_base64(encoded: str) -> dict:
-    try:
         if encoded.strip().startswith("{"):
             return json.loads(encoded)
         padded = "".join(encoded.split())
@@ -1278,7 +1206,6 @@ def _load_creds_from_base64(encoded: str) -> dict:
             padded += "=" * (4 - missing)
         decoded = base64.b64decode(padded)
         return json.loads(decoded)
-    except Exception:
         logger.exception("Failed to decode GOOGLE_CREDS_BASE64")
         raise
 
@@ -1301,15 +1228,12 @@ def get_gspread_client():
     return client
 
 def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
-    try:
         values = ws.get_all_values()
         if not values:
             ws.insert_row(headers, index=1)
-    except Exception:
         logger.exception("Failed to ensure headers on %s", getattr(ws, "title", "<ws>"))
 
 def ensure_sheet_headers_match(ws, headers: List[str]):
-    try:
         values = ws.get_all_values()
         if not values:
             ws.insert_row(headers, index=1)
@@ -1321,13 +1245,11 @@ def ensure_sheet_headers_match(ws, headers: List[str]):
             rng = f"A1:{chr(ord('A') + len(headers) - 1)}1"
             ws.update(rng, [headers], value_input_option="USER_ENTERED")
             logger.info("Updated header row on %s", getattr(ws, "title", "<ws>"))
-    except Exception:
         logger.exception("Failed to ensure/update headers on %s", getattr(ws, "title", "<ws>"))
 
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
 def _missions_header_fix_if_needed(ws):
-    try:
         values = ws.get_all_values()
         if not values:
             return
@@ -1346,7 +1268,6 @@ def _missions_header_fix_if_needed(ws):
                 headers = HEADERS_BY_TAB.get(MISSIONS_TAB, [])
                 if not headers:
                     return
-                try:
                     h = list(headers)
                     while len(h) < M_MANDATORY_COLS:
                         h.append("")
@@ -1354,9 +1275,7 @@ def _missions_header_fix_if_needed(ws):
                     rng = f"A1:{col_letter_end}1"
                     ws.update(rng, [h], value_input_option="USER_ENTERED")
                     logger.info("Fixed MISSIONS header row to canonical headers due to GUID detected.")
-                except Exception:
                     logger.exception("Failed to update header row in MISSIONS sheet.")
-    except Exception:
         logger.exception("Error checking/fixing missions header.")
 
 def open_worksheet(tab: str = ""):
@@ -1368,9 +1287,7 @@ def open_worksheet(tab: str = ""):
     """
 
     def _wrap_ws(ws):
-        try:
             return WorksheetProxy(ws)
-        except Exception:
             # If proxying somehow fails, fall back to raw worksheet
             return ws
 
@@ -1378,22 +1295,17 @@ def open_worksheet(tab: str = ""):
     sh = gc.open(GOOGLE_SHEET_NAME)
 
     def _create_tab(name: str, headers: Optional[List[str]] = None):
-        try:
             cols = max(12, len(headers) if headers else 12)
             ws_new = sh.add_worksheet(title=name, rows="2000", cols=str(cols))
             if headers:
                 # Header row – queued via proxy, but it's a one‑time write anyway
                 ws_new.insert_row(headers, index=1)
             return _wrap_ws(ws_new)
-        except Exception:
             # If sheet already exists or another error, just get existing
-            try:
                 return _wrap_ws(sh.worksheet(name))
-            except Exception:
                 raise
 
     if tab:
-        try:
             ws = sh.worksheet(tab)
             template = HEADERS_BY_TAB.get(tab)
             if template:
@@ -1402,18 +1314,15 @@ def open_worksheet(tab: str = ""):
             if tab == MISSIONS_TAB:
                 _missions_header_fix_if_needed(ws)
             return _wrap_ws(ws)
-        except Exception:
             headers = HEADERS_BY_TAB.get(tab)
             return _create_tab(tab, headers=headers)
     else:
         if GOOGLE_SHEET_TAB:
-            try:
                 ws = sh.worksheet(GOOGLE_SHEET_TAB)
                 if GOOGLE_SHEET_TAB in HEADERS_BY_TAB:
                     ensure_sheet_has_headers_conservative(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
                     ensure_sheet_headers_match(ws, HEADERS_BY_TAB[GOOGLE_SHEET_TAB])
                 return _wrap_ws(ws)
-            except Exception:
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
         # Default to first sheet, wrapped
         return _wrap_ws(sh.sheet1)
@@ -1428,11 +1337,9 @@ def _add_months(year:int, month:int, months:int):
     return y, m
 
 def _parse_ym(ym:str):
-    try:
         parts = ym.split("-")
         y = int(parts[0]); m = int(parts[1])
         return y,m
-    except Exception:
         return None
 
 async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1453,10 +1360,8 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
     start_dt = datetime.datetime(y,m,16,4,0)
     ny, nm = _add_months(y,m,1)
     end_dt = datetime.datetime(ny,nm,16,4,0)
-    try:
         ws = open_worksheet(OT_RECORD_TAB)
         vals = ws.get_all_values()
-    except Exception:
         await update.effective_chat.send_message("Failed to open OT records sheet.")
         return
     if not vals or len(vals) < 2:
@@ -1472,19 +1377,14 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
     # collect
     entries = {}
     for row in vals[1:]:
-        try:
             name = row[idx_name].strip()
             if name != username:
                 continue
             typ = row[idx_type].strip()
             start_raw = row[idx_start].strip() if len(row) > idx_start else ""
             sd = None
-            try:
                 sd = datetime.datetime.strptime(start_raw, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                try:
                     sd = datetime.datetime.strptime(start_raw, "%Y-%m-%d")
-                except Exception:
                     continue
             if not (start_dt <= sd < end_dt):
                 continue
@@ -1496,7 +1396,6 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
                 try: h += float(row[idx_evening] or 0)
                 except: pass
             entries.setdefault((name,typ), []).append((sd, h))
-        except Exception:
             continue
     if not entries:
         await update.effective_chat.send_message("No OT records in window for user.")
@@ -1526,22 +1425,16 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
 
 async def process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user):
     """Helper to append leave row with Leave Days, check duplicates and exclude weekends/holidays."""
-    try:
         sd_dt = datetime.strptime(start, "%Y-%m-%d")
         ed_dt = datetime.strptime(end, "%Y-%m-%d")
-    except Exception:
         sd_dt = None
         ed_dt = None
-
-    try:
         records = ws.get_all_records()
-    except Exception:
         records = []
 
     # check overlaps
     if sd_dt and ed_dt:
         for r in records:
-            try:
                 r_driver = next((r[k] for k in ("Driver","driver","Username","Name") if k in r and str(r.get(k,"")).strip()), "")
                 if r_driver != driver:
                     continue
@@ -1556,17 +1449,12 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
                 if not (ed_dt < r_sd or sd_dt > r_ed):
                     # overlap
                     msg = f"This date has already been applied for leave ({r_s} to {r_e}), please choose different dates."
-                    try:
                         await context.bot.send_message(chat_id=user.id, text=msg)
-                    except Exception:
                         pass
-                    try:
                         await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-                    except Exception:
                         pass
                     context.user_data.pop("pending_leave", None)
                     return False
-            except Exception:
                 continue
 
     # compute leave days excluding weekends and HOLIDAYS
@@ -1574,33 +1462,24 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
     if sd_dt and ed_dt and sd_dt <= ed_dt:
         cur = sd_dt
         while cur <= ed_dt:
-            try:
                 is_hol = cur.strftime("%Y-%m-%d") in HOLIDAYS
-            except Exception:
                 is_hol = False
             if cur.weekday() < 5 and not is_hol:
                 leave_days += 1 if not (_is_weekend(cur) or _is_holiday(cur)) else 0
             cur += timedelta(days=1)
 
     row = [driver, start, end, str(leave_days), reason, notes]
-    try:
         ws.append_row(row, value_input_option="USER_ENTERED")
-    except Exception:
-        try:
             ws.append_row(row)
-        except Exception:
             logger.exception("Failed to append leave row")
 
     # --- LEAVE NOTICE ENHANCEMENT: split cross-year summary ---
-    try:
         if sd_dt and ed_dt:
             from collections import defaultdict
             ym_days = defaultdict(int)
             cur2 = sd_dt
             while cur2 <= ed_dt:
-                try:
                     is_hol = cur2.strftime("%Y-%m-%d") in HOLIDAYS or _is_holiday(cur2)
-                except Exception:
                     is_hol = _is_holiday(cur2)
                 if cur2.weekday() < 5 and not is_hol:
                     ym_days[(cur2.year, cur2.month)] += 1
@@ -1615,7 +1494,6 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
                 )
             if lines:
                 await context.bot.send_message(chat_id=user.id, text="\n".join(lines))
-    except Exception:
         pass
     # success
     return True
@@ -1623,7 +1501,6 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
 def load_driver_map_from_env() -> Dict[str, List[str]]:
     if not DRIVER_PLATE_MAP_JSON:
         return {}
-    try:
         obj = json.loads(DRIVER_PLATE_MAP_JSON)
         normalized = {}
         for k, v in obj.items():
@@ -1635,12 +1512,10 @@ def load_driver_map_from_env() -> Dict[str, List[str]]:
                 plates = []
             normalized[str(k).strip()] = plates
         return normalized
-    except Exception:
         logger.exception("Failed to parse DRIVER_PLATE_MAP env JSON.")
         return {}
 
 def load_driver_map_from_sheet() -> Dict[str, List[str]]:
-    try:
         ws = open_worksheet(DRIVERS_TAB)
         rows = ws.get_all_records()
         mapping = {}
@@ -1650,7 +1525,6 @@ def load_driver_map_from_sheet() -> Dict[str, List[str]]:
             if user:
                 mapping[user] = [p.strip() for p in plates_raw.split(",") if p.strip()]
         return mapping
-    except Exception:
         logger.exception("Failed to load drivers tab.")
         return {}
 
@@ -1663,10 +1537,8 @@ def get_driver_map() -> Dict[str, List[str]]:
 
 def _now_dt() -> datetime:
     if LOCAL_TZ and ZoneInfo:
-        try:
             tz = ZoneInfo(LOCAL_TZ)
             return datetime.now(tz)
-        except Exception:
             logger.exception("Failed to use LOCAL_TZ; falling back to system time.")
             return datetime.now()
     else:
@@ -1679,13 +1551,10 @@ def today_date_str() -> str:
     return _now_dt().strftime(DATE_FMT)
 
 def parse_ts(ts: str) -> Optional[datetime]:
-    try:
         return datetime.strptime(ts, TS_FMT)
-    except Exception:
         return None
 
 def compute_duration(start_ts: str, end_ts: str) -> str:
-    try:
         s = parse_ts(start_ts)
         e = parse_ts(end_ts)
         if s is None or e is None:
@@ -1697,24 +1566,20 @@ def compute_duration(start_ts: str, end_ts: str) -> str:
         hours = total_minutes // 60
         minutes = total_minutes % 60
         return f"{hours}h{minutes}m"
-    except Exception:
         return ""
 
 def record_start_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
     start_ts = now_str()
     row = [today_date_str(), driver, plate, start_ts, "", ""]
-    try:
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("Recorded start trip: %s %s %s", driver, plate, start_ts)
         return {"ok": True, "message": f"Start time recorded for {plate} at {start_ts}", "ts": start_ts}
-    except Exception as e:
         logger.exception("Failed to append start trip")
         return {"ok": False, "message": "Failed to write start trip to sheet: " + str(e)}
 
 def record_end_trip(driver: str, plate: str) -> dict:
     ws = open_worksheet(RECORDS_TAB)
-    try:
         rows = ws.get_all_values()
         start_idx = 1 if rows and any("date" in c.lower() for c in rows[0] if c) else 0
         for idx in range(len(rows) - 1, start_idx - 1, -1):
@@ -1726,22 +1591,16 @@ def record_end_trip(driver: str, plate: str) -> dict:
                 row_number = idx + 1
                 end_ts = now_str()
                 duration_text = compute_duration(rec_start, end_ts) if rec_start else ""
-                try:
                     ws.update_cell(row_number, COL_END, end_ts)
                     ws.update_cell(row_number, COL_DURATION, duration_text)
-                except Exception:
                     existing = ws.row_values(row_number)
                     while len(existing) < COL_DURATION:
                         existing.append("")
                     existing[COL_END - 1] = end_ts
                     existing[COL_DURATION - 1] = duration_text
-                    try:
                         ws.delete_rows(row_number)
-                    except Exception:
                         logger.exception("Failed to delete row for fallback replacement at %d", row_number)
-                    try:
                         ws.insert_row(existing, row_number)
-                    except Exception:
                         logger.exception("Failed to insert fallback row at %d", row_number)
                 logger.info("Recorded end trip for %s row %d", plate, row_number)
                 return {"ok": True, "message": f"End time recorded for {plate} at {end_ts} (duration {duration_text})", "ts": end_ts, "duration": duration_text}
@@ -1750,7 +1609,6 @@ def record_end_trip(driver: str, plate: str) -> dict:
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("No open start found; appended end-only row for %s", plate)
         return {"ok": True, "message": f"End time recorded (no matching start found) for {plate} at {end_ts}", "ts": end_ts, "duration": ""}
-    except Exception as e:
         logger.exception("Failed to update end trip")
         return {"ok": False, "message": "Failed to write end trip to sheet: " + str(e)}
 
@@ -1777,7 +1635,6 @@ def _ensure_row_length(row: List[Any], length: int) -> List[Any]:
 def start_mission_record(driver: str, plate: str, departure: str) -> dict:
     ws = open_worksheet(MISSIONS_TAB)
     start_ts = now_str()
-    try:
         next_no = _missions_next_no(ws)
         guid = str(uuid.uuid4())
         row = [""] * M_MANDATORY_COLS
@@ -1796,18 +1653,13 @@ def start_mission_record(driver: str, plate: str, departure: str) -> dict:
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("Mission start recorded GUID=%s no=%s driver=%s plate=%s dep=%s", guid, next_no, driver, plate, departure)
         return {"ok": True, "guid": guid, "no": next_no, "start_ts": start_ts}
-    except Exception as e:
         logger.exception("Failed to append mission start")
         return {"ok": False, "message": "Failed to write mission start to sheet: " + str(e)}
 
 def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
-    try:
         ws = open_worksheet(MISSIONS_TAB)
-    except Exception as e:
         logger.exception("Failed to open MISSIONS_TAB: %s", e)
         return {"ok": False, "message": "Could not open missions sheet: " + str(e)}
-
-    try:
         vals, start_idx = _missions_get_values_and_data_rows(ws)
         for i in range(len(vals) - 1, start_idx - 1, -1):
             row = _ensure_row_length(vals[i], M_MANDATORY_COLS)
@@ -1819,24 +1671,16 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
             if rec_plate == plate and rec_name == driver and not rec_end:
                 row_number = i + 1
                 end_ts = now_str()
-                try:
                     ws.update_cell(row_number, M_IDX_END + 1, end_ts)
                     ws.update_cell(row_number, M_IDX_ARRIVAL + 1, arrival)
-                except Exception:
-                    try:
                         existing = ws.row_values(row_number)
-                    except Exception:
                         existing = []
                     existing = _ensure_row_length(existing, M_MANDATORY_COLS)
                     existing[M_IDX_END] = end_ts
                     existing[M_IDX_ARRIVAL] = arrival
-                    try:
                         ws.delete_rows(row_number)
-                    except Exception:
                         logger.exception("Failed to delete row for fallback replacement at %d", row_number)
-                    try:
                         ws.insert_row(existing, row_number)
-                    except Exception:
                         logger.exception("Failed to insert fallback row at %d", row_number)
 
                 logger.info("Updated mission end for row %d plate=%s driver=%s", row_number, plate, driver)
@@ -1907,30 +1751,19 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                 else:
                     return_start = rec_start
                     return_end = end_ts
-
-                try:
                     ws.update_cell(primary_row_number, M_IDX_ROUNDTRIP + 1, "Yes")
                     ws.update_cell(primary_row_number, M_IDX_RETURN_START + 1, return_start)
                     ws.update_cell(primary_row_number, M_IDX_RETURN_END + 1, return_end)
-                except Exception:
-                    try:
                         existing = ws.row_values(primary_row_number)
-                    except Exception:
                         existing = []
                     existing = _ensure_row_length(existing, M_MANDATORY_COLS)
                     existing[M_IDX_ROUNDTRIP] = "Yes"
                     existing[M_IDX_RETURN_START] = return_start
                     existing[M_IDX_RETURN_END] = return_end
-                    try:
                         ws.delete_rows(primary_row_number)
-                    except Exception:
                         logger.exception("Failed to delete primary row for fallback replacement at %d", primary_row_number)
-                    try:
                         ws.insert_row(existing, primary_row_number)
-                    except Exception:
                         logger.exception("Failed to insert fallback primary row at %d", primary_row_number)
-
-                try:
                     sec_vals = _ensure_row_length(vals2[secondary_idx], M_MANDATORY_COLS) if secondary_idx < len(vals2) else None
                     sec_guid = sec_vals[M_IDX_GUID] if sec_vals else None
                     deleted_secondary = False
@@ -1939,26 +1772,17 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
                         for k in range(start_idx_post, len(all_vals_post)):
                             r_k = _ensure_row_length(all_vals_post[k], M_MANDATORY_COLS)
                             if str(r_k[M_IDX_GUID]).strip() == str(sec_guid).strip():
-                                try:
                                     ws.delete_rows(k + 1)
                                     deleted_secondary = True
                                     break
-                                except Exception:
-                                    try:
                                         ws.update_cell(k + 1, M_IDX_ROUNDTRIP + 1, "Merged")
-                                    except Exception:
                                         logger.exception("Failed to delete or mark secondary merged row.")
                                     # deleted_secondary remains False
                                     break
                     else:
-                        try:
                             ws.delete_rows(secondary_row_number)
-                        except Exception:
-                            try:
                                 ws.update_cell(secondary_row_number, M_IDX_ROUNDTRIP + 1, "Merged")
-                            except Exception:
                                 logger.exception("Failed to delete or mark secondary merged row.")
-                except Exception:
                     logger.exception("Failed cleaning up secondary mission row after merge.")
 
                 # Only treat as merged (and notify) when we actually deleted the secondary row
@@ -1969,14 +1793,12 @@ def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
 
                 return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
-    except Exception as e:
         logger.exception("Failed to update mission end: %s", e)
         return {"ok": False, "message": "Failed to write mission end to sheet: " + str(e)}
 
 def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
     ws = open_worksheet(MISSIONS_TAB)
     out = []
-    try:
         vals, start_idx = _missions_get_values_and_data_rows(ws)
         for r in vals[start_idx:]:
             r = _ensure_row_length(r, M_MANDATORY_COLS)
@@ -1989,12 +1811,10 @@ def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[Li
             if start_date <= s_dt < end_date:
                 out.append([r[M_IDX_GUID], r[M_IDX_NO], r[M_IDX_NAME], r[M_IDX_PLATE], r[M_IDX_START], r[M_IDX_END], r[M_IDX_DEPART], r[M_IDX_ARRIVAL], r[M_IDX_STAFF], r[M_IDX_ROUNDTRIP], r[M_IDX_RETURN_START], r[M_IDX_RETURN_END]])
         return out
-    except Exception:
         logger.exception("Failed to fetch mission rows")
         return []
 
 def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
-    try:
         ws = open_worksheet(MISSIONS_REPORT_TAB)
         ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
         ws.append_row(HEADERS_BY_TAB.get(MISSIONS_REPORT_TAB, []), value_input_option="USER_ENTERED")
@@ -2015,13 +1835,11 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
         else:
             ws.append_row(["No roundtrips found in this period."], value_input_option="USER_ENTERED")
         return True
-    except Exception:
         logger.exception("Failed to write mission report to sheet.")
         return False
 
 def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) -> Dict[str, int]:
     counts: Dict[str, int] = {}
-    try:
         ws = open_worksheet(MISSIONS_TAB)
         vals, start_idx = _missions_get_values_and_data_rows(ws)
         for r in vals[start_idx:]:
@@ -2037,13 +1855,11 @@ def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) 
                 continue
             name = str(r[M_IDX_NAME]).strip() or "Unknown"
             counts[name] = counts.get(name, 0) + 1
-    except Exception:
         logger.exception("Failed to count roundtrips per driver")
     return counts
 
 def count_trips_for_day(driver: str, date_dt: datetime) -> int:
     cnt = 0
-    try:
         ws = open_worksheet(RECORDS_TAB)
         vals = ws.get_all_values()
         if not vals:
@@ -2064,13 +1880,11 @@ def count_trips_for_day(driver: str, date_dt: datetime) -> int:
                 continue
             if s_dt.date() == date_dt.date():
                 cnt += 1
-    except Exception:
         logger.exception("Failed to count trips for day")
     return cnt
 
 def count_trips_for_month(driver: str, month_start: datetime, month_end: datetime) -> int:
     cnt = 0
-    try:
         ws = open_worksheet(RECORDS_TAB)
         vals = ws.get_all_values()
         if not vals:
@@ -2091,7 +1905,6 @@ def count_trips_for_month(driver: str, month_start: datetime, month_end: datetim
                 continue
             if month_start <= s_dt < month_end:
                 cnt += 1
-    except Exception:
         logger.exception("Failed to count trips for month")
     return cnt
 
@@ -2124,7 +1937,6 @@ def normalize_fin_type(typ: str) -> Optional[str]:
     return None
 
 def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
-    try:
         ws = open_worksheet(FUEL_TAB)
         vals = ws.get_all_values()
         if not vals:
@@ -2139,65 +1951,52 @@ def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
                     if m:
                         return int(m.group(1))
         return None
-    except Exception:
         logger.exception("Failed to find last mileage for plate")
         return None
 
 def record_finance_odo_fuel(plate: str, mileage: str, fuel_cost: str, by_user: str = "", invoice: str = "", driver_paid: str = "") -> dict:
-    try:
         ws = open_worksheet(FUEL_TAB)
         prev_m = _find_last_mileage_for_plate(plate)
         m_int = None
-        try:
             m_int = int(re.search(r'(\d+)', str(mileage)).group(1))
-        except Exception:
             m_int = None
         delta = ""
         if prev_m is not None and m_int is not None:
-            try:
                 delta_val = m_int - prev_m
                 delta = str(delta_val)
-            except Exception:
                 delta = ""
         dt = now_str()
         row = [plate, by_user or "Unknown", dt, str(m_int) if m_int is not None else str(mileage), delta, str(fuel_cost), invoice or "", driver_paid or ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("Recorded combined ODO+Fuel: plate=%s mileage=%s delta=%s fuel=%s invoice=%s paid=%s", plate, m_int, delta, fuel_cost, invoice, driver_paid)
         return {"ok": True, "delta": delta, "mileage": m_int, "fuel": fuel_cost}
-    except Exception as e:
         logger.exception("Failed to append combined odo+fuel row: %s", e)
         return {"ok": False, "message": str(e)}
 
 def record_parking(plate: str, amount: str, by_user: str = "", notes: str = "") -> dict:
-    try:
         ws = open_worksheet(PARKING_TAB)
         dt = now_str()
         row = [plate, by_user or "Unknown", dt, str(amount), notes or ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
         return {"ok": True}
-    except Exception as e:
         logger.exception("Failed to record parking: %s", e)
         return {"ok": False, "message": str(e)}
 
 def record_wash(plate: str, amount: str, by_user: str = "", notes: str = "") -> dict:
-    try:
         ws = open_worksheet(WASH_TAB)
         dt = now_str()
         row = [plate, by_user or "Unknown", dt, str(amount), notes or ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
         return {"ok": True}
-    except Exception as e:
         logger.exception("Failed to record wash: %s", e)
         return {"ok": False, "message": str(e)}
 
 def record_repair(plate: str, amount: str, by_user: str = "", notes: str = "") -> dict:
-    try:
         ws = open_worksheet(REPAIR_TAB)
         dt = now_str()
         row = [plate, by_user or "Unknown", dt, str(amount), notes or ""]
         ws.append_row(row, value_input_option="USER_ENTERED")
         return {"ok": True}
-    except Exception as e:
         logger.exception("Failed to record repair: %s", e)
         return {"ok": False, "message": str(e)}
 
@@ -2218,16 +2017,12 @@ def build_plate_keyboard(prefix: str, allowed_plates: Optional[List[str]] = None
     return InlineKeyboardMarkup(buttons)
 
 async def safe_delete_message(bot, chat_id, message_id):
-    try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception:
         pass
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
     text = t(user_lang, "menu")
@@ -2240,17 +2035,13 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Admin Finance", callback_data="admin_finance"),
          InlineKeyboardButton("Leave", callback_data="leave_menu")],
     ]
-    try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    except Exception:
         pass
     await update.effective_chat.send_message(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     user = update.effective_user
     driver_map = get_driver_map()
@@ -2260,10 +2051,8 @@ async def start_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "choose_start"), reply_markup=build_plate_keyboard("start", allowed_plates=allowed))
 
 async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     user = update.effective_user
     driver_map = get_driver_map()
@@ -2273,10 +2062,8 @@ async def end_trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "choose_end"), reply_markup=build_plate_keyboard("end", allowed_plates=allowed))
 
 async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     user = update.effective_user
     driver_map = get_driver_map()
@@ -2286,10 +2073,8 @@ async def mission_start_command(update: Update, context: ContextTypes.DEFAULT_TY
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_start_prompt_plate"), reply_markup=build_plate_keyboard("mission_start_plate", allowed_plates=allowed))
 
 async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     user = update.effective_user
     driver_map = get_driver_map()
@@ -2299,16 +2084,12 @@ async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate", allowed_plates=allowed))
 
 async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     # Make leave a pending entry but DO NOT send prompt message to avoid duplicates.
-    try:
         # Record pending_leave with no external prompt message; callback handlers can edit the UI message instead.
         context.user_data['pending_leave'] = {'prompt_chat': None, 'prompt_msg_id': None, 'origin': {'chat': update.effective_chat.id, 'msg_id': None}}
-    except Exception:
         logger.exception('Failed to set pending leave state.')
     return
 
@@ -2318,9 +2099,7 @@ async def admin_finance_callback_handler(update: Update, context: ContextTypes.D
     user = query.from_user
     username = user.username or (user.first_name or "")
     if username not in BOT_ADMINS:
-        try:
             await query.edit_message_text("❌ You are not an admin.")
-        except Exception:
             pass
         return
     kb = [
@@ -2328,13 +2107,9 @@ async def admin_finance_callback_handler(update: Update, context: ContextTypes.D
         [InlineKeyboardButton("Parking", callback_data="fin_type|parking"), InlineKeyboardButton("Wash", callback_data="fin_type|wash")],
         [InlineKeyboardButton("Repair", callback_data="fin_type|repair")],
     ]
-    try:
         await query.edit_message_text("Select finance type:", reply_markup=InlineKeyboardMarkup(kb))
-    except Exception:
         logger.exception("Failed to prompt finance options.")
-        try:
             await query.edit_message_text("Failed to prompt for finance entry.")
-        except Exception:
             pass
 
 async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2343,23 +2118,17 @@ async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_
     data = query.data
     parts = data.split("|", 1)
     if len(parts) != 2:
-        try:
             await query.edit_message_text("Invalid selection.")
-        except Exception:
             pass
         return
     _, typ = parts
     user = query.from_user
     username = user.username or (user.first_name or "")
     if username not in BOT_ADMINS:
-        try:
             await query.edit_message_text("❌ Not admin.")
-        except Exception:
             pass
         return
-    try:
         await query.edit_message_text("Choose plate:", reply_markup=build_plate_keyboard(f"fin_plate|{typ}"))
-    except Exception:
         logger.exception("Failed to present plate selection for finance.")
 
 async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2382,18 +2151,12 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     if m2:
                         km = m2.group(1)
                     else:
-                        try:
                             await update.effective_message.delete()
-                        except Exception:
                             pass
-                        try:
                             await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
-                        except Exception:
                             pass
-                        try:
                             if origin:
                                 await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-                        except Exception:
                             pass
                         context.user_data.pop("pending_fin_multi", None)
                         return
@@ -2404,9 +2167,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pending_multi["km"] = km
                 pending_multi["step"] = "fuel"
                 context.user_data["pending_fin_multi"] = pending_multi
-                try:
                     await update.effective_message.delete()
-                except Exception:
                     pass
                 # Do NOT send a ForceReply prompt; user will provide fuel amount directly.
                 return
@@ -2425,45 +2186,30 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     if m2:
                         fuel_amt = m2.group(1)
                     else:
-                        try:
                             await update.effective_message.delete()
-                        except Exception:
                             pass
-                        try:
                             await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
-                        except Exception:
                             pass
-                        try:
                             if origin:
                                 await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-                        except Exception:
                             pass
                         context.user_data.pop("pending_fin_multi", None)
                         return
                 else:
                     fuel_amt = am.group(1)
                 km = pending_multi.get("km", "")
-                try:
                     res = record_finance_odo_fuel(plate, km, fuel_amt, by_user=user.username or "", invoice=invoice, driver_paid=driver_paid)
-                except Exception:
                     res = {"ok": False}
-                try:
                     await update.effective_message.delete()
-                except Exception:
                     pass
-                try:
                     pchat = pending_multi.get("prompt_chat")
                     pmsg = pending_multi.get("prompt_msg_id")
                     if pchat and pmsg:
                         await safe_delete_message(context.bot, pchat, pmsg)
-                except Exception:
                     pass
-                try:
                     if origin:
                         await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-                except Exception:
                     pass
-                try:
                     delta_txt = res.get("delta", "")
                     m_val = res.get("mileage", km)
                     fuel_val = res.get("fuel", fuel_amt)
@@ -2471,11 +2217,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     # 公共群通知固定显示 "paid by Mark"
                     msg = f"⛽️{plate} @ {m_val} km + ${fuel_val} fuel on {nowd} paid by Mark. difference from previous odo is {delta_txt} km."
                     await update.effective_chat.send_message(msg)
-                except Exception:
                     logger.exception("Failed to send group notification for odo+fuel")
-                try:
                     await context.bot.send_message(chat_id=user.id, text=f"Recorded {plate}: {km}KM and ${fuel_amt} fuel. Delta {delta_txt} km. Invoice={invoice} Paid={driver_paid}")
-                except Exception:
                     pass
                 context.user_data.pop("pending_fin_multi", None)
                 return
@@ -2493,40 +2236,26 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if m2:
                     km = m2.group(1)
                 else:
-                    try:
                         await update.effective_message.delete()
-                    except Exception:
                         pass
-                    try:
                         await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_odo"))
-                    except Exception:
                         pass
-                    try:
                         if origin:
                             await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-                    except Exception:
                         pass
                     context.user_data.pop("pending_fin_simple", None)
                     return
             else:
                 km = m.group(1)
-            try:
                 # odo simple used record_parking by previous mistake in older code; keep behavior unchanged.
                 res = record_parking(plate, "", by_user=user.username or "")
-            except Exception:
                 res = {"ok": False}
-            try:
                 await update.effective_message.delete()
-            except Exception:
                 pass
-            try:
                 if origin:
                     await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-            except Exception:
                 pass
-            try:
                 await context.bot.send_message(chat_id=user.id, text=f"Recorded ODO {km}KM for {plate}.")
-            except Exception:
                 pass
             context.user_data.pop("pending_fin_simple", None)
             return
@@ -2544,18 +2273,12 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if m2:
                     amt = m2.group(1)
                 else:
-                    try:
                         await update.effective_message.delete()
-                    except Exception:
                         pass
-                    try:
                         await context.bot.send_message(chat_id=user.id, text=t(context.user_data.get("lang", DEFAULT_LANG), "invalid_amount"))
-                    except Exception:
                         pass
-                    try:
                         if origin:
                             await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-                    except Exception:
                         pass
                     context.user_data.pop("pending_fin_simple", None)
                     return
@@ -2574,22 +2297,14 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 msg_pub = f"{plate} repair fee ${amt} on {today_date_str()} paid by Mark."
             else:
                 msg_pub = f"{plate} {typ} recorded ${amt}."
-            try:
                 await update.effective_message.delete()
-            except Exception:
                 pass
-            try:
                 if origin:
                     await safe_delete_message(context.bot, origin.get("chat"), origin.get("msg_id"))
-            except Exception:
                 pass
-            try:
                 await update.effective_chat.send_message(msg_pub)
-            except Exception:
                 logger.exception("Failed to publish finance short message.")
-            try:
                 await context.bot.send_message(chat_id=user.id, text=f"Recorded {typ} ${amt} for {plate}. Invoice={invoice} Paid={driver_paid}")
-            except Exception:
                 pass
             context.user_data.pop("pending_fin_simple", None)
             return
@@ -2598,17 +2313,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
     if pending_leave:
         parts = text.split()
         if len(parts) < 4:
-            try:
                 await update.effective_message.delete()
-            except Exception:
                 pass
-            try:
                 await context.bot.send_message(chat_id=user.id, text="Invalid leave format. Please send: <driver> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
-            except Exception:
                 pass
-            try:
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
                 pass
             context.user_data.pop("pending_leave", None)
             return
@@ -2617,39 +2326,25 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         end = parts[2]
         reason = parts[3]
         notes = " ".join(parts[4:]) if len(parts) > 4 else ""
-        try:
             sd = datetime.strptime(start, "%Y-%m-%d")
             ed = datetime.strptime(end, "%Y-%m-%d")
-        except Exception:
-            try:
                 await update.effective_message.delete()
-            except Exception:
                 pass
-            try:
                 await context.bot.send_message(chat_id=user.id, text="Invalid dates. Use YYYY-MM-DD.")
-            except Exception:
                 pass
-            try:
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
                 pass
             context.user_data.pop("pending_leave", None)
             return
-        try:
             ws = open_worksheet(LEAVE_TAB)
             success = await process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user)
             if not success:
                 return
-            try:
                 await update.effective_message.delete()
-            except Exception:
                 pass
-            try:
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
                 pass
             # Send confirmation plus a short leave summary for this driver (count of leave entries)
-            try:
                 records = ws.get_all_records()
                 # compute month/year totals by summing existing leave rows for this driver (inclusive) + this entry
                 month_total = 0
@@ -2658,7 +2353,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 END_KEYS = ("End", "End Date", "End DateTime", "EndDate")
                 DRIVER_KEYS = ("Driver", "driver", "Username", "Name")
                 for r in records:
-                    try:
                         drv = None
                         for k in DRIVER_KEYS:
                             if k in r and str(r.get(k, "")).strip():
@@ -2682,21 +2376,16 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         e_val = e_val.split()[0]
                         s2 = datetime.strptime(s_val, "%Y-%m-%d")
                         e2 = datetime.strptime(e_val, "%Y-%m-%d")
-                    except Exception:
                         continue
-                    try:
                         ld_raw = r.get('Leave Days', r.get('LeaveDays', ''))
                         this_days = int(str(ld_raw).strip()) if str(ld_raw).strip() and str(ld_raw).strip().isdigit() else None
-                    except Exception:
                         this_days = None
                     if this_days is None:
                         # fallback: compute excluding weekends and HOLIDAYS
                         this_days = 0
                         curd = s2
                         while curd <= e2:
-                            try:
                                 is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
-                            except Exception:
                                 is_hol = False
                             if curd.weekday() < 5 and not is_hol:
                                 this_days += 1
@@ -2705,30 +2394,24 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         month_total += this_days
                     if s2.year == sd.year:
                         year_total += this_days
-                try:
                     # compute leave days for current entry excluding weekends and HOLIDAYS
                     days_this = 0
                     curd = sd
                     while curd <= ed:
-                        try:
                             is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
-                        except Exception:
                             is_hol = False
                         if curd.weekday() < 5 and not is_hol:
                             days_this += 1
                         curd += timedelta(days=1)
-                except Exception:
                     days_this = 0
                 found_exact = False
                 for r in records:
-                    try:
                         s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         dval = next((r[k] for k in DRIVER_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         if dval == driver and s_val.split()[0] == start and e_val.split()[0] == end:
                             found_exact = True
                             break
-                    except Exception:
                         continue
                 if not found_exact:
                     month_total += days_this
@@ -2739,17 +2422,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     f"🏝Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
                 )
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-            except Exception:
                 # fallback: simple confirmation if any error computing totals
-                try:
                     await context.bot.send_message(chat_id=update.effective_chat.id, text=f"🏝Driver {driver} {start} to {end} {reason}.")
-                except Exception:
                     pass
-        except Exception:
             logger.exception("Failed to record leave")
-            try:
                 await context.bot.send_message(chat_id=user.id, text="Failed to record leave (sheet error).")
-            except Exception:
                 pass
         context.user_data.pop("pending_leave", None)
         return
@@ -2757,17 +2434,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
     if pending_leave:
         parts = text.split()
         if len(parts) < 4:
-            try:
                 await update.effective_message.delete()
-            except Exception:
                 pass
-            try:
                 await context.bot.send_message(chat_id=user.id, text="Invalid leave format. See prompt.")
-            except Exception:
                 pass
-            try:
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
                 pass
             context.user_data.pop("pending_leave", None)
             return
@@ -2776,41 +2447,26 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
         end = parts[2]
         reason = parts[3]
         notes = " ".join(parts[4:]) if len(parts) > 4 else ""
-        try:
             sd = datetime.strptime(start, "%Y-%m-%d")
             ed = datetime.strptime(end, "%Y-%m-%d")
-        except Exception:
-            try:
                 await update.effective_message.delete()
-            except Exception:
                 pass
-            try:
                 await context.bot.send_message(chat_id=user.id, text="Invalid dates. Use YYYY-MM-DD.")
-            except Exception:
                 pass
-            try:
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
                 pass
             context.user_data.pop("pending_leave", None)
             return
-        try:
             ws = open_worksheet(LEAVE_TAB)
             success = await process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user)
             if not success:
                 return
-            try:
                 await update.effective_message.delete()
-            except Exception:
                 pass
-            try:
                 await safe_delete_message(context.bot, pending_leave.get("prompt_chat"), pending_leave.get("prompt_msg_id"))
-            except Exception:
                 pass
                 # Build and send aggregated leave summary (robust fallback path)
-                try:
                     records = ws.get_all_records()
-                except Exception:
                     records = []
                 month_total = 0
                 year_total = 0
@@ -2818,7 +2474,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 END_KEYS = ("End", "End Date", "End DateTime", "EndDate")
                 DRIVER_KEYS = ("Driver", "driver", "Username", "Name")
                 for r in records:
-                    try:
                         drv = None
                         for k in DRIVER_KEYS:
                             if k in r and str(r.get(k, "")).strip():
@@ -2834,21 +2489,16 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         e_val = e_val.split()[0]
                         s2 = datetime.strptime(s_val, "%Y-%m-%d")
                         e2 = datetime.strptime(e_val, "%Y-%m-%d")
-                    except Exception:
                         continue
-                    try:
                         ld_raw = r.get('Leave Days', r.get('LeaveDays', ''))
                         this_days = int(str(ld_raw).strip()) if str(ld_raw).strip() and str(ld_raw).strip().isdigit() else None
-                    except Exception:
                         this_days = None
                     if this_days is None:
                         # fallback: compute excluding weekends and HOLIDAYS
                         this_days = 0
                         curd = s2
                         while curd <= e2:
-                            try:
                                 is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
-                            except Exception:
                                 is_hol = False
                             if curd.weekday() < 5 and not is_hol:
                                 this_days += 1
@@ -2857,31 +2507,25 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                         month_total += this_days
                     if s2.year == sd.year:
                         year_total += this_days
-                try:
                     # compute leave days for current entry excluding weekends and HOLIDAYS
                     days_this = 0
                     curd = sd
                     while curd <= ed:
-                        try:
                             is_hol = curd.strftime('%Y-%m-%d') in HOLIDAYS
-                        except Exception:
                             is_hol = False
                         if curd.weekday() < 5 and not is_hol:
                             days_this += 1
                         curd += timedelta(days=1)
-                except Exception:
                     days_this = 0
                 # if current entry not in sheet records yet, add it
                 found_exact = False
                 for r in records:
-                    try:
                         s_val = next((r[k] for k in START_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         e_val = next((r[k] for k in END_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         dval = next((r[k] for k in DRIVER_KEYS if k in r and str(r.get(k, "")).strip()), None)
                         if dval == driver and s_val.split()[0] == start and e_val.split()[0] == end:
                             found_exact = True
                             break
-                    except Exception:
                         continue
                 if not found_exact:
                     month_total += days_this
@@ -2892,11 +2536,8 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     f"🏝Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
                 )
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
-        except Exception:
             logger.exception("Failed to record leave")
-            try:
                 await context.bot.send_message(chat_id=user.id, text="Failed to record leave (sheet error).")
-            except Exception:
                 pass
         context.user_data.pop("pending_leave", None)
         return
@@ -2907,9 +2548,7 @@ async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     # If this callback is for clock buttons, delegate to the clock handler immediately.
-    try:
         data_check = (q.data or "").strip()
-    except Exception:
         data_check = ""
     if data_check.startswith("clock_"):
         # call dedicated handler to avoid being handled as invalid selection by plate_callback
@@ -2958,30 +2597,22 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if typ == "odo_fuel":
             # Set pending state but DO NOT send a separate "Enter odometer..." ForceReply message.
             context.user_data["pending_fin_multi"] = {"type": "odo_fuel", "plate": plate, "step": "km", "origin": origin_info}
-            try:
                 # Edit the callback message minimally to reflect pending state; do not send a new ForceReply prompt.
                 await q.edit_message_text(f"Pending ODO+Fuel entry for {plate}. Please send odometer (KM) in chat.")
-            except Exception:
                 logger.exception("Failed to edit message for pending odo_fuel entry.")
             return
         if typ in ("parking", "wash", "repair", "fuel"):
             # Set pending simple state but DO NOT send a separate "Enter amount..." ForceReply message.
             context.user_data["pending_fin_simple"] = {"type": typ, "plate": plate, "origin": origin_info}
-            try:
                 await q.edit_message_text(f"Pending {typ} entry for {plate}. Please send amount in chat.")
-            except Exception:
                 logger.exception("Failed to edit message for pending simple finance entry.")
             return
 
     if data == "leave_menu":
         # Mark leave pending and edit the callback message to a short prompt (avoid duplicate long messages)
-        try:
             context.user_data["pending_leave"] = {"prompt_chat": q.message.chat.id, "prompt_msg_id": q.message.message_id, "origin": {"chat": q.message.chat.id, "msg_id": q.message.message_id}}
-            try:
                 await q.edit_message_text("Leave entry pending. Please reply in chat with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
-            except Exception:
                 pass
-        except Exception:
             logger.exception("Failed to prompt leave.")
         return
 
@@ -3001,9 +2632,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Legacy mission end callback from old menus: "mission_end|{plate}"
     if data.startswith("mission_end|") and not data.startswith("mission_end_plate|"):
-        try:
             _, legacy_plate = data.split("|", 1)
-        except Exception:
             logger.warning("legacy mission_end callback invalid: %s", data)
             return
         # Normalize to new-style callback so existing handler works
@@ -3054,7 +2683,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if allowed and plate not in allowed:
             await q.edit_message_text(t(user_lang, "not_allowed", plate=plate))
             return
-        try:
             # find last open mission for this driver+plate
             ws = open_worksheet(MISSIONS_TAB)
             vals, start_idx = _missions_get_values_and_data_rows(ws)
@@ -3084,38 +2712,27 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Show standardized arrival message
             end_ts = res.get("end_ts") or ""
-            try:
                 await q.edit_message_text(t(user_lang, "mission_end_ok", driver=username, plate=plate, arr=arrival, ts=end_ts))
-            except Exception:
-                try:
                     await q.message.chat.send_message(t(user_lang, "mission_end_ok", driver=username, plate=plate, arr=arrival, ts=end_ts))
                     await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
-                except Exception:
                     pass
 
             # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
             if res.get("merged"):
                 # ==== merged roundtrip handling (clean replacement) ====
                 # Ensure mission_cycle loaded
-                try:
                     _ensure_mission_cycle_loaded(context.chat_data)
-                except Exception:
                     pass
                 key_cycle = f"mission_cycle|{username}|{plate}"
                 cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 0) + 1
                 context.chat_data.setdefault("mission_cycle", {})[key_cycle] = cur_cycle
                 logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
                 # persist immediately (best-effort)
-                try:
                     save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
-                except Exception:
-                    try:
                         logger.exception("Failed to persist mission_cycle after update")
-                    except Exception:
                         pass
                 # A merged roundtrip was just detected -> compute and send summary immediately
 # roundtrip is complete (outbound + return)
-                try:
                     nowdt = _now_dt()
                     month_start = datetime(nowdt.year, nowdt.month, 1)
                     if nowdt.month == 12:
@@ -3129,7 +2746,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     d_year = counts_year.get(username, 0)
                     plate_counts_month = 0
                     plate_counts_year = 0
-                    try:
                         vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
                         target_plate = str(plate).strip()
                         year_end = datetime(nowdt.year + 1, 1, 1)
@@ -3147,19 +2763,13 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 plate_counts_month += 1
                             if year_start <= sdt < year_end:
                                 plate_counts_year += 1
-                    except Exception:
-                        try:
                             logger.exception("Failed to compute plate roundtrip counts")
-                        except Exception:
                             pass
                     month_label = month_start.strftime("%B")
                     msg = t(user_lang, "roundtrip_merged_notify", driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
-                    
-                    try:
                         md_month = 0
                         md_today = 0
                         today_dt = nowdt.date()
-                        try:
                             vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
                             for r in vals_all[sidx:]:
                                 r = _ensure_row_length(r, M_MANDATORY_COLS)
@@ -3178,10 +2788,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 t_end = min(rend.date(), today_dt)
                                 if t_start <= t_end:
                                     md_today += (t_end - t_start).days + 1
-                        except Exception:
-                            try:
                                 logger.exception('Failed to compute mission days for notification (safe)')
-                            except Exception:
                                 pass
                         month_label = month_start.strftime('%B')
                         line1 = t(user_lang, 'roundtrip_merged_notify', driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
@@ -3191,52 +2798,29 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await q.message.chat.send_message(line1)
                         await q.message.chat.send_message(line2)
                         await q.message.chat.send_message(line3)
-                    except Exception:
-                        try:
                             logger.exception('Failed to send enhanced merged roundtrip summary (safe)')
-                        except Exception:
                             pass
         # record sent time and reset cycle counter
-                        try:
                             last_map = context.chat_data.get("last_merge_sent", {})
                             last_map[f"{username}|{plate}"] = nowdt.isoformat()
                             context.chat_data["last_merge_sent"] = last_map
                             context.chat_data["mission_cycle"][key_cycle] = 0
-                            try:
                                 save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
-                            except Exception:
-                                try:
                                     logger.exception("Failed to persist mission_cycle after reset")
-                                except Exception:
                                     pass
-                        except Exception:
-                            try:
                                 logger.exception("Failed to persist last_merge_sent timestamp or reset cycle")
-                            except Exception:
                                 pass
-                    except Exception:
-                        try:
                             logger.exception("Failed to send merged roundtrip summary.")
-                        except Exception:
                             pass
-                except Exception:
-                    try:
                         logger.exception("Failed preparing merged roundtrip summary.")
-                    except Exception:
                         pass
 
     # ---------- end mission-related handlers ----------
-
-        except Exception:
-            try:
                 logger.exception("Closed missing except for mission handler")
-            except Exception:
                 pass
             pass
     if data.startswith("start|") or data.startswith("end|"):
-        try:
             action, plate = data.split("|", 1)
-        except Exception:
             await q.edit_message_text("Invalid selection.")
             return
         driver_map = get_driver_map()
@@ -3247,18 +2831,12 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "start":
             res = record_start_trip(username, plate)
             if res.get("ok"):
-                try:
                     await q.edit_message_text(t(user_lang, "start_ok", driver=username, plate=plate, ts=res.get("ts")))
-                except Exception:
-                    try:
                         await q.message.chat.send_message(t(user_lang, "start_ok", driver=username, plate=plate, ts=res.get("ts")))
                         await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
-                    except Exception:
                         pass
             else:
-                try:
                     await q.edit_message_text("❌ " + res.get("message", ""))
-                except Exception:
                     pass
             return
         elif action == "end":
@@ -3282,7 +2860,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 p_today = 0
                 p_month = 0
                 p_year = 0
-                try:
                     ws = open_worksheet(RECORDS_TAB)
                     vals = ws.get_all_values()
                     if vals:
@@ -3307,25 +2884,16 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 p_month += 1
                             if year_start <= sdt < year_end:
                                 p_year += 1
-                except Exception:
                     logger.exception("Failed to compute plate trip counts")
-                try:
                     await q.edit_message_text(t(user_lang, "end_ok", driver=username, plate=plate, ts=ts))
-                except Exception:
-                    try:
                         await q.message.chat.send_message(t(user_lang, "end_ok", driver=username, plate=plate, ts=ts))
                         await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
-                    except Exception:
                         pass
-                try:
                     month_label = month_start.strftime("%B")
                     await q.message.chat.send_message(t(user_lang, "trip_summary", driver=username, n_today=n_today, n_month=n_month, month=month_label, n_year=n_year, plate=plate, p_today=p_today, p_month=p_month, p_year=p_year, year=nowdt.year))
-                except Exception:
                     logger.exception("Failed to send trip summary")
             else:
-                try:
                     await q.edit_message_text("❌ " + res.get("message", ""))
-                except Exception:
                     pass
             return
 
@@ -3356,10 +2924,8 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await reply_privately(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     args = context.args
     if not args or len(args) < 2:
@@ -3367,7 +2933,6 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
         return
     mode = args[0].lower()
     if mode == "month":
-        try:
             y_m = args[1]
             dt = datetime.strptime(y_m + "-01", "%Y-%m-%d")
             start = datetime(dt.year, dt.month, 1)
@@ -3382,7 +2947,6 @@ async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_T
                 await update.effective_chat.send_message(f"Monthly mission report for {start.strftime('%Y-%m')} created.")
             else:
                 await update.effective_chat.send_message("❌ Failed to write mission report.")
-        except Exception:
             await update.effective_chat.send_message("Invalid command. Usage: /mission_report month YYYY-MM")
     else:
         await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
@@ -3391,9 +2955,7 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /debug_bot - replies with a self-check report including env vars and current bot commands.
     """
-    try:
         await update.effective_message.delete()
-    except Exception:
         pass
     user = update.effective_user
     bot_token = os.getenv("BOT_TOKEN")
@@ -3407,7 +2969,6 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append(f"Google creds present: {'Yes' if google_creds else 'No'}")
     lines.append(f"MENU_CHAT_ID / SUMMARY_CHAT_ID: {menu_chat or '(not set)'}")
     # Try to fetch current bot commands
-    try:
         if bot_token:
             b = Bot(bot_token)
             cmds = await b.get_my_commands()
@@ -3417,23 +2978,16 @@ async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines.append(f" - /{c.command}: {c.description}")
             else:
                 lines.append("Registered bot commands: (none)")
-    except Exception as e:
         lines.append("Failed to fetch bot commands: " + str(e))
     # Basic feature checks (handlers presence cannot be introspected easily; we'll report config and tabs)
-    try:
         tabs = list(HEADERS_BY_TAB.keys()) if 'HEADERS_BY_TAB' in globals() else []
         lines.append("Known sheet tabs: " + (", ".join(tabs) if tabs else "(none)"))
-    except Exception:
         pass
     text = "\
 ".join(lines)
     # Send in chat (split if too long)
-    try:
         await update.effective_chat.send_message(text)
-    except Exception:
-        try:
             await context.bot.send_message(chat_id=user.id, text=text)
-        except Exception:
             pass
 
 AUTO_KEYWORD_PATTERN = r'(?i)\b(start|menu|start trip|end trip|trip|出车|还车|返程)\b'
@@ -3444,9 +2998,7 @@ async def auto_menu_listener(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not text:
             return
         if text.startswith("/"):
-            try:
                 await update.effective_message.delete()
-            except Exception:
                 pass
             return
         user_lang = context.user_data.get("lang", DEFAULT_LANG)
@@ -3463,16 +3015,13 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
         logger.info("SUMMARY_CHAT_ID not set; skipping daily summary.")
         return
     if SUMMARY_TZ and ZoneInfo:
-        try:
             tz = ZoneInfo(SUMMARY_TZ)
             now = datetime.now(tz)
-        except Exception:
             now = _now_dt()
     else:
         now = _now_dt()
     yesterday = now.date() - timedelta(days=1)
     date_dt = datetime.combine(yesterday, dtime.min)
-    try:
         totals = aggregate_for_period(date_dt, date_dt + timedelta(days=1))
         if not totals:
             await context.bot.send_message(chat_id=chat_id, text=f"No records for {date_dt.strftime(DATE_FMT)}")
@@ -3483,11 +3032,9 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
                 m = minutes % 60
                 lines.append(f"{plate}: {h}h{m}m")
             await context.bot.send_message(chat_id=chat_id, text="\n".join(lines))
-    except Exception:
         logger.exception("Failed to send daily summary.")
 
     if now.day == 1:
-        try:
             first_of_this_month = datetime(now.year, now.month, 1)
             prev_month_end = first_of_this_month
             prev_month_start = (first_of_this_month - timedelta(days=1)).replace(day=1)
@@ -3496,12 +3043,10 @@ async def send_daily_summary_job(context: ContextTypes.DEFAULT_TYPE):
             counts = count_roundtrips_per_driver_month(prev_month_start, prev_month_end)
             if ok:
                 await context.bot.send_message(chat_id=chat_id, text=f"Auto-generated mission report for {prev_month_start.strftime('%Y-%m')}.")
-        except Exception:
             logger.exception("Failed to auto-generate monthly mission report on day 1.")
 
 def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]:
     totals: Dict[str, int] = {}
-    try:
         ws = open_worksheet(RECORDS_TAB)
         vals = ws.get_all_values()
         if not vals:
@@ -3527,7 +3072,6 @@ def aggregate_for_period(start_dt: datetime, end_dt: datetime) -> Dict[str, int]
                 mins = int(m.group(2)) if m.group(2) else 0
                 minutes = hours * 60 + mins
             totals[plate] = totals.get(plate, 0) + minutes
-    except Exception:
         logger.exception("Failed to aggregate for period.")
     return totals
 
@@ -3536,7 +3080,6 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if (user.username or "") not in BOT_ADMINS:
         await update.effective_chat.send_message("❌ Admins only.")
         return
-    try:
         user_lang = context.user_data.get("lang", DEFAULT_LANG)
         keyboard = [
             [InlineKeyboardButton("Start trip", callback_data="show_start"), InlineKeyboardButton("End trip", callback_data="show_end")],
@@ -3545,14 +3088,11 @@ async def setup_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
         sent = await update.effective_chat.send_message(t(user_lang, "menu"), reply_markup=InlineKeyboardMarkup(keyboard))
         # pin removed per user request: do not pin the menu message
-    except Exception:
         logger.exception("Failed to setup menu.")
 
 async def delete_command_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
 
 async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3560,9 +3100,7 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     Handle Clock In / Clock Out buttons by delegating to clock_callback_handler,
     so OT records and notifications are generated without breaking existing features.
     """
-    try:
         await clock_callback_handler(update, context)
-    except Exception:
         logger.exception("Error in handle_clock_button")
 
 def register_ui_handlers(application):
@@ -3595,7 +3133,6 @@ def register_ui_handlers(application):
     # Debug command for runtime self-check
     application.add_handler(CommandHandler('debug_bot', debug_bot_command))
     async def _set_cmds():
-        try:
             await application.bot.set_my_commands([
                 BotCommand("start_trip", "Start a trip (select plate)"),
                 BotCommand("end_trip", "End a trip (select plate)"),
@@ -3605,30 +3142,21 @@ def register_ui_handlers(application):
                 BotCommand("leave", "Record leave (admin)"),
                 BotCommand("setup_menu", "Post and pin the main menu (admins only)"),
             ])
-        except Exception:
             logger.exception("Failed to set bot commands.")
 
     # Schedule _set_cmds safely using the running event loop if available.
-    try:
         import asyncio
         loop = None
-        try:
             loop = asyncio.get_running_loop()
-        except Exception:
-            try:
                 loop = asyncio.get_event_loop()
-            except Exception:
                 loop = None
         if loop and hasattr(loop, "create_task"):
             loop.create_task(_set_cmds())
         else:
             # Fallback: try to call application.create_task if provided by library
-            try:
                 if hasattr(application, "create_task"):
                     application.create_task(_set_cmds())
-            except Exception:
                 logger.exception("Could not schedule set_my_commands.")
-    except Exception:
         logger.exception("Could not schedule set_my_commands.")
 
 def ensure_env():
@@ -3636,7 +3164,6 @@ def ensure_env():
         raise RuntimeError(t(DEFAULT_LANG, "no_bot_token"))
 
 def schedule_daily_summary(application):
-    try:
         if SUMMARY_CHAT_ID:
             if ZoneInfo and SUMMARY_TZ:
                 tz = ZoneInfo(SUMMARY_TZ)
@@ -3647,11 +3174,9 @@ def schedule_daily_summary(application):
             logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
         else:
             logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
-    except Exception:
         logger.exception("Failed to schedule daily summary.")
 
 def _delete_telegram_webhook(token: str) -> bool:
-    try:
         url = f"https://api.telegram.org/bot{token}/deleteWebhook"
         req = urllib.request.Request(url, method="POST")
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -3661,7 +3186,6 @@ def _delete_telegram_webhook(token: str) -> bool:
                 return True
             logger.info("deleteWebhook response: %s", data)
             return True
-    except Exception as e:
         logger.exception("Failed to call deleteWebhook: %s", e)
         return False
 
@@ -3672,7 +3196,6 @@ async def _send_startup_debug(application):
     chat_id = os.getenv("MENU_CHAT_ID") or os.getenv("SUMMARY_CHAT_ID")
     if not chat_id:
         return
-    try:
         bot_token = os.getenv("BOT_TOKEN")
         lines = []
         lines.append("Driver Bot startup debug report:")
@@ -3680,7 +3203,6 @@ async def _send_startup_debug(application):
         lines.append(f"SHEET_ID present: {'Yes' if (os.getenv('SHEET_ID') or os.getenv('GOOGLE_SHEET_NAME')) else 'No'}")
         lines.append(f"Google creds present: {'Yes' if (os.getenv('GOOGLE_CREDS_B64') or os.getenv('GOOGLE_CREDS_BASE64') or os.getenv('GOOGLE_CREDS_PATH')) else 'No'}")
         # list commands
-        try:
             if bot_token:
                 b = Bot(bot_token)
                 cmds = await b.get_my_commands()
@@ -3688,12 +3210,10 @@ async def _send_startup_debug(application):
                     lines.append("Registered commands:")
                     for c in cmds:
                         lines.append(f" - /{c.command}: {c.description}")
-        except Exception as e:
             lines.append("Failed to fetch commands: " + str(e))
         text = "\
 ".join(lines)
         await application.bot.send_message(chat_id=chat_id, text=text)
-    except Exception:
         pass
 
 
@@ -3701,13 +3221,10 @@ async def _send_startup_debug(application):
 # REPORT HANDLER SELF-CHECK (LTS)
 # ===============================
 def _report_entry_self_check(application):
-    try:
         cmds = []
         for h in application.handlers.get(0, []):
-            try:
                 if hasattr(h, "command"):
                     cmds.extend(h.command)
-            except Exception:
                 pass
         expected = [
             "ot_report",
@@ -3719,7 +3236,6 @@ def _report_entry_self_check(application):
                 print(f"[REPORT CHECK] /{c} OK")
             else:
                 print(f"[REPORT CHECK] /{c} MISSING")
-    except Exception as e:
         print("[REPORT CHECK] failed:", e)
 # ===============================
 
@@ -3729,10 +3245,8 @@ def main():
     ensure_env()
 
     # --- Set Telegram slash commands on startup (uses direct HTTP API to avoid coroutine issues) ---
-    try:
         token_tmp = os.getenv("BOT_TOKEN")
         if token_tmp:
-            try:
                 # Build command list for Telegram API
                 cmds_payload = [
                     {"command": "start", "description": "Show menu"},
@@ -3743,7 +3257,6 @@ def main():
                     {"command": "clock_in", "description": "Clock In"},
                     {"command": "clock_out", "description": "Clock Out"}
                 ]
-                try:
                     import json, urllib.request
                     url = f"https://api.telegram.org/bot{token_tmp}/setMyCommands"
                     data = json.dumps({ "commands": cmds_payload }).encode("utf-8")
@@ -3751,52 +3264,37 @@ def main():
                     with urllib.request.urlopen(req, timeout=10) as resp:
                         resp_text = resp.read().decode("utf-8", errors="ignore")
                         print("Set my commands via HTTP API:", resp_text[:200])
-                except Exception as e:
                     print("Warning: failed to set Telegram commands via HTTP API:", e)
-            except Exception as e:
                 print("Warning: could not prepare setting commands:", e)
-    except Exception:
         pass
     # --- end set commands ---
 
     if LOCAL_TZ and ZoneInfo:
-        try:
             ZoneInfo(LOCAL_TZ)
             logger.info("Using LOCAL_TZ=%s", LOCAL_TZ)
-        except Exception:
             logger.info("LOCAL_TZ=%s but failed to initialize ZoneInfo; using system time.", LOCAL_TZ)
     else:
         logger.info("LOCAL_TZ not set; using system local time.")
 
     persistence = None
-    try:
         persistence = PicklePersistence(filepath="driver_bot_persistence.pkl")
-    except Exception:
         persistence = None
 
     application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
     register_ui_handlers(application)
 
     # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
-    try:
         import asyncio
         loop = None
-        try:
             loop = asyncio.get_running_loop()
-        except Exception:
-            try:
                 loop = asyncio.get_event_loop()
-            except Exception:
                 loop = None
         if loop and hasattr(loop, "create_task"):
             loop.create_task(_send_startup_debug(application))
         else:
-            try:
                 if hasattr(application, "create_task"):
                     application.create_task(_send_startup_debug(application))
-            except Exception:
                 pass
-    except Exception:
         pass
     schedule_daily_summary(application)
 
@@ -3805,28 +3303,19 @@ def main():
 
     if WEBHOOK_URL:
         logger.info("Starting in webhook mode. WEBHOOK_URL=%s", WEBHOOK_URL)
-        try:
             application.run_webhook(
                 listen="0.0.0.0",
                 port=PORT,
                 webhook_url=WEBHOOK_URL,
             )
-        except Exception:
             logger.exception("Failed to start webhook mode.")
     else:
-        try:
             logger.info("No WEBHOOK_URL set — attempting to delete existing webhook (if any) before polling.")
             ok = _delete_telegram_webhook(BOT_TOKEN)
             if not ok:
                 logger.warning("deleteWebhook call returned failure or error; proceeding to polling anyway.")
-        except Exception:
             logger.exception("Error while attempting deleteWebhook; proceeding to polling.")
         logger.info("Starting driver-bot polling...")
-        try:
-            
-
-
-
 # === REGISTER M-REPORT (OT-style monthly mission summary) ===
 application.add_handler(CommandHandler("m_report", m_report_entry))
 application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MRPT_DRIVER:"))
@@ -3834,7 +3323,6 @@ logger.info("M-report handlers registered")
 # === END REGISTER M-REPORT ===
 
 application.run_polling()
-        except Exception:
             logger.exception("Polling exited with exception.")
 
 if __name__ == "__main__":
@@ -3910,32 +3398,24 @@ def compute_window_for_time(now_dt: Optional[datetime] = None):
 
 def _collect_ot_records_in_window(window_start: datetime, window_end: datetime):
     """Read OT_TAB and return list of records (driver, datetime, action) within window."""
-    try:
         ws = open_worksheet(OT_TAB)
         vals = ws.get_all_values()
-    except Exception:
-        try:
             logger.exception("Failed to open OT_TAB for OT summary collection")
-        except Exception:
             pass
         return []
     out = []
     if not vals or len(vals) <= 1:
         return out
     for row in vals[1:]:
-        try:
             drv = row[O_IDX_DRIVER] if len(row) > O_IDX_DRIVER else ""
             ts_s = row[O_IDX_TIME] if len(row) > O_IDX_TIME else ""
             act = row[O_IDX_ACTION] if len(row) > O_IDX_ACTION else ""
             if not ts_s:
                 continue
-            try:
                 ts = datetime.strptime(ts_s, "%Y-%m-%d %H:%M:%S")
-            except Exception:
                 continue
             if window_start <= ts <= window_end:
                 out.append({"driver": drv, "timestamp": ts, "event": act})
-        except Exception:
             continue
     return out
 
@@ -3969,20 +3449,15 @@ def compute_driver_ot_hours_from_records(records, window_start, window_end):
 def ensure_ot_summary_sheet_exists(spreadsheet):
     """Ensure a worksheet titled 'OT Summary' exists; create with headers if missing."""
     title = os.getenv("OT_SUMMARY_TAB") or "OT Summary"
-    try:
         ws = spreadsheet.worksheet(title)
-    except Exception:
         # create sheet
-        try:
             ws = spreadsheet.add_worksheet(title=title, rows=1000, cols=10)
             ws.append_row(["Driver", "Total OT Hours", "Window Start", "Window End"])
-        except Exception as e:
             raise
     return ws
 
 def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datetime, window_end: datetime):
     """Update or create OT Summary tab with totals. Uses existing gspread client helpers."""
-    try:
         gc = _get_gspread_client()
         # prefer explicit sheet name env vars
         sheet_name = os.getenv("GOOGLE_SHEET_NAME") or os.getenv("GOOGLE_SHEET_TAB") or None
@@ -3994,42 +3469,29 @@ def update_ot_summary_sheet(driver_totals: Dict[str, float], window_start: datet
         else:
             sh = gc.open(GOOGLE_SHEET_NAME)
         ws = None
-        try:
             ws = sh.worksheet(os.getenv("OT_SUMMARY_TAB") or "OT Summary")
-        except Exception:
             ws = ensure_ot_summary_sheet_exists(sh)
         # prepare rows sorted by driver
         rows = []
         for drv in sorted(driver_totals.keys(), key=lambda s: s or ""):
             rows.append([drv, round(driver_totals[drv], 2), window_start.isoformat(), window_end.isoformat()])
         # clear existing body and write
-        try:
             # write header if missing
             vals = ws.get_all_values()
             if not vals or len(vals) == 0:
                 ws.append_row(["Driver", "Total OT Hours", "Window Start", "Window End"], value_input_option="USER_ENTERED")
             # clear from A2:D1000 (best-effort)
-            try:
                 ws.batch_clear(["A2:D1000"])
-            except Exception:
                 pass
             if rows:
                 ws.update("A2:D{}".format(len(rows)+1), rows, value_input_option="USER_ENTERED")
-        except Exception:
             # fallback: append rows
             for r in rows:
-                try:
                     ws.append_row(r, value_input_option="USER_ENTERED")
-                except Exception:
-                    try:
                         ws.append_row(r)
-                    except Exception:
                         pass
         return True
-    except Exception as e:
-        try:
             logger.exception("Failed to update OT Summary sheet: %s", e)
-        except Exception:
             pass
         return False
 
@@ -4038,9 +3500,7 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
     args = context.args or []
     at = None
     if args:
-        try:
             at = datetime.fromisoformat(args[0])
-        except Exception:
             at = None
     now_dt = at or _now_dt()
     window_start, window_end = compute_window_for_time(now_dt)
@@ -4049,10 +3509,8 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
     driver_totals = compute_driver_ot_hours_from_records(recs, window_start, window_end)
     # attempt to update sheet (non-fatal)
     sheet_result = None
-    try:
         ok = update_ot_summary_sheet(driver_totals, window_start, window_end)
         sheet_result = "updated" if ok else "failed"
-    except Exception as e:
         sheet_result = f"error: {e}"
     # build reply text
     lines = [f"OT Summary {window_start.date()} → {window_end.date()} ({window_start.year})", ""]
@@ -4065,18 +3523,12 @@ async def ot_summary_summary_command(update: Update, context: ContextTypes.DEFAU
     lines.append(f"Sheet result: {sheet_result}")
     text = "\
 ".join(lines)
-    try:
         await update.effective_chat.send_message(text)
-    except Exception:
-        try:
             await update.message.reply_text(text)
-        except Exception:
             pass
 
 # Register command handler if application exists
-try:
     application.add_handler(CommandHandler("ot_summary_summary", ot_summary_summary_command))
-except Exception:
     pass
 # === END: OT Summary integration ===
 
@@ -4086,7 +3538,6 @@ except Exception:
 # === BEGIN: lightweight /chatid command (added) ===
 async def chatid_command(update, context):
     """Return the current chat's ID. Safe, non-intrusive addition."""
-    try:
         chat = None
         # Prefer effective_chat when available
         if hasattr(update, "effective_chat") and update.effective_chat is not None:
@@ -4098,42 +3549,25 @@ async def chatid_command(update, context):
 
         if not chat:
             # best-effort fallback
-            try:
                 await update.effective_chat.send_message("Could not determine chat id.")
-            except Exception:
-                try:
                     await update.message.reply_text("Could not determine chat id.")
-                except Exception:
                     pass
             return
 
         cid = getattr(chat, "id", None)
         title = getattr(chat, "title", None) or getattr(chat, "username", None) or "this chat"
         text = f"Chat ID for {title}: {cid}"
-        try:
             await update.effective_chat.send_message(text)
-        except Exception:
-            try:
                 await update.message.reply_text(text)
-            except Exception:
                 pass
-    except Exception as e:
-        try:
             await update.effective_chat.send_message(f"Error retrieving chat id: {e}")
-        except Exception:
-            try:
                 await update.message.reply_text(f"Error retrieving chat id: {e}")
-            except Exception:
                 pass
 
 # Register handler if dispatcher/application exists
-try:
     application.add_handler(CommandHandler("chatid", chatid_command))
-except Exception:
-    try:
         # older style: dispatcher
         dispatcher.add_handler(CommandHandler("chatid", chatid_command))
-    except Exception:
         pass
 # === END: lightweight /chatid command (added) ===
 
@@ -4143,7 +3577,6 @@ except Exception:
 # === BEGIN: lightweight /chatid command (added) ===
 async def chatid_command(update, context):
     """Return the current chat's ID. Safe, non-intrusive addition."""
-    try:
         chat = None
         # Prefer effective_chat when available
         if hasattr(update, "effective_chat") and update.effective_chat is not None:
@@ -4155,42 +3588,25 @@ async def chatid_command(update, context):
 
         if not chat:
             # best-effort fallback
-            try:
                 await update.effective_chat.send_message("Could not determine chat id.")
-            except Exception:
-                try:
                     await update.message.reply_text("Could not determine chat id.")
-                except Exception:
                     pass
             return
 
         cid = getattr(chat, "id", None)
         title = getattr(chat, "title", None) or getattr(chat, "username", None) or "this chat"
         text = f"Chat ID for {title}: {cid}"
-        try:
             await update.effective_chat.send_message(text)
-        except Exception:
-            try:
                 await update.message.reply_text(text)
-            except Exception:
                 pass
-    except Exception as e:
-        try:
             await update.effective_chat.send_message(f"Error retrieving chat id: {e}")
-        except Exception:
-            try:
                 await update.message.reply_text(f"Error retrieving chat id: {e}")
-            except Exception:
                 pass
 
 # Register handler if dispatcher/application exists
-try:
     application.add_handler(CommandHandler("chatid", chatid_command))
-except Exception:
-    try:
         # older style: dispatcher
         dispatcher.add_handler(CommandHandler("chatid", chatid_command))
-    except Exception:
         pass
 # === END: lightweight /chatid command (added) ===
 
@@ -4211,7 +3627,6 @@ _OVERRIDE_LANG_CACHE = {}
 
 def _kv_get(key: str) -> str:
     """Get a stored value from Bot_State worksheet by Key column. Returns empty string if missing."""
-    try:
         ws = open_bot_state_worksheet()
         records = ws.get_all_records()
         for r in records:
@@ -4219,16 +3634,12 @@ def _kv_get(key: str) -> str:
             if k == key:
                 return str(r.get("Value") or r.get("value") or "")
         return ""
-    except Exception:
-        try:
             logger.exception("Failed kv_get for %s", key)
-        except Exception:
             pass
         return ""
 
 def _kv_set(key: str, value: str) -> bool:
     """Set a key/value pair in Bot_State worksheet. Overwrites existing key if present."""
-    try:
         ws = open_bot_state_worksheet()
         records = ws.get_all_records()
         found_row = None
@@ -4242,10 +3653,7 @@ def _kv_set(key: str, value: str) -> bool:
         else:
             ws.append_row([key, str(value)], value_input_option="USER_ENTERED")
         return True
-    except Exception as e:
-        try:
             logger.exception("Failed kv_set %s -> %s : %s", key, value, e)
-        except Exception:
             pass
         return False
 
@@ -4311,15 +3719,12 @@ _old_t = globals().get("t")
 def t(user_lang_or_update, key: str, **kwargs) -> str:
     # If first argument looks like an Update or has 'effective_user', try to resolve username
     lang = None
-    try:
         if hasattr(user_lang_or_update, "effective_user") or hasattr(user_lang_or_update, "message"):
             # it's likely an Update or Context; prefer to resolve via update + context if provided via kwargs
             update = user_lang_or_update
             ctx = kwargs.pop("_context", None)
             username = None
-            try:
                 username = update.effective_user.username if update and update.effective_user else None
-            except Exception:
                 username = None
             if username:
                 lang = get_effective_lang_for_username(username, context=ctx)
@@ -4327,13 +3732,10 @@ def t(user_lang_or_update, key: str, **kwargs) -> str:
             # treat as explicit lang string
             if isinstance(user_lang_or_update, str) and len(user_lang_or_update) <= 3:
                 lang = user_lang_or_update.lower()
-    except Exception:
         lang = None
     if not lang:
         # fallback: try the old t behavior
-        try:
             return _old_t(user_lang_or_update if isinstance(user_lang_or_update, str) else None, key, **kwargs)
-        except Exception:
             # last resort
             lang = DEFAULT_LANG
     if lang not in SUPPORTED_LANGS:
@@ -4342,17 +3744,12 @@ def t(user_lang_or_update, key: str, **kwargs) -> str:
     txt_template = TR.get(lang, TR.get("en", {})).get(key)
     if txt_template is None:
         txt_template = TR.get("en", {}).get(key, "")
-    try:
         return txt_template.format(**kwargs)
-    except Exception:
-        try:
             return str(txt_template)
-        except Exception:
             return ""
 
 # Sync handler: ensure context.user_data['lang'] matches persisted/override when user interacts.
 async def sync_user_lang(update, context):
-    try:
         user = update.effective_user if hasattr(update, "effective_user") else None
         if not user or not getattr(user, "username", None):
             return
@@ -4361,19 +3758,14 @@ async def sync_user_lang(update, context):
         cur = context.user_data.get("lang")
         if cur != eff:
             context.user_data["lang"] = eff
-    except Exception:
-        try:
             logger.exception("sync_user_lang failed")
-        except Exception:
             pass
     # Do not block other handlers; always return without replying.
 
 # Command: /setlang <lang>
 async def setlang_command(update, context):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     args = context.args or []
     if not args:
@@ -4407,10 +3799,8 @@ async def mylang_command(update, context):
 
 # Command: /forcelang <username> <lang>  (admin only)
 async def forcelang_command(update, context):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     user = update.effective_user
     username = user.username if user else None
@@ -4433,27 +3823,21 @@ async def forcelang_command(update, context):
         await update.effective_chat.send_message("Failed to set admin override.")
 
 # Register handlers if application object exists (best-effort, non-invasive)
-try:
     application.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
     application.add_handler(CommandHandler("setlang", setlang_command))
     application.add_handler(CommandHandler("mylang", mylang_command))
     application.add_handler(CommandHandler("forcelang", forcelang_command))
-except Exception:
     # If 'application' is not yet defined at import time, registration will be attempted in main()
     pass
 
 # Also attempt to register during main() if register hook available
-try:
     def register_multilang_handlers(app):
-        try:
             app.add_handler(MessageHandler(filters.ALL, sync_user_lang), group=0)
             app.add_handler(CommandHandler("setlang", setlang_command))
             app.add_handler(CommandHandler("mylang", mylang_command))
             app.add_handler(CommandHandler("forcelang", forcelang_command))
-        except Exception:
             pass
     globals().setdefault("register_multilang_handlers", register_multilang_handlers)
-except Exception:
     pass
 
 # Ensure Khmer entry exists in TR (placeholder copy of English strings) so user can paste full KH translations later.
@@ -4491,14 +3875,10 @@ def _parse_date_guess(val):
         return val
     s = str(val).strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y", "%Y.%m.%d"):
-        try:
             return datetime.strptime(s, fmt)
-        except Exception:
             continue
     # Last resort: try numeric Excel serial? skip
-    try:
         return datetime.fromisoformat(s)
-    except Exception:
         return None
 
 def _compute_16_to_16_period(reference_dt=None):
@@ -4545,22 +3925,15 @@ def _safe_get_col_index(rowkeys, candidates):
 
 async def ot_report_command(update, context):
     # delete invoking message if possible
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     start, end = _compute_16_to_16_period(datetime.utcnow())
     # read OT sheet
-    try:
         ws = open_ot_worksheet()  # expected helper in original code; if missing, try open_worksheet("OT")
-    except Exception:
-        try:
             ws = open_worksheet_by_name("OT")
-        except Exception:
             await update.effective_chat.send_message(t(context, "ot_report_no_sheet"))
             return
-    try:
         rows = ws.get_all_values()
         if not rows or len(rows) < 2:
             await update.effective_chat.send_message(t(context, "ot_report_no_data"))
@@ -4574,7 +3947,6 @@ async def ot_report_command(update, context):
 
         per_driver = {}
         for r in rows[1:]:
-            try:
                 username = r[idx_username].strip() if idx_username!=-1 and idx_username < len(r) else ""
                 name = r[idx_name].strip() if idx_name!=-1 and idx_name < len(r) else ""
                 date_raw = r[idx_date].strip() if idx_date!=-1 and idx_date < len(r) else ""
@@ -4590,7 +3962,6 @@ async def ot_report_command(update, context):
                 ot_type = ot_type_raw or ""
                 per_driver.setdefault(username, {"name": name or username, "entries": []})
                 per_driver[username]["entries"].append((dt, ot_type, hours))
-            except Exception:
                 continue
         if not per_driver:
             await update.effective_chat.send_message(t(context, "ot_report_no_records", start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")))
@@ -4615,35 +3986,23 @@ async def ot_report_command(update, context):
             for p in files:
                 zf.write(p, arcname=os.path.basename(p))
         # send zip to chat
-        try:
             await update.effective_chat.send_document(open(zip_path, "rb"))
-        except Exception:
             await update.effective_chat.send_message(t(context, "ot_report_sent_files", count=sent))
         # cleanup left to host environment
-    except Exception as e:
-        try:
             logger.exception("ot_report failed: %s", e)
-        except Exception:
             pass
         await update.effective_chat.send_message(t(context, "ot_report_failed"))
 
 async def mission_report_command(update, context):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     start, end = _compute_1_to_1_period(datetime.utcnow())
     # read Mission sheet
-    try:
         ws = open_mission_worksheet()
-    except Exception:
-        try:
             ws = open_worksheet_by_name("Mission")
-        except Exception:
             await update.effective_chat.send_message(t(context, "mission_report_no_sheet"))
             return
-    try:
         rows = ws.get_all_values()
         if not rows or len(rows) < 2:
             await update.effective_chat.send_message(t(context, "mission_report_no_data"))
@@ -4657,7 +4016,6 @@ async def mission_report_command(update, context):
 
         per_driver = {}
         for r in rows[1:]:
-            try:
                 username = r[idx_username].strip() if idx_username!=-1 and idx_username < len(r) else ""
                 name = r[idx_name].strip() if idx_name!=-1 and idx_name < len(r) else ""
                 s_raw = r[idx_start].strip() if idx_start!=-1 and idx_start < len(r) else ""
@@ -4692,7 +4050,6 @@ async def mission_report_command(update, context):
                             mission_type = "PP Mission" if "PP" in seq else ("SHV mission" if "SHV" in seq else "Unknown")
                 per_driver.setdefault(username, {"name": name or username, "missions": []})
                 per_driver[username]["missions"].append((s_dt, e_dt, duration_days, mission_type, desc))
-            except Exception:
                 continue
         if not per_driver:
             await update.effective_chat.send_message(t(context, "mission_report_no_records", start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")))
@@ -4712,33 +4069,23 @@ async def mission_report_command(update, context):
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for p in files:
                 zf.write(p, arcname=os.path.basename(p))
-        try:
             await update.effective_chat.send_document(open(zip_path, "rb"))
-        except Exception:
             await update.effective_chat.send_message(t(context, "mission_report_sent_files", count=len(files)))
-    except Exception as e:
-        try:
             logger.exception("mission_report failed: %s", e)
-        except Exception:
             pass
         await update.effective_chat.send_message(t(context, "mission_report_failed"))
 
 # Register handlers
-try:
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("mission_report", mission_report_command))
-except Exception:
     # safe fallback: expose register function
     def register_report_handlers(app):
-        try:
             app.add_handler(CommandHandler("ot_report", ot_report_entry))
             app.add_handler(CommandHandler("mission_report", mission_report_command))
-        except Exception:
             pass
     globals().setdefault("register_report_handlers", register_report_handlers)
 
 # Add minimal Khmer phrases into TR["km"] for report-related messages (user should replace with full colloquial translations).
-try:
     TR_k = TR.setdefault("km", {})
     TR_k.setdefault("ot_report_no_sheet", "សូមទោស: មិន​មានសន្លឹក OT នៅក្នុង Google Sheets។")
     TR_k.setdefault("ot_report_no_data", "មិនមានទិន្នន័យ OT ទេ។")
@@ -4750,7 +4097,6 @@ try:
     TR_k.setdefault("mission_report_no_records", "មិនមានកំណត់ត្រា Mission ក្នុងកាលបរិច្ឆេទ {start} ដល់ {end}។")
     TR_k.setdefault("mission_report_sent_files", "Mission reports generated: {count}")
     TR_k.setdefault("mission_report_failed", "បរាជ័យក្នុងការបង្កើត Mission report។")
-except Exception:
     pass
 
 # === END: OT & MISSION REPORTS EXTENSION ===
@@ -4770,20 +4116,13 @@ _OVERRIDE_LANG_CACHE = {}
 
 def _open_bot_state_ws():
     # prefer existing helper open_bot_state_worksheet() if available
-    try:
         return open_bot_state_worksheet()
-    except Exception:
-        try:
             return open_worksheet(BOT_STATE_TAB)
-        except Exception:
             # best-effort: try open_worksheet_by_name
-            try:
                 return open_worksheet_by_name("Bot_State")
-            except Exception:
                 return None
 
 def _kv_get(key: str) -> str:
-    try:
         ws = _open_bot_state_ws()
         if not ws:
             return ""
@@ -4793,15 +4132,11 @@ def _kv_get(key: str) -> str:
             if k == key:
                 return str(r.get("Value") or r.get("value") or "")
         return ""
-    except Exception:
-        try:
             logger.exception("kv_get failed for %s", key)
-        except Exception:
             pass
         return ""
 
 def _kv_set(key: str, value: str) -> bool:
-    try:
         ws = _open_bot_state_ws()
         if not ws:
             return False
@@ -4817,10 +4152,7 @@ def _kv_set(key: str, value: str) -> bool:
         else:
             ws.append_row([key, str(value)], value_input_option="USER_ENTERED")
         return True
-    except Exception:
-        try:
             logger.exception("kv_set failed for %s", key)
-        except Exception:
             pass
         return False
 
@@ -4880,12 +4212,10 @@ def resolve_effective_lang(username: str, context=None) -> str:
     if st:
         return st.lower()
     # fallback to context.user_data if provided
-    try:
         if context and hasattr(context, "user_data"):
             ctx_lang = context.user_data.get("lang")
             if ctx_lang:
                 return ctx_lang.lower()
-    except Exception:
         pass
     return DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
 
@@ -4894,14 +4224,11 @@ _old_t = globals().get("t")
 def t(user_lang_or_update, key: str, **kwargs) -> str:
     # Determine language
     lang = None
-    try:
         if hasattr(user_lang_or_update, "effective_user") or hasattr(user_lang_or_update, "message"):
             update = user_lang_or_update
             ctx = kwargs.pop("_context", None)
             username = None
-            try:
                 username = update.effective_user.username if update and update.effective_user else None
-            except Exception:
                 username = None
             if username:
                 lang = resolve_effective_lang(username, context=ctx)
@@ -4910,24 +4237,18 @@ def t(user_lang_or_update, key: str, **kwargs) -> str:
         else:
             # fallback to default
             lang = DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
-    except Exception:
         lang = DEFAULT_LANG if 'DEFAULT_LANG' in globals() else "en"
     if lang not in SUPPORTED_LANGS:
         lang = "en"
     # Use TR dict if present
-    try:
         tr = TR.get(lang, TR.get("en", {}))
         txt_template = tr.get(key, TR.get("en", {}).get(key, ""))
         return txt_template.format(**kwargs)
-    except Exception:
-        try:
             return str(TR.get("en", {}).get(key, "")).format(**kwargs)
-        except Exception:
             return ""
 
 # Sync handler to keep context.user_data['lang'] updated when users interact
 async def _sync_user_lang(update, context):
-    try:
         user = update.effective_user if hasattr(update, "effective_user") else None
         if not user or not getattr(user, "username", None):
             return
@@ -4936,19 +4257,14 @@ async def _sync_user_lang(update, context):
         cur = context.user_data.get("lang")
         if cur != eff:
             context.user_data["lang"] = eff
-    except Exception:
-        try:
             logger.exception("sync_user_lang failed")
-        except Exception:
             pass
     # do not send messages
 
 # Command handlers
 async def cmd_setlang(update, context):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     args = context.args or []
     if not args:
@@ -4980,21 +4296,17 @@ async def cmd_mylang(update, context):
     await update.effective_chat.send_message(f"Your language: {eff}")
 
 async def cmd_forcelang(update, context):
-    try:
         if update.effective_message:
             await update.effective_message.delete()
-    except Exception:
         pass
     user = update.effective_user
     uname = user.username if user else None
     # check admin: prefer BOT_ADMINS env var then BOT_ADMINS_DEFAULT global
     admins = []
-    try:
         if os.getenv("BOT_ADMINS"):
             admins = [x.strip() for x in os.getenv("BOT_ADMINS").split(",") if x.strip()]
         elif 'BOT_ADMINS_DEFAULT' in globals():
             admins = [x.strip() for x in BOT_ADMINS_DEFAULT.split(",") if x.strip()]
-    except Exception:
         admins = []
     if not uname or uname not in admins:
         await update.effective_chat.send_message("❌ You are not an admin for this operation.")
@@ -5015,25 +4327,20 @@ async def cmd_forcelang(update, context):
         await update.effective_chat.send_message("Failed to set admin override.")
 
 # Register handlers if application object is present
-try:
     application.add_handler(CommandHandler("setlang", cmd_setlang))
     application.add_handler(CommandHandler("mylang", cmd_mylang))
     application.add_handler(CommandHandler("forcelang", cmd_forcelang))
     application.add_handler(MessageHandler(filters.ALL, _sync_user_lang), group=0)
-except Exception:
     # expose a function to register later
     def register_multilang(app):
-        try:
             app.add_handler(CommandHandler("setlang", cmd_setlang))
             app.add_handler(CommandHandler("mylang", cmd_mylang))
             app.add_handler(CommandHandler("forcelang", cmd_forcelang))
             app.add_handler(MessageHandler(filters.ALL, _sync_user_lang), group=0)
-        except Exception:
             pass
     globals().setdefault("register_multilang", register_multilang)
 
 # Ensure TR has km entry – if missing, copy en (user can replace with more natural KH later)
-try:
     if "TR" in globals() and isinstance(TR, dict):
         if "km" not in TR:
             TR["km"] = {}
@@ -5042,7 +4349,6 @@ try:
                 # placeholder: copy English; earlier we may have partial translations; do not overwrite existing entries
                 if not TR["km"].get(k):
                     TR["km"][k] = v
-except Exception:
     pass
 
 # === END MULTILANG EXTENSION ===
@@ -5050,32 +4356,22 @@ except Exception:
 
 # Auto-register bot commands (so they appear in Telegram UI)
 def _register_bot_commands(app):
-    try:
         from telegram import BotCommand
         cmds = [
             BotCommand("setlang", "Set your language (en/km)"),
             BotCommand("mylang", "Show your current language"),
             BotCommand("forcelang", "Admin: force language for a user"),
         ]
-        try:
             # PTB v20: application.bot.set_my_commands exists
             app.bot.set_my_commands(cmds)
-        except Exception:
-            try:
                 app.set_my_commands(cmds)
-            except Exception:
                 pass
-    except Exception:
-        try:
             logger.exception("Failed to register bot commands")
-        except Exception:
             pass
 
 # If application is present, register commands now
-try:
     if 'application' in globals() and application is not None:
         _register_bot_commands(application)
-except Exception:
     pass
 
 # Also expose helper for explicit call
@@ -5155,11 +4451,9 @@ async def c_safe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("Use: /mission_monthly_report YYYY-MM <username>")
 
 # ---- Register handlers ----
-try:
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("reports", reports_menu))
     application.add_handler(CallbackQueryHandler(c_safe_callback, pattern="^(lang_|rep_)"))
-except Exception:
     pass
 
 # === END C FINAL SAFE ADDON ===
@@ -5205,7 +4499,6 @@ OT_HOLIDAYS = _load_ot_holidays()
 
 
 def _calc_hours(row, idx_morning, idx_evening, idx_start, idx_end):
-    try:
         m = float(row[idx_morning] or 0)
         e = float(row[idx_evening] or 0)
         if m + e > 0:
@@ -5213,7 +4506,6 @@ def _calc_hours(row, idx_morning, idx_evening, idx_start, idx_end):
         s = datetime.fromisoformat(row[idx_start])
         en = datetime.fromisoformat(row[idx_end])
         return round((en - s).total_seconds() / 3600, 2)
-    except Exception:
         return 0.0
 
 async def ot_report_entry(update, context):
@@ -5228,9 +4520,7 @@ async def ot_report_entry(update, context):
 async def ot_report_driver_callback(update, context):
     query = update.callback_query
     await query.answer()
-    try:
         await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
         pass
 
     driver = query.data.split(":", 1)[1]
@@ -5260,11 +4550,9 @@ async def ot_report_driver_callback(update, context):
     for r in data:
         if r[idx_name].strip() != driver:
             continue
-        try:
             sdt = datetime.fromisoformat(r[idx_start])
             if not (start_window <= sdt < end_window):
                 continue
-        except Exception:
             continue
 
         h = _calc_hours(r, idx_morning, idx_evening, idx_start, idx_end)
@@ -5539,14 +4827,12 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     data = rows[1:]
 
     # Expected columns (fallback by index constants)
-    try:
         idx_driver = header.index("Name")
         idx_plate = header.index("Plate")
         idx_start = header.index("Start Date")
         idx_end = header.index("End Date")
         idx_depart = header.index("Departure")
         idx_arrival = header.index("Arrival")
-    except Exception:
         idx_driver = M_IDX_NAME
         idx_plate = M_IDX_PLATE
         idx_start = M_IDX_START
@@ -5643,9 +4929,7 @@ async def m_report_driver_callback(update: Update, context: ContextTypes.DEFAULT
 
     # Resolve indices safely
     def idx(name, fallback):
-        try:
             return header.index(name)
-        except Exception:
             return fallback
 
     IDX_NAME = idx("Name", M_IDX_NAME)
@@ -5664,9 +4948,7 @@ async def m_report_driver_callback(update: Update, context: ContextTypes.DEFAULT
             continue
         if str(r[IDX_NAME]).strip() != driver:
             continue
-        try:
             sd = datetime.fromisoformat(str(r[IDX_START])[:19])
-        except Exception:
             continue
         if sd.year != y or sd.month != m:
             continue
