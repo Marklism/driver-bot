@@ -600,7 +600,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if weekday_msg:
                 msg = f"Driver {driver}: OT: {total_ot:.2f} hour(s)."
             else:
-                msg = f"Driver {driver}: OT today: {total_ot:.2f} hour(s)."
+                msg = f"💰Driver {driver}: OT today: {total_ot:.2f} hour(s)."
             await context.bot.send_message(chat_id=chat.id, text=msg)
         except Exception:
             logger.exception("Failed to send OT notification")
@@ -1689,7 +1689,7 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             for (y, m) in sorted(ym_days.keys()):
                 month_name = datetime(y, m, 1).strftime("%B")
                 lines.append(
-                    f"Total leave days for {driver}: {ym_days[(y,m)]} day(s) in {month_name} and {ym_days[(y,m)]} day(s) in {y}."
+                    f"🏝Total leave days for {driver}: {ym_days[(y,m)]} day(s) in {month_name} and {ym_days[(y,m)]} day(s) in {y}."
                 )
             if lines:
                 await context.bot.send_message(chat_id=user.id, text="\n".join(lines))
@@ -2814,7 +2814,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
                 msg = (
                     f"Driver {driver} {start} to {end} {reason} ({days_this} days)\n"
-                    f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
+                    f"🏝Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
                 )
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
             except Exception:
@@ -2967,7 +2967,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
                 msg = (
                     f"Driver {driver} {start} to {end} {reason} ({days_this} days)\n"
-                    f"Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
+                    f"🏝Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
                 )
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
         except Exception:
