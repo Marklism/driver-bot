@@ -1676,7 +1676,11 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             ym_days = defaultdict(int)
             cur2 = sd_dt
             while cur2 <= ed_dt:
-                if not (_is_weekend(cur2) or _is_holiday(cur2)):
+                try:
+                    is_hol = cur2.strftime("%Y-%m-%d") in HOLIDAYS or _is_holiday(cur2)
+                except Exception:
+                    is_hol = _is_holiday(cur2)
+                if cur2.weekday() < 5 and not is_hol:
                     ym_days[(cur2.year, cur2.month)] += 1
                 cur2 += timedelta(days=1)
 
