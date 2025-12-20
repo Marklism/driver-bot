@@ -709,7 +709,8 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 try:
     # These handlers implement Clock In/Out toggle and OT reporting
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
-    application.add_handler(CommandHandler("ot_report", ot_report_entry))
+    \1
+    application.add_handler(CommandHandler(\"m_report\", m_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
     # [DISABLED] legacy mission_monthly_report handler
 
@@ -3734,8 +3735,16 @@ def main():
             try:
                 # Build command list for Telegram API
                 cmds_payload = [
-                    {"command": "start", "description": "Show menu"},
-                    {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
+        {"command": "start", "description": "Show menu"},
+        {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
+        {"command": "m_report", "description": "Monthly mission report (CSV)"},
+        {"command": "mission_monthly_report", "description": "Monthly mission report (legacy)"},
+        {"command": "leave", "description": "Request leave"},
+        {"command": "finance", "description": "Add finance record"},
+        {"command": "mission_end", "description": "End mission"},
+        {"command": "clock_in", "description": "Clock In"},
+        {"command": "clock_out", "description": "Clock Out"},
+    ] YYYY-MM"},
                     {"command": "leave", "description": "Request leave"},
                     {"command": "finance", "description": "Add finance record"},
                     {"command": "mission_end", "description": "End mission"},
