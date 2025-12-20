@@ -5699,3 +5699,116 @@ application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="
 
 print("✅ M-report (monthly mission summary) loaded")
 # ===============================
+
+
+
+# ===============================
+# M-REPORT (Monthly Mission Summary)
+# Command: /m_report
+# ===============================
+import io, csv
+from datetime import datetime
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CommandHandler, CallbackQueryHandler
+
+async def m_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+    if not drivers:
+        await reply_private(update, context, "No drivers found.")
+        return
+    kb = [[InlineKeyboardButton(d, callback_data=f"MREP:{d}")] for d in drivers]
+    await reply_private(
+        update,
+        context,
+        "Select driver for monthly mission report (current month):",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
+
+async def m_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    driver = q.data.split(":", 1)[1]
+
+    now = datetime.now()
+    year, month = now.year, now.month
+
+    ws = open_worksheet(MISSIONS_TAB)
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        await context.bot.send_message(chat_id=q.from_user.id, text="No mission records.")
+        return
+
+    header = rows[0]
+    data = rows[1:]
+
+    def idx(name, fallback):
+        try:
+            return header.index(name)
+        except Exception:
+            return fallback
+
+    IDX_NAME = idx("Name", M_IDX_NAME)
+    IDX_PLATE = idx("Plate", M_IDX_PLATE)
+    IDX_START = idx("Start Date", M_IDX_START)
+    IDX_END = idx("End Date", M_IDX_END)
+    IDX_DEP = idx("Departure", M_IDX_DEPART)
+    IDX_ARR = idx("Arrival", M_IDX_ARRIVAL)
+
+    missions = []
+    days = set()
+
+    for r in data:
+        if len(r) <= IDX_NAME:
+            continue
+        if str(r[IDX_NAME]).strip() != driver:
+            continue
+        try:
+            sd = datetime.fromisoformat(str(r[IDX_START])[:19])
+        except Exception:
+            continue
+        if sd.year != year or sd.month != month:
+            continue
+        missions.append(r)
+        days.add(sd.date())
+
+    if not missions:
+        await context.bot.send_message(
+            chat_id=q.from_user.id,
+            text=f"No missions for {driver} in {year}-{month:02d}.",
+        )
+        return
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Driver", "Year", "Month"])
+    writer.writerow([driver, year, f"{month:02d}"])
+    writer.writerow([])
+    writer.writerow(["Total Missions", len(missions)])
+    writer.writerow(["Mission Days", len(days)])
+    writer.writerow([])
+    writer.writerow(["Plate", "Start", "End", "From", "To"])
+
+    for r in missions:
+        writer.writerow([
+            r[IDX_PLATE] if len(r) > IDX_PLATE else "",
+            r[IDX_START] if len(r) > IDX_START else "",
+            r[IDX_END] if len(r) > IDX_END else "",
+            r[IDX_DEP] if len(r) > IDX_DEP else "",
+            r[IDX_ARR] if len(r) > IDX_ARR else "",
+        ])
+
+    bio = io.BytesIO(buf.getvalue().encode("utf-8"))
+    bio.name = f"M_Report_{driver}_{year}-{month:02d}.csv"
+    await context.bot.send_document(
+        chat_id=q.from_user.id,
+        document=bio,
+        caption=f"M-report for {driver} ({year}-{month:02d})",
+    )
+
+# Register handlers (must be before run_polling)
+application.add_handler(CommandHandler("m_report", m_report_entry))
+application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MREP:"))
+
+logger.info("M-report loaded")
+# ===============================
