@@ -3824,13 +3824,13 @@ def main():
         logger.info("Starting driver-bot polling...")
         try:
             
+
+
+
 # === REGISTER M-REPORT (OT-style monthly mission summary) ===
-try:
-    application.add_handler(CommandHandler("m_report", m_report_entry))
-    application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MRPT_DRIVER:"))
-    logger.info("M-report handlers registered and active")
-except Exception:
-    logger.exception("Failed to register M-report handlers")
+application.add_handler(CommandHandler("m_report", m_report_entry))
+application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MRPT_DRIVER:"))
+logger.info("M-report handlers registered")
 # === END REGISTER M-REPORT ===
 
 application.run_polling()
@@ -5711,13 +5711,4 @@ application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="
 print("✅ M-report (monthly mission summary) loaded")
 # ===============================
 
-# === REGISTER M-REPORT (OT-style monthly mission summary) ===
-try:
-    application.add_handler(CommandHandler("m_report", m_report_entry))
-    application.add_handler(
-        CallbackQueryHandler(m_report_driver_callback, pattern="^MRPT_DRIVER:")
-    )
-    logger.info("M-report handlers registered")
-except Exception as e:
-    logger.exception("Failed to register M-report handlers")
-# === END REGISTER M-REPORT ===
+
