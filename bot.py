@@ -1,3 +1,4 @@
+raise RuntimeError("🔥 THIS bot.py IS RUNNING 🔥")
 
 print("✅ NEW OT-STYLE MISSION REPORT LOADED (command: /mission_report)")
 
