@@ -1657,7 +1657,7 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             except Exception:
                 is_hol = False
             if cur.weekday() < 5 and not is_hol:
-                leave_days += 1 if not (is_weekend(curr) or is_holiday(curr)) else 0
+                leave_days += 1 if not (_is_weekend(cur) or _is_holiday(cur)) else 0
             cur += timedelta(days=1)
 
     row = [driver, start, end, str(leave_days), reason, notes]
