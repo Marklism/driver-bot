@@ -2547,7 +2547,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     fuel_val = res.get("fuel", fuel_amt)
                     nowd = _now_dt().strftime(DATE_FMT)
                     # 公共群通知固定显示 "paid by Mark"
-                    msg = f"{plate} @ {m_val} km + ${fuel_val} fuel on {nowd} paid by Mark. difference from previous odo is {delta_txt} km."
+                    msg = f"⛽️{plate} @ {m_val} km + ${fuel_val} fuel on {nowd} paid by Mark. difference from previous odo is {delta_txt} km."
                     await update.effective_chat.send_message(msg)
                 except Exception:
                     logger.exception("Failed to send group notification for odo+fuel")
@@ -2813,14 +2813,14 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     year_total += days_this
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
                 msg = (
-                    f"Driver {driver} {start} to {end} {reason} ({days_this} days)\n"
+                    f"🏝Driver {driver} {start} to {end} {reason} ({days_this} days)\n"
                     f"🏝Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
                 )
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
             except Exception:
                 # fallback: simple confirmation if any error computing totals
                 try:
-                    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Driver {driver} {start} to {end} {reason}.")
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"🏝Driver {driver} {start} to {end} {reason}.")
                 except Exception:
                     pass
         except Exception:
@@ -2966,7 +2966,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     year_total += days_this
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
                 msg = (
-                    f"Driver {driver} {start} to {end} {reason} ({days_this} days)\n"
+                    f"🏝Driver {driver} {start} to {end} {reason} ({days_this} days)\n"
                     f"🏝Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
                 )
                 await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
