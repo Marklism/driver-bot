@@ -708,7 +708,7 @@ try:
     application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
-    application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
+    # [DISABLED] legacy mission_monthly_report handler
 
 except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
@@ -1514,91 +1514,9 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
     else:
         await update.effective_chat.send_message(text)
 
-async def mission_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /mission_monthly_report YYYY-MM username
-    Window: YYYY-MM-01 04:00 -> next month 01 04:00
-    """
-    args = context.args
-    if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_monthly_report YYYY-MM username")
-        return
-    ym = args[0]; username = args[1]
-    ym_parsed = _parse_ym(ym)
-    if not ym_parsed:
-        await update.effective_chat.send_message("Invalid YYYY-MM")
-        return
-    y,m = ym_parsed
-    start_dt = datetime.datetime(y,m,1,4,0)
-    ny,nm = _add_months(y,m,1)
-    end_dt = datetime.datetime(ny,nm,1,4,0)
-    try:
-        ws = open_worksheet(MISSIONS_TAB)
-        vals = ws.get_all_values()
-    except Exception:
-        await update.effective_chat.send_message("Failed to open MISSIONS sheet.")
-        return
-    if not vals or len(vals) < 2:
-        await update.effective_chat.send_message("No mission records.")
-        return
-    headers = vals[0]
-    # use M_IDX_* constants if present else fallback mapping
-    entries=[]
-    for row in vals[1:]:
-        try:
-            rdriver = str(row[M_IDX_DRIVER]).strip() if len(row)>M_IDX_DRIVER else ""
-            if rdriver != username:
-                continue
-            sraw = row[M_IDX_START].strip() if len(row)>M_IDX_START else ""
-            eraw = row[M_IDX_END].strip() if len(row)>M_IDX_END else ""
-            sdt=None; edt=None
-            try:
-                sdt = datetime.datetime.strptime(sraw, "%Y-%m-%d %H:%M:%S")
-            except:
-                try:
-                    sdt = datetime.datetime.strptime(sraw, "%Y-%m-%d")
-                except:
-                    continue
-            try:
-                edt = datetime.datetime.strptime(eraw, "%Y-%m-%d %H:%M:%S")
-            except:
-                try:
-                    edt = datetime.datetime.strptime(eraw, "%Y-%m-%d")
-                except:
-                    continue
-            if not (start_dt <= sdt < end_dt):
-                continue
-            days = (edt.date() - sdt.date()).days + 1
-            # description infer
-            frm = str(row[M_IDX_FROM]).strip().upper() if len(row)>M_IDX_FROM else ""
-            to = str(row[M_IDX_TO]).strip().upper() if len(row)>M_IDX_TO else ""
-            desc = "Unknown"
-            if frm.startswith("PP") and to.startswith("PP"):
-                # PP-...-PP -> SHV mission
-                desc = "SHV mission"
-            elif frm.startswith("SHV") and to.startswith("SHV"):
-                desc = "PP mission"
-            else:
-                # try to infer from route fields
-                if "SHV" in frm or "SHV" in to:
-                    desc = "SHV mission"
-                elif "PP" in frm or "PP" in to:
-                    desc = "PP mission"
-            entries.append((rdriver, sdt.date().isoformat(), edt.date().isoformat(), days, desc))
-        except Exception:
-            continue
-    if not entries:
-        await update.effective_chat.send_message("No missions in window for user.")
-        return
-    # format CSV lines
-    lines = ["Name, Mission Start Date, Mission End Date, Duration(day), Description"]
-    for e in entries:
-        lines.append(f"{e[0]}, {e[1]}, {e[2]}, {e[3]}, {e[4]}")
-    text = "\n".join(lines)
-    bio = io.BytesIO(text.encode("utf-8"))
-    bio.name = f"mission_report_{ym}_{username}.csv"
-    bio.seek(0)
-    await update.effective_chat.send_document(bio)
-# === END: Monthly OT and Mission Reports ===
+# [DISABLED LEGACY MISSION REPORT]
+# (removed per request)
+
 
 
 
@@ -3655,7 +3573,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
-    application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report_command))
+    # [DISABLED] legacy mission_monthly_report handler
 
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
 
@@ -5569,6 +5487,88 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     )
 
 # ---- Register mission handlers ----
-application.add_handler(CommandHandler("mission_monthly_report", mission_monthly_report))
+# [DISABLED] legacy mission_monthly_report handler
 application.add_handler(CallbackQueryHandler(mission_report_entry, pattern="^rep_mm$"))
 application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
+
+
+
+# ===============================
+# NEW MISSION REPORT (OT-STYLE, DRIVER BUTTON + CSV)
+# ===============================
+import io, csv
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler, CommandHandler
+
+async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Entry command similar to ot_report_entry
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
+    await reply_private(update, context, "Select driver:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def mission_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    driver = query.data.split(":", 1)[1]
+
+    ws = open_worksheet(MISSIONS_TAB)
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ No mission records.")
+        return
+
+    header = rows[0]
+    data = rows[1:]
+
+    # Expected columns (fallback by index constants)
+    try:
+        idx_driver = header.index("Name")
+        idx_plate = header.index("Plate")
+        idx_start = header.index("Start Date")
+        idx_end = header.index("End Date")
+        idx_depart = header.index("Departure")
+        idx_arrival = header.index("Arrival")
+    except Exception:
+        idx_driver = M_IDX_NAME
+        idx_plate = M_IDX_PLATE
+        idx_start = M_IDX_START
+        idx_end = M_IDX_END
+        idx_depart = M_IDX_DEPART
+        idx_arrival = M_IDX_ARRIVAL
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["Driver", "Plate", "Start", "End", "Departure", "Arrival"])
+
+    found = False
+    for r in data:
+        if len(r) <= idx_driver:
+            continue
+        if str(r[idx_driver]).strip() != driver:
+            continue
+        found = True
+        writer.writerow([
+            r[idx_driver],
+            r[idx_plate] if len(r) > idx_plate else "",
+            r[idx_start] if len(r) > idx_start else "",
+            r[idx_end] if len(r) > idx_end else "",
+            r[idx_depart] if len(r) > idx_depart else "",
+            r[idx_arrival] if len(r) > idx_arrival else "",
+        ])
+
+    if not found:
+        await context.bot.send_message(chat_id=query.from_user.id, text=f"❌ No missions for {driver}.")
+        return
+
+    bio = io.BytesIO(out.getvalue().encode("utf-8"))
+    bio.name = f"Mission_Report_{driver}.csv"
+    await context.bot.send_document(chat_id=query.from_user.id, document=bio, caption=f"Mission report for {driver}")
+
+# Register NEW mission report handlers
+application.add_handler(CommandHandler("mission_report", mission_report_entry))
+application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
+# ===============================
