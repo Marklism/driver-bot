@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 import os
 import logging
+import asyncio
 import csv
 import io
-import asyncio
+from datetime import datetime
+
+import gspread
+from google.oauth2.service_account import Credentials
+
 from telegram import Update, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
@@ -17,74 +22,71 @@ logger = logging.getLogger("driver-bot")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_ID = os.getenv("SHEET_ID")
-GOOGLE_CREDS = bool(os.getenv("GOOGLE_CREDS_B64"))
-SUMMARY_CHAT_ID = os.getenv("MENU_CHAT_ID") or os.getenv("SUMMARY_CHAT_ID")
+CREDS_B64 = os.getenv("GOOGLE_CREDS_B64")
+
+# -------------------- GOOGLE SHEET --------------------
+def get_gs_client():
+    import base64, json
+    info = json.loads(base64.b64decode(CREDS_B64))
+    scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
+    return gspread.authorize(creds)
+
+def load_ot_records(year_month: str):
+    """
+    Read OT Record sheet and return rows filtered by YYYY-MM.
+    Expected columns include at least: driver, date, ot_hours
+    """
+    client = get_gs_client()
+    sh = client.open_by_key(SHEET_ID)
+    ws = sh.worksheet("OT Record")
+    rows = ws.get_all_records()
+
+    results = []
+    for r in rows:
+        d = str(r.get("date", "")).strip()
+        if d.startswith(year_month):
+            results.append({
+                "driver": r.get("driver", ""),
+                "date": d,
+                "ot_hours": r.get("ot_hours", r.get("ot", "")),
+            })
+    return results
 
 # -------------------- COMMANDS --------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Driver Bot is running.")
 
-async def debug_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lines = []
-    lines.append("**Driver Bot - Debug Report**")
-    lines.append(f"Bot token present: {'Yes' if BOT_TOKEN else 'No'}")
-    lines.append(f"SHEET_ID present: {'Yes' if SHEET_ID else 'No'}")
-    lines.append(f"Google creds present: {'Yes' if GOOGLE_CREDS else 'No'}")
-    lines.append(f"MENU_CHAT_ID / SUMMARY_CHAT_ID: {SUMMARY_CHAT_ID or '(not set)'}")
-
-    try:
-        cmds = await context.bot.get_my_commands()
-        if cmds:
-            lines.append("Registered bot commands:")
-            for c in cmds:
-                lines.append(f" - /{c.command}: {c.description}")
-    except Exception as e:
-        lines.append(f"Failed to fetch bot commands: {e}")
-
-    await update.message.reply_text("\\n".join(lines))
-
-async def ot_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("OT report feature available.")
-
-async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Leave request recorded.")
-
-async def finance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Finance record added.")
-
-async def mission_end(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Mission ended.")
-
-async def clock_in(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Clock IN recorded.")
-
-async def clock_out(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Clock OUT recorded.")
-
-
-# -------------------- OT CSV (SAFE ADDITION) --------------------
 async def ot_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Minimal OT CSV export.
-    Schema placeholder to validate download flow without touching business logic.
-    Usage: /ot_csv YYYY-MM
-    """
     if not context.args:
         await update.message.reply_text("Usage: /ot_csv YYYY-MM")
         return
 
-    month = context.args[0]
+    ym = context.args[0]
+    try:
+        datetime.strptime(ym, "%Y-%m")
+    except ValueError:
+        await update.message.reply_text("Invalid format. Use YYYY-MM")
+        return
+
+    try:
+        records = load_ot_records(ym)
+    except Exception as e:
+        await update.message.reply_text(f"Failed to load OT Record: {e}")
+        return
+
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["driver", "date", "ot_hours"])
-    # Placeholder rows (safe, no data mutation)
-    writer.writerow(["example_driver", f"{month}-01", "0.00"])
+
+    for r in records:
+        writer.writerow([r["driver"], r["date"], r["ot_hours"]])
 
     output.seek(0)
     await update.message.reply_document(
         document=io.BytesIO(output.getvalue().encode("utf-8")),
-        filename=f"ot_report_{month}.csv",
-        caption="OT CSV export (placeholder)"
+        filename=f"ot_report_{ym}.csv",
+        caption=f"OT Report {ym}"
     )
 
 # -------------------- MAIN --------------------
@@ -92,41 +94,19 @@ async def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN missing")
 
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Register handlers
-    application.add_handler(CommandHandler("ot_csv", ot_csv))
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("debug_bot", debug_bot))
-    application.add_handler(CommandHandler("ot_report", ot_report))
-    application.add_handler(CommandHandler("leave", leave))
-    application.add_handler(CommandHandler("finance", finance))
-    application.add_handler(CommandHandler("mission_end", mission_end))
-    application.add_handler(CommandHandler("clock_in", clock_in))
-    application.add_handler(CommandHandler("clock_out", clock_out))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ot_csv", ot_csv))
 
-    # Ensure no webhook + avoid 409 Conflict
-    await application.bot.delete_webhook(drop_pending_updates=True)
-
-    # Properly await set_my_commands
-    await application.bot.set_my_commands([
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    await app.bot.set_my_commands([
         BotCommand("start", "Show menu"),
-        BotCommand("ot_report", "OT report: /ot_report [username] YYYY-MM"),
-        BotCommand("leave", "Request leave"),
-        BotCommand("finance", "Add finance record"),
-        BotCommand("mission_end", "End mission"),
-        BotCommand("clock_in", "Clock In"),
-        BotCommand("clock_out", "Clock Out"),
-        BotCommand("debug_bot", "Debug report"),
+        BotCommand("ot_csv", "Download OT CSV: /ot_csv YYYY-MM"),
     ])
 
-    logger.info("FULL BOT MODE LOADED (clean, debug-equivalent)")
-
-    # Start polling (single instance)
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    await application.stop()
+    logger.info("OT CSV (A2) LOADED — reading from OT Record")
+    await app.run_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
