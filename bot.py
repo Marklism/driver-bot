@@ -5816,3 +5816,6 @@ async def ot_to_m_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # reuse M-report entry flow
     await m_report_entry(update, context)
 # === END OT -> M-REPORT BRIDGE ===
+
+
+# NOTE: Combined OT + Mission menu not auto-injected; please wire manually if needed.
