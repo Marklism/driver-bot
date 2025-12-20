@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import os
 import logging
-from telegram import Update, Bot, BotCommand
+import asyncio
+from telegram import Update, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -30,8 +31,7 @@ async def debug_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append(f"MENU_CHAT_ID / SUMMARY_CHAT_ID: {SUMMARY_CHAT_ID or '(not set)'}")
 
     try:
-        bot = Bot(BOT_TOKEN)
-        cmds = await bot.get_my_commands()
+        cmds = await context.bot.get_my_commands()
         if cmds:
             lines.append("Registered bot commands:")
             for c in cmds:
@@ -39,7 +39,7 @@ async def debug_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         lines.append(f"Failed to fetch bot commands: {e}")
 
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\\n".join(lines))
 
 async def ot_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("OT report feature available.")
@@ -60,25 +60,27 @@ async def clock_out(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Clock OUT recorded.")
 
 # -------------------- MAIN --------------------
-def main():
+async def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN missing")
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Register handlers (ONLY these — no legacy code paths)
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("debug_bot", debug_bot))
-    app.add_handler(CommandHandler("ot_report", ot_report))
-    app.add_handler(CommandHandler("leave", leave))
-    app.add_handler(CommandHandler("finance", finance))
-    app.add_handler(CommandHandler("mission_end", mission_end))
-    app.add_handler(CommandHandler("clock_in", clock_in))
-    app.add_handler(CommandHandler("clock_out", clock_out))
+    # Register handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("debug_bot", debug_bot))
+    application.add_handler(CommandHandler("ot_report", ot_report))
+    application.add_handler(CommandHandler("leave", leave))
+    application.add_handler(CommandHandler("finance", finance))
+    application.add_handler(CommandHandler("mission_end", mission_end))
+    application.add_handler(CommandHandler("clock_in", clock_in))
+    application.add_handler(CommandHandler("clock_out", clock_out))
 
-    # Explicit command list (matches debug output)
-    bot = Bot(BOT_TOKEN)
-    bot.set_my_commands([
+    # Ensure no webhook + avoid 409 Conflict
+    await application.bot.delete_webhook(drop_pending_updates=True)
+
+    # Properly await set_my_commands
+    await application.bot.set_my_commands([
         BotCommand("start", "Show menu"),
         BotCommand("ot_report", "OT report: /ot_report [username] YYYY-MM"),
         BotCommand("leave", "Request leave"),
@@ -90,7 +92,12 @@ def main():
     ])
 
     logger.info("FULL BOT MODE LOADED (clean, debug-equivalent)")
-    app.run_polling()
+
+    # Start polling (single instance)
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    await application.stop()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
