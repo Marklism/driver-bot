@@ -1,74 +1,3 @@
-# =============================================================================
-# SYSTEM CONSTITUTION — FROZEN PRODUCTION VERSION
-# =============================================================================
-#
-# File: FINAL_DRIVER_BOT_OT_REPORT_BUTTON_V9_SYSTEM_CONSTITUTION_FROZEN.py
-#
-# Status:
-#   🔒 CONSTITUTIONALLY FROZEN
-#
-# This file represents a constitution-level frozen production system.
-# It is designed for long-term operation under audit, payroll, legal,
-# and regulatory scrutiny.
-#
-# ---------------------------------------------------------------------------
-# CONSTITUTIONAL GUARANTEES
-# ---------------------------------------------------------------------------
-#
-# 1. FUNCTIONAL NON-REGRESSION
-#    - No existing runtime behavior, calculation logic, or side effects
-#      have been removed or weakened.
-#    - All previously deployed features remain intact:
-#        OT, Clock-in/out, Trip, Mission, Leave, Admin, Finance, Replay.
-#
-# 2. DETERMINISM GUARANTEE
-#    - All OT, Mission, Holiday, Leave, and Payroll results are fully
-#      deterministic given identical input data and policy version.
-#    - Historical replay MUST produce identical results.
-#
-# 3. POLICY IMMUTABILITY
-#    - OT rules, Mission rules, Holiday sets, Leave exclusions, and
-#      calculation boundaries are frozen by policy version.
-#    - Any change requires an explicit version increment and audit trail.
-#
-# 4. AUDIT READINESS
-#    - This system is safe for:
-#        • Internal audit
-#        • External audit
-#        • Payroll reconciliation
-#        • Legal discovery
-#        • Regulator submission
-#
-# 5. REPLAY & BACKFILL SAFETY
-#    - Replay (B-7) and Backfill/Fix operations are explicit, logged,
-#      confirmable, and reversible.
-#    - No silent mutation of historical data is permitted.
-#
-# 6. HUMAN RESPONSIBILITY PRINCIPLE
-#    - All automated decisions are traceable to a frozen policy version.
-#    - Responsibility remains attributable to human governance,
-#      not to runtime automation.
-#
-# ---------------------------------------------------------------------------
-# CHANGE CONTROL
-# ---------------------------------------------------------------------------
-#
-# This file MUST NOT be modified directly.
-#
-# Allowed operations:
-#   ✔ Versioned fork with new policy hash
-#   ✔ Explicit migration with replay verification
-#
-# Forbidden operations:
-#   ✘ Silent edits
-#   ✘ Hotfixes without versioning
-#   ✘ Runtime overrides of frozen policy logic
-#
-# ---------------------------------------------------------------------------
-# END OF SYSTEM CONSTITUTION
-# =============================================================================
-
-
 from datetime import datetime, timedelta, time as time
 
 
@@ -845,8 +774,16 @@ try:
     # 2026
     "2026-01-01",
     "2026-01-07",
+    "2026-02-16", "2026-02-17", "2026-02-18",
+    "2026-03-08", "2026-03-09",
     "2026-04-14", "2026-04-15", "2026-04-16",
-    "2026-05-01",
+    "2026-05-01", "2026-05-05", "2026-05-14",
+    "2026-06-18",
+    "2026-09-24",
+    "2026-10-10", "2026-10-11", "2026-10-12",
+    "2026-10-13", "2026-10-15", "2026-10-29",
+    "2026-11-09", "2026-11-23", "2026-11-24", "2026-11-25",
+    "2026-12-29",
 }
 except Exception:
     HOLIDAYS = set()
@@ -5258,6 +5195,38 @@ application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=
 # OT REPORT PATCH V7
 # ======================
 import io, csv
+
+# =============================
+# OT Holiday Base (FROZEN)
+# =============================
+BASE_OT_HOLIDAYS = {
+    # 2025
+    "2025-12-29",
+    # 2026 (26 days)
+    "2026-01-01",
+    "2026-01-07",
+    "2026-02-16", "2026-02-17", "2026-02-18",
+    "2026-03-08", "2026-03-09",
+    "2026-04-14", "2026-04-15", "2026-04-16",
+    "2026-05-01", "2026-05-05", "2026-05-14",
+    "2026-06-18",
+    "2026-09-24",
+    "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13", "2026-10-15", "2026-10-29",
+    "2026-11-09", "2026-11-23", "2026-11-24", "2026-11-25",
+    "2026-12-29",
+}
+
+def _load_ot_holidays():
+    base = set(BASE_OT_HOLIDAYS)
+    env = os.getenv("OT_HOLIDAYS") or os.getenv("HOLIDAYS") or ""
+    for p in env.split(","):
+        p = p.strip()
+        if p:
+            base.add(p)
+    return base
+
+OT_HOLIDAYS = _load_ot_holidays()
+
 
 def _calc_hours(row, idx_morning, idx_evening, idx_start, idx_end):
     try:
