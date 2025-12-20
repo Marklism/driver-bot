@@ -598,9 +598,9 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if should_notify and total_ot > 0 and chat is not None:
         try:
             if weekday_msg:
-                msg = f\"💰Driver {driver}: OT today: {total_ot:.2f} hour(s)."
+                msg = f"💰Driver {driver}: OT today: {total_ot:.2f} hour(s)."
             else:
-                msg = f\"💰Driver {driver}: OT today: {total_ot:.2f} hour(s)."
+                msg = f"💰Driver {driver}: OT today: {total_ot:.2f} hour(s)."
             await context.bot.send_message(chat_id=chat.id, text=msg)
         except Exception:
             logger.exception("Failed to send OT notification")
@@ -609,11 +609,11 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     try:
         if total_ot > 0:
             await query.edit_message_text(
-                f\"🌟Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}. OT: {total_ot:.2f} hour(s)."
+                f"🌟Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}. OT: {total_ot:.2f} hour(s)."
             )
         else:
             await query.edit_message_text(
-                f\"🌟Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}."
+                f"🌟Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}."
             )
     except Exception:
         # Fallback: ignore edit errors
