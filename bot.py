@@ -3589,9 +3589,7 @@ def register_ui_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
     application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
-    # Register handlers (must be before run_polling)
-    application.add_handler(CommandHandler("m_report", m_report_entry))
-    application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MREP:"))
+
     
     # Debug command for runtime self-check
     application.add_handler(CommandHandler('debug_bot', debug_bot_command))
@@ -5695,9 +5693,7 @@ async def m_report_driver_callback(update: Update, context: ContextTypes.DEFAULT
     await context.bot.send_document(chat_id=q.from_user.id, document=bio,
                                     caption=f"M-report for {driver} ({y}-{m:02d})")
 
-# Register handlers (standalone, no Reports menu)
-application.add_handler(CommandHandler("m_report", m_report_entry))
-application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MRPT_DRIVER:"))
+# Register handlers (standalone, no Reports menu)application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MRPT_DRIVER:"))
 
 print("✅ M-report (monthly mission summary) loaded")
 # ===============================
@@ -5808,9 +5804,15 @@ async def m_report_driver_callback(update: Update, context: ContextTypes.DEFAULT
         caption=f"M-report for {driver} ({year}-{month:02d})",
     )
 
-# Register handlers (must be before run_polling)
-application.add_handler(CommandHandler("m_report", m_report_entry))
-application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MREP:"))
+# Register handlers (must be before run_polling)application.add_handler(CallbackQueryHandler(m_report_driver_callback, pattern="^MREP:"))
 
 logger.info("M-report loaded")
 # ===============================
+
+
+
+# === OT -> M-REPORT BRIDGE ===
+async def ot_to_m_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # reuse M-report entry flow
+    await m_report_entry(update, context)
+# === END OT -> M-REPORT BRIDGE ===
