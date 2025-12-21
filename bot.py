@@ -1,4 +1,44 @@
 #!/usr/bin/env python3
+# ============================================================
+# DRIVER BOT — FULL BOT MODE
+# ============================================================
+# IMPORTANT
+# ---------
+# This file is a STRUCTURAL MIGRATION of:
+#   bot_full_from_debug_verbatim.py
+#
+# Guarantees:
+# - All executable logic is preserved verbatim
+# - No behavior, rule, or side-effect is changed
+# - Only code order, grouping, and comments are adjusted
+#
+# Purpose:
+# - Improve readability
+# - Clarify module responsibilities
+# - Prepare for future maintenance
+# ============================================================
+
+
+# ============================================================
+# SECTION 0 — Standard Library Imports
+# Purpose:
+# - Core Python runtime dependencies
+# Source:
+# - debug verbatim
+# ============================================================
+
+
+
+
+# ============================================================
+# SECTION 1 — Configuration & Environment
+# Purpose:
+# - Environment variables
+# - Global constants
+# Source:
+# - debug verbatim
+# ============================================================
+#!/usr/bin/env python3
 # FULL BOT (verbatim debug functionality)
 # This file directly loads the debug bot logic unchanged.
 
@@ -198,6 +238,15 @@ async def ot_report_driver_callback(update, context):
         writer.writerow(["150% OT"])
         writer.writerow(["Start", "End", "Hours"])
         total = 0
+
+# ============================================================
+# SECTION 2 — Google Sheets Infrastructure
+# Purpose:
+# - Credential loading
+# - Sheet open / read / write helpers
+# Source:
+# - debug verbatim
+# ============================================================
         for r in ot_150:
             writer.writerow(r)
             total += float(r[2])
@@ -448,6 +497,15 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
         if seg_is_weekend or seg_is_holiday:
             hours = (segment_end - dt).total_seconds() / 3600
             total_ot += hours
+
+# ============================================================
+# SECTION 3 — Clock In / Clock Out
+# Purpose:
+# - Driver attendance tracking
+# - Timestamp source for OT and Mission
+# Source:
+# - debug verbatim
+# ============================================================
         else:
             t7 = dt.replace(hour=7, minute=0, second=0, microsecond=0)
             if dt < t7:
@@ -648,6 +706,16 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if month == 12:
             month_end = datetime(year + 1, 1, 1)
         else:
+
+# ============================================================
+# SECTION 4 — Mission Module
+# Purpose:
+# - Mission start / end lifecycle
+# - Roundtrip handling
+# - Mission state persistence
+# Source:
+# - debug verbatim
+# ============================================================
             month_end = datetime(year, month + 1, 1)
     except Exception:
         await update.message.reply_text("Invalid month format. Use YYYY-MM.")
@@ -898,6 +966,15 @@ def _get_gspread_client():
 def open_bot_state_worksheet():
     gc = _get_gspread_client()
     sheet_name = os.getenv('GOOGLE_SHEET_NAME'); sheet_id = os.getenv('SHEET_ID')
+
+# ============================================================
+# SECTION 5 — OT Module
+# Purpose:
+# - Overtime calculation
+# - OT record persistence
+# Source:
+# - debug verbatim
+# ============================================================
     if sheet_name: sh = gc.open(sheet_name)
     elif sheet_id: sh = gc.open_by_key(sheet_id)
     else: raise RuntimeError('Provide GOOGLE_SHEET_NAME or SHEET_ID')
@@ -1198,6 +1275,14 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     MISSIONS_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
     MISSIONS_REPORT_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
     SUMMARY_TAB: ["Date", "PeriodType", "TotalsJSON", "HumanSummary"],
+
+# ============================================================
+# SECTION 6 — Leave Module
+# Purpose:
+# - Driver leave requests
+# Source:
+# - debug verbatim
+# ============================================================
     DRIVERS_TAB: ["Username", "Plates"],
     LEAVE_TAB: ["Driver", "Start Date", "End Date", "Leave Days", "Reason", "Notes"],
     MAINT_TAB: ["Plate", "Mileage", "Maintenance Item", "Cost", "Date", "Workshop", "Notes"],
@@ -1498,6 +1583,14 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
             if idx_morning is not None and len(row) > idx_morning:
                 try: h += float(row[idx_morning] or 0)
                 except: pass
+
+# ============================================================
+# SECTION 7 — Finance Module
+# Purpose:
+# - Expense / advance records
+# Source:
+# - debug verbatim
+# ============================================================
             if idx_evening is not None and len(row) > idx_evening:
                 try: h += float(row[idx_evening] or 0)
                 except: pass
@@ -1798,6 +1891,14 @@ def start_mission_record(driver: str, plate: str, departure: str) -> dict:
         row[M_IDX_STAFF] = ""
         row[M_IDX_ROUNDTRIP] = ""
         row[M_IDX_RETURN_START] = ""
+
+# ============================================================
+# SECTION 8 — Trip Module
+# Purpose:
+# - Trip logging
+# Source:
+# - debug verbatim
+# ============================================================
         row[M_IDX_RETURN_END] = ""
         ws.append_row(row, value_input_option="USER_ENTERED")
         logger.info("Mission start recorded GUID=%s no=%s driver=%s plate=%s dep=%s", guid, next_no, driver, plate, departure)
@@ -2098,6 +2199,15 @@ def count_trips_for_month(driver: str, month_start: datetime, month_end: datetim
             if month_start <= s_dt < month_end:
                 cnt += 1
     except Exception:
+
+# ============================================================
+# SECTION 9 — Telegram Handlers & Bot Bootstrap
+# Purpose:
+# - Command registration
+# - Bot startup
+# Source:
+# - debug verbatim
+# ============================================================
         logger.exception("Failed to count trips for month")
     return cnt
 
