@@ -1041,6 +1041,35 @@ except Exception:
 
 SUPPORTED_LANGS = ("en", "km")
 
+# ===== 在这里新增 =====
+def ensure_user_lang(update, context):
+    """
+    Initialize user language from Telegram system language
+    if user has not explicitly set it.
+    """
+    if context.user_data.get("lang"):
+        return
+
+    tg_lang = None
+    try:
+        tg_lang = update.effective_user.language_code
+    except Exception:
+        pass
+
+    if tg_lang:
+        tg_lang = tg_lang.lower()
+        # normalize: en-US -> en
+        if "-" in tg_lang:
+            tg_lang = tg_lang.split("-", 1)[0]
+
+        if tg_lang in SUPPORTED_LANGS:
+            context.user_data["lang"] = tg_lang
+            return
+
+    # fallback
+    context.user_data["lang"] = DEFAULT_LANG
+# ===== 新增结束 =====
+
 RECORDS_TAB = os.getenv("RECORDS_TAB", "Driver_Log")
 DRIVERS_TAB = os.getenv("DRIVERS_TAB", "Drivers")
 SUMMARY_TAB = os.getenv("SUMMARY_TAB", "Summary")
@@ -2506,6 +2535,7 @@ async def safe_delete_message(bot, chat_id, message_id):
         pass
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ensure_user_lang(update, context)
     try:
         if update.effective_message:
             await update.effective_message.delete()
@@ -3621,6 +3651,8 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(t(user_lang, "invalid_sel"))
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ensure_user_lang(update, context)
+    
     msg = update.effective_message
     args = context.args or []
 
