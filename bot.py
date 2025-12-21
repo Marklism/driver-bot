@@ -830,7 +830,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
     if not args:
-        await context.bot.pass  # guarded empty message removed
+        # guarded empty message removed (no-op)
         return
 
     if len(args) == 1:
