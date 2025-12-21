@@ -1515,22 +1515,25 @@ TR = {
         "leave_confirm": "Leave recorded for {driver}: {start} to {end} ({reason})",
         "enter_odo_km": "Enter odometer reading (KM) for {plate}:",
         "enter_fuel_cost": "Enter fuel cost in $ for {plate}: (optionally add `inv:INV123 paid:yes`)",
+        "clock_in": "🌞 Recorded IN for {driver} at {ts}.",
+        "clock_out": "⭐ Recorded OUT for {driver} at {ts}.",
+        "leave_pending": "Leave entry pending. Please reply in chat with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]",
     },
         "km": {
         "menu": "ម៉ឺនុយបុរសបើក — ចុចប៊ូតុងមួយ:",
         "choose_start": "ជ្រើសលេខឡាន ដើម្បីចាប់ផ្តើមដំណើរ:",
         "choose_end": "ជ្រើសលេខឡាន ដើម្បីបញ្ចប់ដំណើរ:",
-        "start_ok": "អ្នកបើក {driver} លេខ {plate} បានចាប់ផ្តើមដំណើរ​នៅ {ts}។",
-        "end_ok": "អ្នកបើក {driver} លេខ {plate} បានបញ្ចប់ដំណើរ​នៅ {ts}។",
-        "trip_summary": "អ្នកបើក {driver} បានបញ្ចប់ {n_today} ដំណើរ នៅថ្ងៃនេះ និង {n_month} ក្នុង {month} និង {n_year} ក្នុង {year}។\n{plate} បានបញ្ចប់ {p_today} ដំណើរ នៅថ្ងៃនេះ និង {p_month} ក្នុង {month} និង {p_year} ក្នុង {year}។",
+        "start_ok": "➡️អ្នកបើក {driver} លេខ {plate} បានចាប់ផ្តើមដំណើរ​នៅ {ts}។",
+        "end_ok": "🔙អ្នកបើក {driver} លេខ {plate} បានបញ្ចប់ដំណើរ​នៅ {ts}។",
+        "trip_summary": "🚗អ្នកបើក {driver} បានបញ្ចប់ {n_today} ដំណើរ នៅថ្ងៃនេះ និង {n_month} ក្នុង {month} និង {n_year} ក្នុង {year}។\n{plate} បានបញ្ចប់ {p_today} ដំណើរ នៅថ្ងៃនេះ និង {p_month} ក្នុង {month} និង {p_year} ក្នុង {year}។",
         "not_allowed": "❌ អ្នកមិនមានសិទ្ធិបើកឡាននេះ: {plate}។",
         "invalid_sel": "ការជ្រើសមិនត្រឹមត្រូវ។",
         "help": "ជំនួយ៖ ប្រើ /start_trip ឬ /end_trip ហើយជ្រើសលេខឡាន។",
         "mission_start_prompt_plate": "ជ្រើសលេខឡាន ដើម្បីចាប់ផ្តើមបេសកកម្ម:",
         "mission_start_prompt_depart": "ជ្រើសទីក្រុងចេញដំណើរ:",
         "mission_end_prompt_plate": "ជ្រើសលេខឡាន ដើម្បីបញ្ចប់បេសកកម្ម:",
-        "mission_start_ok": "អ្នកបើក {driver} លេខ {plate} បានចេញពី {dep} នៅ {ts}។",
-        "mission_end_ok": "អ្នកបើក {driver} លេខ {plate} បានមកដល់ {arr} នៅ {ts}។",
+        "mission_start_ok": "↗️អ្នកបើក {driver} លេខ {plate} បានចេញពី {dep} នៅ {ts}។",
+        "mission_end_ok": "↘️អ្នកបើក {driver} លេខ {plate} បានមកដល់ {arr} នៅ {ts}។",
         "mission_no_open": "មិនមានបេសកកម្មបើកសម្រាប់ {plate} ទេ។",
         "_roundtrip_merged_notify_DISABLED": "✅{driver} បានបញ្ចប់ {d_month} បេសកកម្ម ក្នុង {month} និង {d_year} ក្នុង {year}។\n✅{driver} មាន {md_today} ថ្ងៃបេសកកម្ម (ថ្ងៃនេះ), {md_month} ថ្ងៃក្នុង {month} {year}។\n✅{plate} បានបញ្ចប់ {p_month} បេសកកម្ម ក្នុង {month} និង {p_year} ក្នុង {year}។",
         "lang_set": "បានកំណត់ភាសាទៅ {lang}។",
@@ -1541,6 +1544,9 @@ TR = {
         "leave_confirm": "ការសុំច្បាប់ត្រូវបានកត់ត្រាសម្រាប់ {driver}: {start} ដល់ {end} ({reason})",
         "enter_odo_km": "សូមបញ្ចូល Odometer (KM) សម្រាប់ {plate}:",
         "enter_fuel_cost": "សូមបញ្ចូលថ្លៃប្រេង (USD) សម្រាប់ {plate}: (អាចបញ្ចូល `inv:INV123 paid:yes`)",
+        "clock_in": "🌞 បានកត់ត្រា IN សម្រាប់ {driver} នៅ {ts}។",
+        "clock_out": "⭐ បានកត់ត្រា OUT សម្រាប់ {driver} នៅ {ts}។",
+        "leave_pending": "កំពុងរង់ចាំការបញ្ចូលការឈប់សម្រាក។ សូមឆ្លើយតបក្នុងជជែកជាមួយ៖ <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <មូលហេតុ> [កំណត់សម្គាល់]",
     },
 }
 
@@ -3290,8 +3296,9 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Mark leave pending and edit the callback message to a short prompt (avoid duplicate long messages)
         try:
             context.user_data["pending_leave"] = {"prompt_chat": q.message.chat.id, "prompt_msg_id": q.message.message_id, "origin": {"chat": q.message.chat.id, "msg_id": q.message.message_id}}
+            user_lang = context.user_data.get("lang", DEFAULT_LANG)
             try:
-                await q.edit_message_text("Leave entry pending. Please reply in chat with: <driver_username> <YYYY-MM-DD> <YYYY-MM-DD> <reason> [notes]")
+                await q.edit_message_text(t(user_lang, "leave_pending"))
             except Exception:
                 pass
         except Exception:
