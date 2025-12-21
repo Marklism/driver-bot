@@ -258,22 +258,6 @@ async def ot_report_entry(update, context):
     )
 # ===== END helper =====
 
-
-if not drivers:
-        await reply_private(update, context, "No drivers found.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
-        for d in drivers
-    ]
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
 def _calc_hours_fallback(r, idx_morning, idx_evening, idx_start, idx_end):
     try:
         m = float(r[idx_morning] or 0)
