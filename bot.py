@@ -1839,14 +1839,10 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             lines = []
             
             # 检查是否是跨年假期
-            if sd_dt.year != ed_dt.year:
-                # 跨年假期：分别按年/月生成通知行
-                # 按照display specification，必须一行对应一个(年,月)组合
-                for (y, m) in sorted(ym_days.keys()):
-                    month_name = datetime(year, year_start_month[year], 1).strftime("%B")    
-                    lines.append(f"🏝Total leave days for {driver}: {ym_days[(y,m)]} day(s) in {month_name} and {ym_days[(y,m)]} day(s) in {y}.")
-            else:
-                # 同一年内：保持原来的按月生成通知
+            if ym_days:
+                first_line = f"Driver {driver} {start} to {end} AL ({leave_days} days)"
+                await context.bot.send_message(chat_id=user.id, text=first_line)
+                
                 for (y, m) in sorted(ym_days.keys()):
                     month_name = datetime(y, m, 1).strftime("%B")
                     lines.append(f"🏝Total leave days for {driver}: {ym_days[(y,m)]} day(s) in {month_name} and {ym_days[(y,m)]} day(s) in {y}.")
