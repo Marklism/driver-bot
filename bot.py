@@ -392,7 +392,7 @@ Merged Driver Bot — usage notes (auto-inserted)
 
 # === BEGIN: Group-silent private reply helper ===
 
-async def reply_privately(update, context, text):
+async def reply_private(update, context, text):
     chat = update.effective_chat
     user = update.effective_user
 
@@ -3625,20 +3625,20 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
 
     if not args:
-        await reply_privately(update, context, "Usage: /lang en | km")
+        await reply_private(update, context, "Usage: /lang en | km")
         return
 
     lang = args[0].lower()
     if lang not in ("en", "km"):
-        await reply_privately(update, context, "Unsupported language. Use: en / km")
+        await reply_private(update, context, "Unsupported language. Use: en / km")
         return
 
     context.user_data["lang"] = lang
 
     if lang == "en":
-        await reply_privately(update, context, "Language set to English.")
+        await reply_private(update, context, "Language set to English.")
     else:
-        await reply_privately(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
+        await reply_private(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
 async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -3850,16 +3850,16 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.exception("Error in handle_clock_button")
 async def lang_command(update, context):
     if not context.args:
-        await reply_privately(update,context,"Usage: /lang en | /lang km")
+        await reply_private(update,context,"Usage: /lang en | /lang km")
         return
 
     lang = context.args[0].lower()
     if lang not in ("en", "km"):
-        await reply_privately(update,context,"Supported languages: en, km")
+        await reply_private(update,context,"Supported languages: en, km")
         return
 
     context.user_data["lang"] = lang
-    await reply_privately(update,context,f"Language set to {lang}")
+    await reply_private(update,context,f"Language set to {lang}")
     
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
@@ -5391,20 +5391,20 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args or []
 
     if not args:
-        await reply_privately(update, context, "Usage: /lang en | km")
+        await reply_private(update, context, "Usage: /lang en | km")
         return
 
     lang = args[0].lower()
     if lang not in ("en", "km"):
-        await reply_privately(update, context, "Unsupported language. Use: en / km")
+        await reply_private(update, context, "Unsupported language. Use: en / km")
         return
 
     context.user_data["lang"] = lang
 
     if lang == "en":
-        await reply_privately(update, context, "Language set to English.")
+        await reply_private(update, context, "Language set to English.")
     else:
-        await reply_privately(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
+        await reply_private(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
 async def reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("OT Report", callback_data="rep_ot")],
@@ -5751,7 +5751,7 @@ import io, csv
 
 # ---- Disable legacy mission command ----
 async def mission_monthly_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await reply_privately(update, context, "❌ /mission_monthly_report 已废弃，请使用 Reports → Mission Monthly Report")
+    await reply_private(update, context, "❌ /mission_monthly_report 已废弃，请使用 Reports → Mission Monthly Report")
 
 # ---- Entry from Reports menu ----
 async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
