@@ -259,7 +259,7 @@ async def ot_report_entry(update, context):
 # ===== END helper =====
 
 
-    if not drivers:
+if not drivers:
         await reply_private(update, context, "No drivers found.")
         return
 
