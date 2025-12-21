@@ -1,5 +1,75 @@
 
 # ============================================================
+# DISPLAY SPECIFICATION (FROZEN)
+# ============================================================
+# This section documents the FINAL and FROZEN user-facing output rules.
+# These rules exist to prevent duplicated, conflicting, or misleading
+# messages in Telegram output.
+#
+# --------------------
+# GENERAL
+# --------------------
+# - All multi-line messages MUST be built via build_message([...]).
+# - Do NOT use multi-line f-strings.
+# - Do NOT concatenate display strings manually.
+#
+# --------------------
+# LEAVE
+# --------------------
+# - Leave is the ONLY module that supports cross-month / cross-year split.
+# - Output rule:
+#   * One line per (year, month)
+#   * No combined or total summary line
+#
+# Example:
+#   🏝Total leave days for mark: 2 day(s) in December and 2 day(s) in 2025.
+#   🏝Total leave days for mark: 2 day(s) in January and 2 day(s) in 2026.
+#
+# --------------------
+# MISSION
+# --------------------
+# - Mission count and mission days are attributed ONLY to the START month/year.
+# - Cross-day or cross-month missions DO NOT split output.
+# - Output order is fixed:
+#   1) mission completed summary (Driver)
+#   2) mission day summary (Driver)
+#   3) mission completed summary (Plate)
+#
+# - Departure / arrival logs:
+#   * ↗️ departures
+#   * ↘️ arrives
+#
+# --------------------
+# OT
+# --------------------
+# - OT summary is display-only; calculation logic is frozen elsewhere.
+# - Cross-day OT is displayed as multiple lines (one per calendar date).
+# - Labels:
+#   * weekday-morning
+#   * weekday-evening
+#   * weekend
+#   * holiday
+#
+# --------------------
+# FINANCE
+# --------------------
+# - Each finance record is displayed individually.
+# - A DAILY SUBTOTAL line may be appended (display-only).
+# - Fee naming is standardized:
+#   * parking fee
+#   * wash fee
+#   * repair fee
+#   * fuel
+#
+# --------------------
+# WARNING
+# --------------------
+# Changing display text without updating this specification
+# is considered a breaking change.
+# ============================================================
+
+
+# ============================================================
 # DISPLAY STANDARD (MISSION / LEAVE / FINANCE)
 # ============================================================
 # Mission:
@@ -1382,8 +1452,8 @@ TR = {
         "mission_start_prompt_plate": "Choose plate to start mission:",
         "mission_start_prompt_depart": "Select departure city:",
         "mission_end_prompt_plate": "Choose plate to end mission:",
-        "mission_start_ok": "Driver {driver} {plate} departures from {dep} at {ts}.",
-        "mission_end_ok": "Driver {driver} {plate} arrives at {arr} at {ts}.",
+        "mission_start_ok": "Driver {driver} {plate} ↗️Driver {dep} at {ts}.",
+        "mission_end_ok": "Driver {driver} {plate} ↘️Driver {arr} at {ts}.",
         "mission_no_open": "No open mission found for {plate}.",
         "roundtrip_merged_notify": "✅ Driver {driver} completed {d_month} mission(s) in {month} and {d_year} mission(s) in {year}. {plate} completed {p_month} mission(s) in {month} and {p_year} mission(s) in {year}.",
         "lang_set": "Language set to {lang}.",
