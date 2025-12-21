@@ -2815,13 +2815,13 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             if typ == "parking":
                 res = record_parking(plate, amt, by_user=user.username or "")
                 # 公共群通知固定显示 "paid by Mark"
-                msg_pub = f"{plate} parking fee ${amt} on {today_date_str()} paid by Mark."
+                msg_pub = f"🅿️{plate} parking fee ${amt} on {today_date_str()} paid by Mark."
             elif typ == "wash":
                 res = record_wash(plate, amt, by_user=user.username or "")
-                msg_pub = f"{plate} wash fee ${amt} on {today_date_str()} paid by Mark."
+                msg_pub = f"🧻{plate} wash fee ${amt} on {today_date_str()} paid by Mark."
             elif typ == "repair":
                 res = record_repair(plate, amt, by_user=user.username or "")
-                msg_pub = f"{plate} repair fee ${amt} on {today_date_str()} paid by Mark."
+                msg_pub = f"🛠{plate} repair fee ${amt} on {today_date_str()} paid by Mark."
             else:
                 msg_pub = f"{plate} {typ} recorded ${amt}."
             try:
@@ -3138,11 +3138,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                     month_total += days_this
                     year_total += days_this
                 month_name = sd.strftime('%B') if isinstance(sd, datetime) else ''
-                msg = (
-                    f"🏝Driver {driver} {start} to {end} {reason} ({days_this} days)\n"
-                    f"🏝Total leave days for {driver}: {month_total} days in {month_name} and {year_total} days in {sd.strftime('%Y')}."
-                )
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+                msg = f"🏝Driver {driver} {start} to {end} {reason} ({days_this} days)"
+                # 只有“未跨月 + 未跨年”，才输出这句总结
+                if start.year == end.year and start.month == end.month:
+                    msg += (f"\n🏝Total leave days for {driver}: "f"{month_total} days in {month_name} and {year_total} days in {start.year}.")
+                await context.bot.send_message(chat_id=LEAVE_NOTIFY_CHAT_ID, text=msg)
         except Exception:
             logger.exception("Failed to record leave")
             try:
