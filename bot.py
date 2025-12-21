@@ -1,3 +1,24 @@
+
+# ============================================================
+# FROZEN BUSINESS RULES (MISSION / LEAVE / TRIP)
+# ============================================================
+# 1) Mission COUNT, Mission DAYS, Trip DAYS:
+#    - All statistics are attributed ONLY to the mission/trip START datetime
+#    - No cross-month or cross-year split
+#
+# 2) Mission DAYS special rule:
+#    - All natural days between start and end are accumulated
+#    - ALL days are attributed to the START month/year
+#
+# 3) Leave DAYS (ONLY exception):
+#    - Split by natural day across months and years
+#    - Each (year, month) is reported separately
+#
+# 4) Output style:
+#    - Mission/Trip: single month/year only
+#    - Leave: multiple lines allowed (one per month/year)
+# ============================================================
+
 #!/usr/bin/env python3
 # ============================================================
 # DRIVER BOT — FULL BOT MODE
