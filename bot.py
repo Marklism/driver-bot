@@ -788,10 +788,40 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 except Exception:
                     pass
 
-            msg_lines = [
-                f"💰Driver {driver}:",
-                f"{ts_dt.strftime('%Y-%m-%d')} ({rate_label}): {total_ot:.2f} hour(s){cross_day}"
-            ]
+            msg_lines = [f"💰Driver {driver}:"]
+
+            if last and last[O_IDX_ACTION] == "IN":
+                try:
+                    last_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+
+                    # 跨日 OT，拆成两天显示
+                    if last_dt.date() != ts_dt.date():
+                        # Day 1: last_dt.date() evening
+                        day1 = last_dt.date()
+                        day2 = ts_dt.date()
+                        # evening part (day1)
+                        evening_hours = 0.0
+                        start_evening = last_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+                        if last_dt < start_evening:
+                            start_evening = start_evening
+                        else:
+                            start_evening = last_dt
+                        end_evening = last_dt.replace(hour=23, minute=59, second=59)
+                        evening_hours = max((end_evening - start_evening).total_seconds() / 3600, 0)
+
+                        # morning part (day2)
+                        morning_hours = max((ts_dt - ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds() / 3600, 0)
+
+                        if evening_hours > 0:
+                            msg_lines.append(f"🌟{day1.strftime('%Y-%m-%d')} (weekday-evening): {evening_hours:.2f} hour(s)")
+                        if morning_hours > 0:
+                            msg_lines.append(f"🌞{day2.strftime('%Y-%m-%d')} (weekday-morning): {morning_hours:.2f} hour(s) (cross-day)")
+                    else:
+                        msg_lines.append(f"💰{ts_dt.strftime('%Y-%m-%d')} ({rate_label}): {total_ot:.2f} hour(s)")
+                except Exception:
+                    msg_lines.append(f"💰{ts_dt.strftime('%Y-%m-%d')} ({rate_label}): {total_ot:.2f} hour(s)")
+            else:
+                msg_lines.append(f"💰{ts_dt.strftime('%Y-%m-%d')} ({rate_label}): {total_ot:.2f} hour(s)")
 
             msg = build_message(msg_lines)
             await context.bot.send_message(chat_id=chat.id, text=msg)
@@ -3831,6 +3861,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
+    application.add_handler(CommandHandler("lang", set_language))
     # [DISABLED] legacy mission_monthly_report handler
 
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
