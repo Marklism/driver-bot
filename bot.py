@@ -3429,7 +3429,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 logger.exception('Failed to compute mission days for notification (safe)')
                             except Exception:
                                 pass
-                       month_label = month_start.strftime('%B')
+                        month_label = month_start.strftime('%B')
                         line1 = t(user_lang, 'roundtrip_merged_notify', driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
                         # Build line2 and line3 explicitly
                         line2 = f"✅Driver {username} has {md_today} mission day(s) (today), {md_month} mission day(s) in {month_label} {nowdt.year}."
@@ -3440,7 +3440,6 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.chat.send_message(
             f"🛫 Driver {driver} completed {d_month} mission(s) in {month} and {d_year} mission(s) in {year}."
         )
-
                         await q.message.chat.send_message(line2)
                         await q.message.chat.send_message(line3)
                     except Exception:
