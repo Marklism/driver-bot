@@ -17,6 +17,15 @@
 # - Individual entries first
 # - Append daily subtotal line at end (display-only)
 # ============================================================
+# ============================================================
+# SAFE MESSAGE BUILDER (DISPLAY ONLY)
+# ============================================================
+def build_message(lines):
+    """Safely build multi-line messages without multiline f-strings.
+    DISPLAY ONLY. Do not change business logic.
+    """
+    return "\n".join([str(line) for line in lines if line])
+
 
 
 # ============================================================
@@ -707,23 +716,34 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     # --- Notifications & user feedback ---
     if should_notify and total_ot > 0 and chat is not None:
         try:
-            if weekday_msg:
-                rate_label = "weekend/holiday" if (is_weekend or is_holiday) else "weekday morning/evening"
-                cross = " (cross-day)" if (last and last[O_IDX_ACTION]=="IN" and ts_dt.date()!=datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S").date()) else ""
-                msg_lines = [f"💰Driver {driver}:"]
-                msg = ""
- ({rate_label}) OT today: {total_ot:.2f} hour(s){cross}."
-            else:
-                rate_label = "weekend/holiday" if (is_weekend or is_holiday) else "weekday morning/evening"
-                cross = " (cross-day)" if (last and last[O_IDX_ACTION]=="IN" and ts_dt.date()!=datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S").date()) else ""
-                msg_lines = [f"💰Driver {driver}:"]
-                msg = ""
- ({rate_label}) OT today: {total_ot:.2f} hour(s){cross}."
+            rate_label = (
+                "holiday" if is_holiday else
+                "weekend" if is_weekend else
+                "weekday-morning" if (ts_dt.hour < 8) else
+                "weekday-evening"
+            )
+
+            cross_day = ""
+            if last and last[O_IDX_ACTION] == "IN":
+                try:
+                    last_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+                    if last_dt.date() != ts_dt.date():
+                        cross_day = " (cross-day)"
+                except Exception:
+                    pass
+
+            msg_lines = [
+                f"💰Driver {driver}:",
+                f"{ts_dt.strftime('%Y-%m-%d')} ({rate_label}): {total_ot:.2f} hour(s){cross_day}"
+            ]
+
+            msg = build_message(msg_lines)
             await context.bot.send_message(chat_id=chat.id, text=msg)
         except Exception:
             logger.exception("Failed to send OT notification")
 
-    # Edit the inline-button message as a confirmation
+# Edit the inline-button message as a confirmation
+
     try:
         if total_ot > 0:
             await query.edit_message_text(
