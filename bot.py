@@ -1840,23 +1840,11 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             
             # 检查是否是跨年假期
             if sd_dt.year != ed_dt.year:
-                # 跨年假期：按年份汇总天数
-                year_days = defaultdict(int)
-                year_start_month = {}  # 记录每个年份的开始月份
-
-                for (y, m) in ym_days.keys():
-                    year_days[y] += ym_days[(y, m)]
-                    if y not in year_start_month:
-                        year_start_month[y] = m
-                    else:
-                        # 取最早月份作为该年份的代表月份
-                        year_start_month[y] = min(year_start_month[y], m)
-
-                # 按年份排序生成通知
-                for year in sorted(year_days.keys()):
+                # 跨年假期：分别按年/月生成通知行
+                # 按照display specification，必须一行对应一个(年,月)组合
+                for (y, m) in sorted(ym_days.keys()):
                     month_name = datetime(year, year_start_month[year], 1).strftime("%B")    
-                    lines.append(f"🏝Total leave days for {driver}: {year_days[year]} day(s) in {month_name} and {year_days[year]} day(s) in {year}.")
-
+                    lines.append(f"🏝Total leave days for {driver}: {ym_days[(y,m)]} day(s) in {month_name} and {ym_days[(y,m)]} day(s) in {y}.")
             else:
                 # 同一年内：保持原来的按月生成通知
                 for (y, m) in sorted(ym_days.keys()):
