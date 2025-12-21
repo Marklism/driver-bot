@@ -391,6 +391,7 @@ Merged Driver Bot — usage notes (auto-inserted)
 
 
 # === BEGIN: Group-silent private reply helper ===
+
 async def reply_privately(update, context, text):
     chat = update.effective_chat
     user = update.effective_user
@@ -399,7 +400,8 @@ async def reply_privately(update, context, text):
     if chat and chat.type in ("group", "supergroup"):
         await context.bot.send_message(chat_id=user.id, text=text)
     else:
-        await update.effective_message.reply_text(text)
+        await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=text)
+        
 # === END: Group-silent private reply helper ===
 Before running this script, set these environment variables (examples):
 
