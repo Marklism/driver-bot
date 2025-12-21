@@ -3435,7 +3435,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         line2 = f"✅Driver {username} has {md_today} mission day(s) (today), {md_month} mission day(s) in {month_label} {nowdt.year}."
                         line3 = f"✅{plate} completed {plate_counts_month} mission(s) in {month_label} and {plate_counts_year} mission(s) in {nowdt.year}."
                         if line1 and line1.strip():
-            await q.message.chat.send_message(line1)
+                await q.message.chat.send_message(line1)
     else:
         await q.message.chat.send_message(
             f"🛫 Driver {driver} completed {d_month} mission(s) in {month} and {d_year} mission(s) in {year}."
@@ -4079,7 +4079,7 @@ def main():
             logger.exception("Polling exited with exception.")
 
 if __name__ == "__main__":
-    
+        pass
     main()
 main()
 # === In-memory override for mission cycle persistence ===
