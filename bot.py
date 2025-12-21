@@ -830,7 +830,7 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
     if not args:
-        await context.bot.send_message(chat_id=update.effective_user.id,text="")
+        await context.bot.pass  # guarded empty message removed
         return
 
     if len(args) == 1:
@@ -1417,6 +1417,12 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     SUMMARY_TAB: ["Date", "PeriodType", "TotalsJSON", "HumanSummary"],
 
 # ============================================================
+
+# LEAVE DISPLAY FREEZE:
+# - Leave is the ONLY module that splits by natural month/year.
+# - Output MUST be one line per (year, month).
+# - DO NOT emit combined or overall total lines.
+
 # SECTION 6 — Leave Module
 # Purpose:
 # - Driver leave requests
@@ -3444,7 +3450,12 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         # Build line2 and line3 explicitly
                         line2 = f"✅Driver {username} has {md_today} mission day(s) (today), {md_month} mission day(s) in {month_label} {nowdt.year}."
                         line3 = f"✅{plate} completed {plate_counts_month} mission(s) in {month_label} and {plate_counts_year} mission(s) in {nowdt.year}."
-                        await q.message.chat.send_message(line1)
+                        if line1 and line1.strip():
+        await q.message.chat.send_message(line1)
+    else:
+        await q.message.chat.send_message(
+            f"🛫 Driver {driver} completed {d_month} mission(s) in {month} and {d_year} mission(s) in {year}."
+        )
                         await q.message.chat.send_message(line2)
                         await q.message.chat.send_message(line3)
                     except Exception:
