@@ -1083,7 +1083,7 @@ def _get_gspread_client():
         raise RuntimeError('Google credentials not provided (GOOGLE_CREDS_B64 / GOOGLE_CREDS_BASE64)')
     info = json.loads(base64.b64decode(b64))
     try:
-        creds = service_account.Credentials.from_service_account_info(info, scopes=_GSPREAD_SCOPES)
+        creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive'])
     except Exception:
         creds = service_account.Credentials.from_service_account_info(info)
     return gspread.authorize(creds)
@@ -3432,14 +3432,14 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         month_label = month_start.strftime('%B')
                         line1 = t(user_lang, 'roundtrip_merged_notify', driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
                         # Build line2 and line3 explicitly
-                        line2 = f"✅Driver {username} has {md_today} mission day(s) (today), {md_month} mission day(s) in {month_label} {nowdt.year}."
-                        line3 = f"✅{plate} completed {plate_counts_month} mission(s) in {month_label} and {plate_counts_year} mission(s) in {nowdt.year}."
+                        line2 = f"🚹Driver {username} has {md_today} mission day(s) (today), {md_month} mission day(s) in {month_label} {nowdt.year}."
+                        line3 = f"🚘{plate} completed {plate_counts_month} mission(s) in {month_label} and {plate_counts_year} mission(s) in {nowdt.year}."
                         try:
                             
                             if line1 and line1.strip():
                                 await q.message.chat.send_message(line1)
                             else:
-                                summary_line1 = f"🛫Driver {driver} completed {d_month} mission(s) in {month} and {d_year} mission(s) in {year}."
+                                summary_line1 = f"🛫Driver {username} completed {d_month} mission(s) in {month_label} and {d_year} mission(s) in {year}."
                             await q.message.chat.send_message(line2)
                             await q.message.chat.send_message(line3)
                         except Exception as e:
