@@ -2993,7 +2993,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 # fallback: simple confirmation if any error computing totals
                 try:
-                    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"🏝Driver {driver} {start} to {end} {reason}.")
+                    await context.bot.send_message(chat_id=LEAVE_NOTIFY_CHAT_ID, text=f"🏝Driver {driver} {start} to {end} {reason}.")
                 except Exception:
                     pass
         except Exception:
