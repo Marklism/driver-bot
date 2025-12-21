@@ -68,6 +68,7 @@
 # - debug verbatim
 # ============================================================
 
+from datetime import time as dtime
 
 
 
@@ -709,12 +710,14 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if weekday_msg:
                 rate_label = "weekend/holiday" if (is_weekend or is_holiday) else "weekday morning/evening"
                 cross = " (cross-day)" if (last and last[O_IDX_ACTION]=="IN" and ts_dt.date()!=datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S").date()) else ""
-                msg = f"💰Driver {driver}:
+                msg_lines = [f"💰Driver {driver}:"]
+                msg = ""
  ({rate_label}) OT today: {total_ot:.2f} hour(s){cross}."
             else:
                 rate_label = "weekend/holiday" if (is_weekend or is_holiday) else "weekday morning/evening"
                 cross = " (cross-day)" if (last and last[O_IDX_ACTION]=="IN" and ts_dt.date()!=datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S").date()) else ""
-                msg = f"💰Driver {driver}:
+                msg_lines = [f"💰Driver {driver}:"]
+                msg = ""
  ({rate_label}) OT today: {total_ot:.2f} hour(s){cross}."
             await context.bot.send_message(chat_id=chat.id, text=msg)
         except Exception:
