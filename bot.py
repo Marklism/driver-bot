@@ -4079,9 +4079,8 @@ def main():
             logger.exception("Polling exited with exception.")
 
 if __name__ == "__main__":
-        pass
     main()
-main()
+    
 # === In-memory override for mission cycle persistence ===
 # We deliberately avoid any Google Sheets I/O for mission_cycle state
 # to reduce API usage and prevent OAuth scope issues. The mission
