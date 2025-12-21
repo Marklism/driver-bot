@@ -2989,11 +2989,11 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 # 只在“未跨年 + 未跨月”时，才显示 month + year 汇总
                 if start.year == end.year and start.month == end.month:
                     msg += (f"\n🏝Total leave days for {driver}: "f"{month_total} days in {month_name} and {year_total} days in {start.year}.")
-                await context.bot.send_message(chat_id=LEAVE_NOTIFY_CHAT_ID, text=msg)
+                await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg)
             except Exception:
                 # fallback: simple confirmation if any error computing totals
                 try:
-                    await context.bot.send_message(chat_id=LEAVE_NOTIFY_CHAT_ID, text=f"🏝Driver {driver} {start} to {end} {reason}.")
+                    await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=f"🏝Driver {driver} {start} to {end} {reason}.")
                 except Exception:
                     pass
         except Exception:
@@ -3142,7 +3142,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 # 只有“未跨月 + 未跨年”，才输出这句总结
                 if start.year == end.year and start.month == end.month:
                     msg += (f"\n🏝Total leave days for {driver}: "f"{month_total} days in {month_name} and {year_total} days in {start.year}.")
-                await context.bot.send_message(chat_id=LEAVE_NOTIFY_CHAT_ID, text=msg)
+                await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg)
         except Exception:
             logger.exception("Failed to record leave")
             try:
