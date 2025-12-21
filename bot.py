@@ -3848,7 +3848,19 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         await clock_callback_handler(update, context)
     except Exception:
         logger.exception("Error in handle_clock_button")
+async def lang_command(update, context):
+    if not context.args:
+        await reply_privately(update,context,"Usage: /lang en | /lang km")
+        return
 
+    lang = context.args[0].lower()
+    if lang not in ("en", "km"):
+        await reply_privately(update,context,"Supported languages: en, km")
+        return
+
+    context.user_data["lang"] = lang
+    await reply_privately(update,context,f"Language set to {lang}")
+    
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
@@ -3861,7 +3873,6 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry))
     application.add_handler(CommandHandler("ot_monthly_report", ot_monthly_report_command))
-    application.add_handler(CommandHandler("lang", set_language))
     # [DISABLED] legacy mission_monthly_report handler
 
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
