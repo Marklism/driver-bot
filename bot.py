@@ -1,5 +1,25 @@
 
 # ============================================================
+# DISPLAY STANDARD (MISSION / LEAVE / FINANCE)
+# ============================================================
+# Mission:
+# - Count & Days attributed ONLY to START month/year
+# - Cross-day missions do NOT split months
+# - Output order:
+#   1) completed mission(s)
+#   2) mission day(s)
+#
+# Leave:
+# - Split by natural month/year
+# - One line per (year, month), no combined total line
+#
+# Finance:
+# - Individual entries first
+# - Append daily subtotal line at end (display-only)
+# ============================================================
+
+
+# ============================================================
 # FROZEN BUSINESS RULES (MISSION / LEAVE / TRIP)
 # ============================================================
 # 1) Mission COUNT, Mission DAYS, Trip DAYS:
@@ -687,9 +707,15 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if should_notify and total_ot > 0 and chat is not None:
         try:
             if weekday_msg:
-                msg = f"💰Driver {driver}: OT today: {total_ot:.2f} hour(s)."
+                rate_label = "weekend/holiday" if (is_weekend or is_holiday) else "weekday morning/evening"
+                cross = " (cross-day)" if (last and last[O_IDX_ACTION]=="IN" and ts_dt.date()!=datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S").date()) else ""
+                msg = f"💰Driver {driver}:
+ ({rate_label}) OT today: {total_ot:.2f} hour(s){cross}."
             else:
-                msg = f"💰Driver {driver}: OT today: {total_ot:.2f} hour(s)."
+                rate_label = "weekend/holiday" if (is_weekend or is_holiday) else "weekday morning/evening"
+                cross = " (cross-day)" if (last and last[O_IDX_ACTION]=="IN" and ts_dt.date()!=datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S").date()) else ""
+                msg = f"💰Driver {driver}:
+ ({rate_label}) OT today: {total_ot:.2f} hour(s){cross}."
             await context.bot.send_message(chat_id=chat.id, text=msg)
         except Exception:
             logger.exception("Failed to send OT notification")
@@ -698,11 +724,11 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     try:
         if total_ot > 0:
             await query.edit_message_text(
-                f"🌟Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}. OT: {total_ot:.2f} hour(s)."
+                ("🌞Recorded IN for {driver} at " + ts_dt.strftime("%Y-%m-%d %H:%M:%S") + ".") if action=="IN" else ("🌟Recorded OUT for {driver} at " + ts_dt.strftime("%Y-%m-%d %H:%M:%S") + ".")
             )
         else:
             await query.edit_message_text(
-                f"🌟Recorded {action} for {driver} at {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}."
+                ("🌞Recorded IN for {driver} at " + ts_dt.strftime("%Y-%m-%d %H:%M:%S") + ".") if action=="IN" else ("🌟Recorded OUT for {driver} at " + ts_dt.strftime("%Y-%m-%d %H:%M:%S") + ".")
             )
     except Exception:
         # Fallback: ignore edit errors
