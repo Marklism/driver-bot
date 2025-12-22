@@ -4000,10 +4000,7 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     bio.name = f"Mission_Report_{driver}.csv"
     await context.bot.send_document(chat_id=query.from_user.id, document=bio, caption=f"Mission report for {driver}")
 
-# Register NEW mission report handlers
-application.add_handler(CommandHandler("mission_report", mission_report_entry))
-application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
-# ===============================
+
 
 
 
@@ -4041,7 +4038,10 @@ def register_ui_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
     application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
-
+    # Register NEW mission report handlers
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+    application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
+    # ===============================
     
     # Debug command for runtime self-check
     application.add_handler(CommandHandler('debug_bot', debug_bot_command))
