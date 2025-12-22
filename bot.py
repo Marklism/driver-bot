@@ -415,7 +415,7 @@ async def reply_private(update, context, text):
     if chat and chat.type in ("group", "supergroup"):
         await context.bot.send_message(chat_id=user.id, text=text)
     else:
-        await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=text)
+        await context.bot.send_message(chat_id=chat.id, text=text)
         
 # === END: Group-silent private reply helper ===
 Before running this script, set these environment variables (examples):
@@ -3094,7 +3094,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 # fallback: simple confirmation if any error computing totals
                 try:
-                    await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=f"🏝Driver {driver} {start} to {end} {reason}.")
+                    await reply_private(update, context, f"🏝Driver {driver} {start} to {end} {reason}.")
                 except Exception:
                     pass
         except Exception:
@@ -3243,7 +3243,7 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 # 只有“未跨月 + 未跨年”，才输出这句总结
                 if start.year == end.year and start.month == end.month:
                     msg += (f"\n🏝Total leave days for {driver}: "f"{month_total} days in {month_name} and {year_total} days in {start.year}.")
-                await context.bot.send_message(chat_id=SUMMARY_CHAT_ID, text=msg)
+                await reply_private(update, context, msg)
         except Exception:
             logger.exception("Failed to record leave")
             try:
