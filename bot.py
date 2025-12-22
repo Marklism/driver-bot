@@ -3710,16 +3710,16 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_private(update, context, "Language set to English.")
     else:
         await reply_private(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
-async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    args = context.args
-    if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
-        return
+#async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#    try:
+#        if update.effective_message:
+#            await update.effective_message.delete()
+#    except Exception:
+#        pass
+#    args = context.args
+#    if not args or len(args) < 2:
+#        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
+#        return
     mode = args[0].lower()
     if mode == "month":
         try:
@@ -3938,7 +3938,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
+    application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry)) # OT menu entry (buttons -> CSV)
