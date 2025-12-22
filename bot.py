@@ -233,6 +233,21 @@ async def reply_private(update, context, text, reply_markup=None):
         reply_markup=reply_markup,
     )
 
+async def reply_to_origin_chat(update, context, text, reply_markup=None):
+    """
+    Reply to the chat where the command was triggered.
+    Group stays in group, private stays private.
+    """
+    chat = update.effective_chat
+    if not chat:
+        return
+
+    await context.bot.send_message(
+        chat_id=chat.id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+
 async def ot_report_entry(update, context):
     driver_map = get_driver_map()   # ✅ 正确的数据入口
     drivers = sorted(driver_map.keys())
@@ -1905,13 +1920,13 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             # 检查是否是跨年假期
             if ym_days:
                 first_line = f"Driver {driver} {start} to {end} AL ({leave_days} days)"
-                await context.bot.send_message(chat_id=user.id, text=first_line)
+                await reply_to_origin_chat(update, context, first_line)
                 
                 for (y, m) in sorted(ym_days.keys()):
                     month_name = datetime(y, m, 1).strftime("%B")
                     lines.append(f"🏝Total leave days for {driver}: {ym_days[(y,m)]} day(s) in {month_name} and {ym_days[(y,m)]} day(s) in {y}.")
             if lines:
-                await context.bot.send_message(chat_id=user.id, text="\n".join(lines))
+                await reply_to_origin_chat(update, context, "\n".join(lines))
     except Exception:
         pass
     # success
