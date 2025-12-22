@@ -3931,7 +3931,93 @@ async def lang_command(update, context):
 
     context.user_data["lang"] = lang
     await reply_private(update,context,f"Language set to {lang}")
-    
+
+async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Entry command similar to ot_report_entry
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
+    await reply_private(update, context, "Select driver:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def mission_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    driver = query.data.split(":", 1)[1]
+
+    ws = open_worksheet(MISSIONS_TAB)
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ No mission records.")
+        return
+
+    header = rows[0]
+    data = rows[1:]
+
+    # Expected columns (fallback by index constants)
+    try:
+        idx_driver = header.index("Name")
+        idx_plate = header.index("Plate")
+        idx_start = header.index("Start Date")
+        idx_end = header.index("End Date")
+        idx_depart = header.index("Departure")
+        idx_arrival = header.index("Arrival")
+    except Exception:
+        idx_driver = M_IDX_NAME
+        idx_plate = M_IDX_PLATE
+        idx_start = M_IDX_START
+        idx_end = M_IDX_END
+        idx_depart = M_IDX_DEPART
+        idx_arrival = M_IDX_ARRIVAL
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["Driver", "Plate", "Start", "End", "Departure", "Arrival"])
+
+    found = False
+    for r in data:
+        if len(r) <= idx_driver:
+            continue
+        if str(r[idx_driver]).strip() != driver:
+            continue
+        found = True
+        writer.writerow([
+            r[idx_driver],
+            r[idx_plate] if len(r) > idx_plate else "",
+            r[idx_start] if len(r) > idx_start else "",
+            r[idx_end] if len(r) > idx_end else "",
+            r[idx_depart] if len(r) > idx_depart else "",
+            r[idx_arrival] if len(r) > idx_arrival else "",
+        ])
+
+    if not found:
+        await context.bot.send_message(chat_id=query.from_user.id, text=f"❌ No missions for {driver}.")
+        return
+
+    bio = io.BytesIO(out.getvalue().encode("utf-8"))
+    bio.name = f"Mission_Report_{driver}.csv"
+    await context.bot.send_document(chat_id=query.from_user.id, document=bio, caption=f"Mission report for {driver}")
+
+# Register NEW mission report handlers
+application.add_handler(CommandHandler("mission_report", mission_report_entry))
+application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
+# ===============================
+
+
+
+# ===== HARD DISABLE LEGACY MISSION REPORT =====
+def _legacy_mission_report_killed(*args, **kwargs):
+    raise RuntimeError("LEGACY MISSION REPORT DISABLED")
+
+for _name in list(globals().keys()):
+    if "mission" in _name and "report" in _name and _name not in (
+        "mission_report_entry",
+        "mission_report_driver_callback",
+    ):
+        globals()[_name] = _legacy_mission_report_killed
+
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
@@ -5819,91 +5905,7 @@ import io, csv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler, CommandHandler
 
-async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Entry command similar to ot_report_entry
-    driver_map = get_driver_map()
-    drivers = sorted(driver_map.keys())
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
-    await reply_private(update, context, "Select driver:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def mission_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    driver = query.data.split(":", 1)[1]
-
-    ws = open_worksheet(MISSIONS_TAB)
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ No mission records.")
-        return
-
-    header = rows[0]
-    data = rows[1:]
-
-    # Expected columns (fallback by index constants)
-    try:
-        idx_driver = header.index("Name")
-        idx_plate = header.index("Plate")
-        idx_start = header.index("Start Date")
-        idx_end = header.index("End Date")
-        idx_depart = header.index("Departure")
-        idx_arrival = header.index("Arrival")
-    except Exception:
-        idx_driver = M_IDX_NAME
-        idx_plate = M_IDX_PLATE
-        idx_start = M_IDX_START
-        idx_end = M_IDX_END
-        idx_depart = M_IDX_DEPART
-        idx_arrival = M_IDX_ARRIVAL
-
-    out = io.StringIO()
-    writer = csv.writer(out)
-    writer.writerow(["Driver", "Plate", "Start", "End", "Departure", "Arrival"])
-
-    found = False
-    for r in data:
-        if len(r) <= idx_driver:
-            continue
-        if str(r[idx_driver]).strip() != driver:
-            continue
-        found = True
-        writer.writerow([
-            r[idx_driver],
-            r[idx_plate] if len(r) > idx_plate else "",
-            r[idx_start] if len(r) > idx_start else "",
-            r[idx_end] if len(r) > idx_end else "",
-            r[idx_depart] if len(r) > idx_depart else "",
-            r[idx_arrival] if len(r) > idx_arrival else "",
-        ])
-
-    if not found:
-        await context.bot.send_message(chat_id=query.from_user.id, text=f"❌ No missions for {driver}.")
-        return
-
-    bio = io.BytesIO(out.getvalue().encode("utf-8"))
-    bio.name = f"Mission_Report_{driver}.csv"
-    await context.bot.send_document(chat_id=query.from_user.id, document=bio, caption=f"Mission report for {driver}")
-
-# Register NEW mission report handlers
-application.add_handler(CommandHandler("mission_report", mission_report_entry))
-application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
-# ===============================
-
-
-
-# ===== HARD DISABLE LEGACY MISSION REPORT =====
-def _legacy_mission_report_killed(*args, **kwargs):
-    raise RuntimeError("LEGACY MISSION REPORT DISABLED")
-
-for _name in list(globals().keys()):
-    if "mission" in _name and "report" in _name and _name not in (
-        "mission_report_entry",
-        "mission_report_driver_callback",
-    ):
-        globals()[_name] = _legacy_mission_report_killed
 # ============================================
 
 # NOTE: Combined OT + Mission menu not auto-injected; please wire manually if needed.
