@@ -4024,7 +4024,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
-    application.add_handler(CommandHandler("mission_report", mission_report_entry))
+#    application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry)) # OT menu entry (buttons -> CSV)
