@@ -1738,9 +1738,9 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
         await update.effective_chat.send_message("Invalid YYYY-MM")
         return
     y,m = ym_parsed
-    start_dt = datetime.datetime(y,m,16,4,0)
+    start_dt = datetime(y,m,16,4,0)
     ny, nm = _add_months(y,m,1)
-    end_dt = datetime.datetime(ny,nm,16,4,0)
+    end_dt = datetime(ny,nm,16,4,0)
     try:
         ws = open_worksheet(OT_RECORD_TAB)
         vals = ws.get_all_values()
@@ -1768,10 +1768,10 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
             start_raw = row[idx_start].strip() if len(row) > idx_start else ""
             sd = None
             try:
-                sd = datetime.datetime.strptime(start_raw, "%Y-%m-%d %H:%M:%S")
+                sd = datetime.strptime(start_raw, "%Y-%m-%d %H:%M:%S")
             except Exception:
                 try:
-                    sd = datetime.datetime.strptime(start_raw, "%Y-%m-%d")
+                    sd = datetime.strptime(start_raw, "%Y-%m-%d")
                 except Exception:
                     continue
             if not (start_dt <= sd < end_dt):
