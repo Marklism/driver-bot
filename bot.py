@@ -831,17 +831,14 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 # Edit the inline-button message as a confirmation
 
     try:
-        if total_ot > 0:
-            await query.edit_message_text(
-                ("🌞Recorded IN for {driver} at " + ts_dt.strftime("%Y-%m-%d %H:%M:%S") + ".") if action=="IN" else ("🌟Recorded OUT for {driver} at " + ts_dt.strftime("%Y-%m-%d %H:%M:%S") + ".")
-            )
-        else:
-            await query.edit_message_text(
-                ("🌞Recorded IN for {driver} at " + ts_dt.strftime("%Y-%m-%d %H:%M:%S") + ".") if action=="IN" else ("🌟Recorded OUT for {driver} at " + ts_dt.strftime("%Y-%m-%d %H:%M:%S") + ".")
-            )
+        user_lang = context.user_data.get("lang", DEFAULT_LANG)
+        ts_str = ts_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        await query.edit_message_text(t(user_lang,"clock_in" if action == "IN" else "clock_out",driver=driver,ts=ts_str))
     except Exception:
         # Fallback: ignore edit errors
         pass
+        
 async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /ot_report [driver] YYYY-MM """
     args = context.args
