@@ -841,16 +841,6 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if month == 12:
             month_end = datetime(year + 1, 1, 1)
         else:
-
-# ============================================================
-# SECTION 4 — Mission Module
-# Purpose:
-# - Mission start / end lifecycle
-# - Roundtrip handling
-# - Mission state persistence
-# Source:
-# - debug verbatim
-# ============================================================
             month_end = datetime(year, month + 1, 1)
     except Exception:
         await update.message.reply_text("Invalid month format. Use YYYY-MM.")
@@ -1130,14 +1120,6 @@ def open_bot_state_worksheet():
     gc = _get_gspread_client()
     sheet_name = os.getenv('GOOGLE_SHEET_NAME'); sheet_id = os.getenv('SHEET_ID')
 
-# ============================================================
-# SECTION 5 — OT Module
-# Purpose:
-# - Overtime calculation
-# - OT record persistence
-# Source:
-# - debug verbatim
-# ============================================================
     if sheet_name: sh = gc.open(sheet_name)
     elif sheet_id: sh = gc.open_by_key(sheet_id)
     else: raise RuntimeError('Provide GOOGLE_SHEET_NAME or SHEET_ID')
@@ -1438,20 +1420,6 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     MISSIONS_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
     MISSIONS_REPORT_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
     SUMMARY_TAB: ["Date", "PeriodType", "TotalsJSON", "HumanSummary"],
-
-# ============================================================
-
-# LEAVE DISPLAY FREEZE:
-# - Leave is the ONLY module that splits by natural month/year.
-# - Output MUST be one line per (year, month).
-# - DO NOT emit combined or overall total lines.
-
-# SECTION 6 — Leave Module
-# Purpose:
-# - Driver leave requests
-# Source:
-# - debug verbatim
-# ============================================================
     DRIVERS_TAB: ["Username", "Plates"],
     LEAVE_TAB: ["Driver", "Start Date", "End Date", "Leave Days", "Reason", "Notes"],
     MAINT_TAB: ["Plate", "Mileage", "Maintenance Item", "Cost", "Date", "Workshop", "Notes"],
@@ -1685,8 +1653,6 @@ def open_worksheet(tab: str = ""):
         return _wrap_ws(sh.sheet1)
 
 
-
-
 # === BEGIN: Monthly OT and Mission Reports ===
 def _add_months(year:int, month:int, months:int):
     y = year + (month - 1 + months) // 12
@@ -1759,13 +1725,6 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
                 try: h += float(row[idx_morning] or 0)
                 except: pass
 
-# ============================================================
-# SECTION 7 — Finance Module
-# Purpose:
-# - Expense / advance records
-# Source:
-# - debug verbatim
-# ============================================================
             if idx_evening is not None and len(row) > idx_evening:
                 try: h += float(row[idx_evening] or 0)
                 except: pass
@@ -1794,8 +1753,6 @@ async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAUL
 
 # [DISABLED LEGACY MISSION REPORT]
 # (removed per request)
-
-
 
 
 async def process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user):
@@ -2060,9 +2017,9 @@ def start_mission_record(driver: str, plate: str, departure: str, update=None) -
         guid = str(uuid.uuid4())
 
         # ✅ 强制使用 Telegram username
-        tg_username = ""
+        tg_username = "UNKNOWN"
         if update and update.effective_user:
-            tg_username = update.effective_user.username or update.effective_user.full_name
+            tg_username = (update.effective_user.username or update.effective_user.full_name)
 
         row = [""] * M_MANDATORY_COLS
         row[M_IDX_GUID] = guid
@@ -2092,9 +2049,9 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
         return {"ok": False, "message": "Could not open missions sheet: " + str(e)}
 
     # ===== 核心修改点：再次统一使用 Telegram username =====
-    tg_username = ""
+    tg_username = "UNKNOWN"
     if update and update.effective_user:
-        tg_username = update.effective_user.username or update.effective_user.full_name
+        tg_username = (update.effective_user.username or update.effective_user.full_name)
 
     try:
         vals, start_idx = _missions_get_values_and_data_rows(ws)
@@ -2349,15 +2306,6 @@ def count_trips_for_month(driver: str, month_start: datetime, month_end: datetim
             if month_start <= s_dt < month_end:
                 cnt += 1
     except Exception:
-
-# ============================================================
-# SECTION 9 — Telegram Handlers & Bot Bootstrap
-# Purpose:
-# - Command registration
-# - Bot startup
-# Source:
-# - debug verbatim
-# ============================================================
         logger.exception("Failed to count trips for month")
     return cnt
 
@@ -3283,7 +3231,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         _, plate = parts
         # show departure choices
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": username}
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": tg_username}
         kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"),
                InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
         await q.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
@@ -3306,7 +3254,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("mission_end_plate callback missing plate: %s", data)
             return
         _, plate = parts
-        context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": username}
+        context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": tg_username}
         # allow immediate end (auto arrival) button; callback includes plate for robustness
         kb = [[InlineKeyboardButton("End mission now (auto arrival)", callback_data=f"mission_end_now|{plate}")]]
         await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
@@ -3318,8 +3266,8 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("mission_depart callback missing fields: %s", data)
             return
         _, dep, plate = parts
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
-        res = start_mission_record(username, plate, dep, update=update)
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": tg_username}
+        res = start_mission_record(tg_username, plate, dep, update=update)
         if res.get("ok"):
             # mission_start_ok template already adjusted to not show the word "plate"
             await q.edit_message_text(t(user_lang, "mission_start_ok", driver=username, plate=plate, dep=dep, ts=res.get("start_ts")))
@@ -3367,7 +3315,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # arrival automatically opposite of departure
             arrival = "SHV" if found_dep == "PP" else "PP"
-            res = end_mission_record(username, plate, arrival, update=update)
+            res = end_mission_record(tg_username, plate, arrival, update=update)
 
             if not res.get("ok"):
                 await q.edit_message_text("❌ " + res.get("message", ""))
@@ -3878,7 +3826,7 @@ async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYP
     if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
         return
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{driver_map[d]}")] for d in drivers]
     await reply_private(update, context, "Select driver:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def mission_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
