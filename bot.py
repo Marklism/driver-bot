@@ -317,11 +317,13 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        if r[idx_name].strip() != driver:
+        name_cell = r[idx_name].strip()
+        if not name_cell.lower().startswith(driver.lower()):
             continue
         try:
             sdt = datetime.fromisoformat(r[idx_start])
-            if not (start_window <= sdt < end_window):
+            edt = datetime.fromisoformat(r[idx_end])
+            if not (edt > start_window and sdt < end_window):
                 continue
         except Exception:
             continue
