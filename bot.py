@@ -304,6 +304,7 @@ async def ot_report_driver_callback(update, context):
     idx_type = header.index("Type")
     idx_start = header.index("Start Date")
     idx_end = header.index("End Date")
+    idx_day = header.index("Day")
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
@@ -320,9 +321,11 @@ async def ot_report_driver_callback(update, context):
         if r[idx_name].strip() != driver:
             continue
         try:
-            sdt = datetime.fromisoformat(r[idx_start])
-            edt = datetime.fromisoformat(r[idx_end])
-            if not (edt > start_window and sdt < end_window):
+            day_str = r[idx_day].strip()
+            if not day_str:
+                continue
+            day_dt = datetime.fromisoformat(day_str)
+            if not (start_window.date() <= day_dt.date() < end_window.date()):
                 continue
         except Exception:
             continue
@@ -3826,7 +3829,7 @@ async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYP
     if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
         return
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{driver_map[d]}")] for d in drivers]
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"MR_DRIVER:{d}")] for d in drivers]
     await reply_private(update, context, "Select driver:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def mission_report_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
