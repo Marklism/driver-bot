@@ -1098,7 +1098,7 @@ M_IDX_STAFF = 8
 M_IDX_ROUNDTRIP = 9
 M_IDX_RETURN_START = 10
 M_IDX_RETURN_END = 11
-M_MANDATORY_COLS = 12
+M_IDX_MISSION_DAYS = 12
 
 COL_DATE = 1
 COL_DRIVER = 2
@@ -2034,6 +2034,22 @@ def _ensure_row_length(row: List[Any], length: int) -> List[Any]:
         r.append("")
     return r
 
+def calc_mission_days(start_dt: datetime, end_dt: datetime) -> int:
+    """
+    Mission day calculation:
+    - Same day return => 1 day
+    - Cross day => day difference + 1
+    - Return before 04:00 counts as previous day
+    """
+    # 如果结束时间在 04:00 之前，算作前一天
+    if end_dt.hour < 4:
+        end_date = (end_dt - timedelta(days=1)).date()
+    else:
+        end_date = end_dt.date()
+
+    start_date = start_dt.date()
+    return (end_date - start_date).days + 1
+
 def start_mission_record(driver: str, plate: str, departure: str, update=None) -> dict:
     ws = open_worksheet(MISSIONS_TAB)
     start_ts = now_str()
@@ -2098,11 +2114,25 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                 try:
                     ws.update_cell(row_number, M_IDX_END + 1, end_ts)
                     ws.update_cell(row_number, M_IDX_ARRIVAL + 1, arrival)
+                    # ===== 新增：Mission days =====
+                    try:
+                        start_dt = datetime.fromisoformat(rec_start)
+                        end_dt = datetime.fromisoformat(end_ts)
+                        mission_days = calc_mission_days(start_dt, end_dt)
+                        ws.update_cell(row_number, M_IDX_MISSION_DAYS + 1, mission_days)
+                    except Exception as e:
+                        logger.warning("Failed to write mission days: %s", e)
                 except Exception:
                     existing = ws.row_values(row_number)
                     existing = _ensure_row_length(existing, M_MANDATORY_COLS)
                     existing[M_IDX_END] = end_ts
                     existing[M_IDX_ARRIVAL] = arrival
+                    try:
+                        start_dt = datetime.fromisoformat(rec_start)
+                        end_dt = datetime.fromisoformat(end_ts)
+                        existing[M_IDX_MISSION_DAYS] = calc_mission_days(start_dt, end_dt)
+                    except Exception:
+                        existing[M_IDX_MISSION_DAYS] = ""
                     ws.delete_rows(row_number)
                     ws.insert_row(existing, row_number)
 
@@ -3888,6 +3918,21 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     writer = csv.writer(out)
     writer.writerow(["Driver", "Plate", "Start", "End", "Departure", "Arrival"])
 
+    now = _now_dt()
+    for i, r in enumerate(data):
+        try:
+            if not r[M_IDX_END] and r[M_IDX_START]:
+                start_dt = datetime.fromisoformat(r[M_IDX_START])
+                # 第二天 04:00
+                cutoff = start_dt.replace(hour=4, minute=0, second=0) + timedelta(days=1)
+                if now >= cutoff:
+                    end_dt = start_dt.replace(hour=23, minute=59)
+                    ws.update_cell(i + 2, M_IDX_END + 1, end_dt.isoformat())
+                    days = calc_mission_days(start_dt, end_dt)
+                    ws.update_cell(i + 2, M_IDX_MISSION_DAYS + 1, days)
+        except Exception as e:
+            logger.warning("Auto mission end failed: %s", e)
+    
     found = False
     for r in data:
         if len(r) <= idx_driver:
