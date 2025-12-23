@@ -275,6 +275,28 @@ async def ot_report_entry(update, context):
 
 import io, csv
 
+def _calc_hours(r, idx_morning, idx_evening, idx_start, idx_end):
+    """
+    Calculate OT hours from OT Record row.
+    Priority:
+    1. Morning OT + Evening OT
+    2. Fallback: End - Start datetime
+    """
+    try:
+        m = float(r[idx_morning] or 0)
+        e = float(r[idx_evening] or 0)
+        if m + e > 0:
+            return round(m + e, 2)
+    except Exception:
+        pass
+
+    try:
+        s = datetime.fromisoformat(r[idx_start])
+        en = datetime.fromisoformat(r[idx_end])
+        return round((en - s).total_seconds() / 3600, 2)
+    except Exception:
+        return 0.0
+
 async def ot_report_entry(update, context):
     driver_map = get_driver_map()
     drivers = sorted(driver_map.keys())
