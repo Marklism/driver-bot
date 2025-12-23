@@ -273,62 +273,6 @@ async def ot_report_entry(update, context):
     )
 # ===== END helper =====
 
-def _calc_hours_fallback(r, idx_morning, idx_evening, idx_start, idx_end):
-    try:
-        m = float(r[idx_morning] or 0)
-        ev = float(r[idx_evening] or 0)
-        if m + ev > 0:
-            return round(m + ev, 2)
-        s = datetime.fromisoformat(r[idx_start])
-        e2 = datetime.fromisoformat(r[idx_end])
-        return round((e2 - s).total_seconds() / 3600, 2)
-    except Exception:
-        return 0
-
-    import io, csv
-    output = io.StringIO()
-    writer = csv.writer(output)
-
-    writer.writerow(["Driver", driver])
-    writer.writerow([])
-
-    if ot_150:
-        writer.writerow(["150% OT"])
-        writer.writerow(["Start", "End", "Hours"])
-        total = 0
-
-# ============================================================
-# SECTION 2 — Google Sheets Infrastructure
-# Purpose:
-# - Credential loading
-# - Sheet open / read / write helpers
-# Source:
-# - debug verbatim
-# ============================================================
-        for r in ot_150:
-            writer.writerow(r)
-            total += float(r[2])
-        writer.writerow(["TOTAL", "", f"{total:.2f}"])
-        writer.writerow([])
-
-    if ot_200:
-        writer.writerow(["200% OT"])
-        writer.writerow(["Start", "End", "Hours"])
-        total = 0
-        for r in ot_200:
-            writer.writerow(r)
-            total += float(r[2])
-        writer.writerow(["TOTAL", "", f"{total:.2f}"])
-
-    bio = io.BytesIO(output.getvalue().encode("utf-8"))
-    bio.name = f"OT_Report_{driver}.csv"
-
-    await context.bot.send_document(
-        chat_id=query.from_user.id,
-        document=bio,
-        caption=f"OT report for {driver}"
-    )
-
 import io, csv
 
 async def ot_report_entry(update, context):
