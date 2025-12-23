@@ -317,8 +317,7 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        name_cell = r[idx_name].strip()
-        if not name_cell.lower().startswith(driver.lower()):
+        if r[idx_name].strip() != driver:
             continue
         try:
             sdt = datetime.fromisoformat(r[idx_start])
@@ -2053,16 +2052,22 @@ def _ensure_row_length(row: List[Any], length: int) -> List[Any]:
         r.append("")
     return r
 
-def start_mission_record(driver: str, plate: str, departure: str) -> dict:
+def start_mission_record(driver: str, plate: str, departure: str, update=None) -> dict:
     ws = open_worksheet(MISSIONS_TAB)
     start_ts = now_str()
     try:
         next_no = _missions_next_no(ws)
         guid = str(uuid.uuid4())
+
+        # ✅ 强制使用 Telegram username
+        tg_username = ""
+        if update and update.effective_user:
+            tg_username = update.effective_user.username or update.effective_user.full_name
+
         row = [""] * M_MANDATORY_COLS
         row[M_IDX_GUID] = guid
         row[M_IDX_NO] = next_no
-        row[M_IDX_NAME] = driver
+        row[M_IDX_NAME] = tg_username     # ✅ 写 username
         row[M_IDX_PLATE] = plate
         row[M_IDX_START] = start_ts
         row[M_IDX_END] = ""
@@ -2071,194 +2076,159 @@ def start_mission_record(driver: str, plate: str, departure: str) -> dict:
         row[M_IDX_STAFF] = ""
         row[M_IDX_ROUNDTRIP] = ""
         row[M_IDX_RETURN_START] = ""
-
-# ============================================================
-# SECTION 8 — Trip Module
-# Purpose:
-# - Trip logging
-# Source:
-# - debug verbatim
-# ============================================================
         row[M_IDX_RETURN_END] = ""
+
         ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info("Mission start recorded GUID=%s no=%s driver=%s plate=%s dep=%s", guid, next_no, driver, plate, departure)
         return {"ok": True, "guid": guid, "no": next_no, "start_ts": start_ts}
     except Exception as e:
         logger.exception("Failed to append mission start")
-        return {"ok": False, "message": "Failed to write mission start to sheet: " + str(e)}
+        return {"ok": False, "message": str(e)}
 
-def end_mission_record(driver: str, plate: str, arrival: str) -> dict:
+def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> dict:
     try:
         ws = open_worksheet(MISSIONS_TAB)
     except Exception as e:
         logger.exception("Failed to open MISSIONS_TAB: %s", e)
         return {"ok": False, "message": "Could not open missions sheet: " + str(e)}
 
+    # ===== 核心修改点：再次统一使用 Telegram username =====
+    tg_username = ""
+    if update and update.effective_user:
+        tg_username = update.effective_user.username or update.effective_user.full_name
+
     try:
         vals, start_idx = _missions_get_values_and_data_rows(ws)
+
         for i in range(len(vals) - 1, start_idx - 1, -1):
             row = _ensure_row_length(vals[i], M_MANDATORY_COLS)
+
             rec_plate = str(row[M_IDX_PLATE]).strip()
             rec_name = str(row[M_IDX_NAME]).strip()
             rec_end = str(row[M_IDX_END]).strip()
             rec_start = str(row[M_IDX_START]).strip()
             rec_dep = str(row[M_IDX_DEPART]).strip()
-            if rec_plate == plate and rec_name == driver and not rec_end:
+
+            # ✅ 用 username 匹配
+            if rec_plate == plate and rec_name == tg_username and not rec_end:
                 row_number = i + 1
                 end_ts = now_str()
+
                 try:
                     ws.update_cell(row_number, M_IDX_END + 1, end_ts)
                     ws.update_cell(row_number, M_IDX_ARRIVAL + 1, arrival)
                 except Exception:
-                    try:
-                        existing = ws.row_values(row_number)
-                    except Exception:
-                        existing = []
+                    existing = ws.row_values(row_number)
                     existing = _ensure_row_length(existing, M_MANDATORY_COLS)
                     existing[M_IDX_END] = end_ts
                     existing[M_IDX_ARRIVAL] = arrival
-                    try:
-                        ws.delete_rows(row_number)
-                    except Exception:
-                        logger.exception("Failed to delete row for fallback replacement at %d", row_number)
-                    try:
-                        ws.insert_row(existing, row_number)
-                    except Exception:
-                        logger.exception("Failed to insert fallback row at %d", row_number)
+                    ws.delete_rows(row_number)
+                    ws.insert_row(existing, row_number)
 
-                logger.info("Updated mission end for row %d plate=%s driver=%s", row_number, plate, driver)
+                logger.info(
+                    "Mission end recorded: driver=%s plate=%s end=%s",
+                    tg_username, plate, end_ts
+                )
 
                 s_dt = parse_ts(rec_start) if rec_start else None
                 if not s_dt:
-                    return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False, "end_ts": end_ts}
+                    return {
+                        "ok": True,
+                        "merged": False,
+                        "driver": tg_username,
+                        "plate": plate,
+                        "end_ts": end_ts,
+                    }
 
                 window_start = s_dt - timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
                 window_end = s_dt + timedelta(hours=ROUNDTRIP_WINDOW_HOURS)
 
                 vals2, start_idx2 = _missions_get_values_and_data_rows(ws)
                 candidates = []
+
                 for j in range(start_idx2, len(vals2)):
                     if j == i:
                         continue
+
                     r2 = _ensure_row_length(vals2[j], M_MANDATORY_COLS)
                     rn = str(r2[M_IDX_NAME]).strip()
                     rp = str(r2[M_IDX_PLATE]).strip()
                     rstart = str(r2[M_IDX_START]).strip()
                     rend = str(r2[M_IDX_END]).strip()
-                    dep = str(r2[M_IDX_DEPART]).strip()
-                    arr = str(r2[M_IDX_ARRIVAL]).strip()
-                    if rn != driver or rp != plate:
+
+                    if rn != tg_username or rp != plate:
                         continue
                     if not rstart or not rend:
                         continue
+
                     r_s_dt = parse_ts(rstart)
-                    if not r_s_dt:
+                    r_e_dt = parse_ts(rend)
+                    if not r_s_dt or not r_e_dt:
                         continue
                     if not (window_start <= r_s_dt <= window_end):
                         continue
-                    candidates.append({"idx": j, "start": r_s_dt, "end": parse_ts(rend), "dep": dep, "arr": arr, "rstart": rstart, "rend": rend})
+
+                    candidates.append({
+                        "idx": j,
+                        "start": r_s_dt,
+                        "end": r_e_dt,
+                        "rstart": rstart,
+                        "rend": rend,
+                        "dep": str(r2[M_IDX_DEPART]).strip(),
+                        "arr": str(r2[M_IDX_ARRIVAL]).strip(),
+                    })
 
                 found_pair = None
-                cur_dep = rec_dep
-                cur_arr = arrival
-                for comp in candidates:
-                    if (cur_dep == "PP" and cur_arr == "SHV" and comp["dep"] == "SHV" and comp["arr"] == "PP") or \
-                       (cur_dep == "SHV" and cur_arr == "PP" and comp["dep"] == "PP" and comp["arr"] == "SHV"):
-                        found_pair = comp
+                for c in candidates:
+                    if c["dep"] == arrival and c["arr"] == rec_dep:
+                        found_pair = c
                         break
-
-                if not found_pair:
-                    for comp in candidates:
-                        if comp["dep"] == cur_arr and comp["arr"] == cur_dep:
-                            found_pair = comp
-                            break
 
                 if not found_pair and candidates:
                     candidates.sort(key=lambda x: abs((x["start"] - s_dt).total_seconds()))
                     found_pair = candidates[0]
 
                 if not found_pair:
-                    return {"ok": True, "message": f"Mission end recorded for {plate} at {end_ts}", "merged": False, "end_ts": end_ts}
+                    return {
+                        "ok": True,
+                        "merged": False,
+                        "driver": tg_username,
+                        "plate": plate,
+                        "end_ts": end_ts,
+                    }
 
                 other_idx = found_pair["idx"]
-                other_start = found_pair["start"]
-                primary_idx = i if s_dt <= other_start else other_idx
+                primary_idx = i if s_dt <= found_pair["start"] else other_idx
                 secondary_idx = other_idx if primary_idx == i else i
 
-                primary_row_number = primary_idx + 1
-                secondary_row_number = secondary_idx + 1
+                primary_row = primary_idx + 1
+                secondary_row = secondary_idx + 1
 
                 if primary_idx == i:
                     return_start = found_pair["rstart"]
-                    return_end = found_pair["rend"] if found_pair["rend"] else (found_pair["end"].strftime(TS_FMT) if found_pair["end"] else "")
+                    return_end = found_pair["rend"]
                 else:
                     return_start = rec_start
                     return_end = end_ts
 
-                try:
-                    ws.update_cell(primary_row_number, M_IDX_ROUNDTRIP + 1, "Yes")
-                    ws.update_cell(primary_row_number, M_IDX_RETURN_START + 1, return_start)
-                    ws.update_cell(primary_row_number, M_IDX_RETURN_END + 1, return_end)
-                except Exception:
-                    try:
-                        existing = ws.row_values(primary_row_number)
-                    except Exception:
-                        existing = []
-                    existing = _ensure_row_length(existing, M_MANDATORY_COLS)
-                    existing[M_IDX_ROUNDTRIP] = "Yes"
-                    existing[M_IDX_RETURN_START] = return_start
-                    existing[M_IDX_RETURN_END] = return_end
-                    try:
-                        ws.delete_rows(primary_row_number)
-                    except Exception:
-                        logger.exception("Failed to delete primary row for fallback replacement at %d", primary_row_number)
-                    try:
-                        ws.insert_row(existing, primary_row_number)
-                    except Exception:
-                        logger.exception("Failed to insert fallback primary row at %d", primary_row_number)
+                ws.update_cell(primary_row, M_IDX_ROUNDTRIP + 1, "Yes")
+                ws.update_cell(primary_row, M_IDX_RETURN_START + 1, return_start)
+                ws.update_cell(primary_row, M_IDX_RETURN_END + 1, return_end)
 
-                try:
-                    sec_vals = _ensure_row_length(vals2[secondary_idx], M_MANDATORY_COLS) if secondary_idx < len(vals2) else None
-                    sec_guid = sec_vals[M_IDX_GUID] if sec_vals else None
-                    deleted_secondary = False
-                    if sec_guid:
-                        all_vals_post, start_idx_post = _missions_get_values_and_data_rows(ws)
-                        for k in range(start_idx_post, len(all_vals_post)):
-                            r_k = _ensure_row_length(all_vals_post[k], M_MANDATORY_COLS)
-                            if str(r_k[M_IDX_GUID]).strip() == str(sec_guid).strip():
-                                try:
-                                    ws.delete_rows(k + 1)
-                                    deleted_secondary = True
-                                    break
-                                except Exception:
-                                    try:
-                                        ws.update_cell(k + 1, M_IDX_ROUNDTRIP + 1, "Merged")
-                                    except Exception:
-                                        logger.exception("Failed to delete or mark secondary merged row.")
-                                    # deleted_secondary remains False
-                                    break
-                    else:
-                        try:
-                            ws.delete_rows(secondary_row_number)
-                        except Exception:
-                            try:
-                                ws.update_cell(secondary_row_number, M_IDX_ROUNDTRIP + 1, "Merged")
-                            except Exception:
-                                logger.exception("Failed to delete or mark secondary merged row.")
-                except Exception:
-                    logger.exception("Failed cleaning up secondary mission row after merge.")
+                ws.delete_rows(secondary_row)
 
-                # Only treat as merged (and notify) when we actually deleted the secondary row
-                                # Only treat as merged (and notify) when we actually deleted the secondary row
-                # and the primary row has return start and return end recorded (i.e. full roundtrip completed).
-                has_return_info = bool(return_start and return_end)
-                merged_flag = True if (found_pair or deleted_secondary) and has_return_info else False
+                return {
+                    "ok": True,
+                    "merged": True,
+                    "driver": tg_username,
+                    "plate": plate,
+                    "end_ts": end_ts,
+                }
 
-                return {"ok": True, "message": f"Mission end recorded and merged for {plate} at {end_ts}", "merged": merged_flag, "driver": driver, "plate": plate, "end_ts": end_ts}
         return {"ok": False, "message": "No open mission found"}
+
     except Exception as e:
         logger.exception("Failed to update mission end: %s", e)
-        return {"ok": False, "message": "Failed to write mission end to sheet: " + str(e)}
+        return {"ok": False, "message": str(e)}
 
 def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
     ws = open_worksheet(MISSIONS_TAB)
@@ -3323,6 +3293,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("mission_end|") and not data.startswith("mission_end_plate|"):
         try:
             _, legacy_plate = data.split("|", 1)
+            data = f"mission_end_now|{legacy_plate}"
         except Exception:
             logger.warning("legacy mission_end callback invalid: %s", data)
             return
@@ -3348,7 +3319,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         _, dep, plate = parts
         context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
-        res = start_mission_record(username, plate, dep)
+        res = start_mission_record(username, plate, dep, update=update)
         if res.get("ok"):
             # mission_start_ok template already adjusted to not show the word "plate"
             await q.edit_message_text(t(user_lang, "mission_start_ok", driver=username, plate=plate, dep=dep, ts=res.get("start_ts")))
@@ -3396,7 +3367,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # arrival automatically opposite of departure
             arrival = "SHV" if found_dep == "PP" else "PP"
-            res = end_mission_record(username, plate, arrival)
+            res = end_mission_record(username, plate, arrival, update=update)
 
             if not res.get("ok"):
                 await q.edit_message_text("❌ " + res.get("message", ""))
