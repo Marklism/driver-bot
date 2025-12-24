@@ -823,8 +823,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
                 try:
                     cand = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-                    if (cand.date() == ts_dt.date() 
-                        and 7 <= cand.hour < 18): 
+                    if (cand.date() == ts_dt.date() and 7 <= cand.hour < 18): 
                         has_valid_day_in = True
                         day_in_dt = cand
                 except Exception:
@@ -833,19 +832,18 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             # ❌ 没有白天 IN，weekday OUT 不算任何 OT
             if not has_valid_day_in:
                 pass
+            else:
+                # 2️⃣ weekday evening OT（18:30 之后）
+                if ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
 
-        else:
-            # 2️⃣ weekday evening OT（18:30 之后）
-            if ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
+                    start_18 = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+                    # 情况 A：当天 24:00 前下班
+                    if ts_dt.date() == start_18.date():
+                        evening_hours = max((ts_dt - start_18).total_seconds() / 3600.0, 0)
 
-                start_18 = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-                # 情况 A：当天 24:00 前下班
-                if ts_dt.date() == start_18.date():
-                    evening_hours = max((ts_dt - start_18).total_seconds() / 3600.0, 0)
-
-                    if evening_hours > 0:
-                        append_ot_record(start_18,ts_dt,0.0,round(evening_hours, 2),"150%","Weekday evening OT",)
-                        should_notify = True
+                        if evening_hours > 0:
+                            append_ot_record(start_18,ts_dt,0.0,round(evening_hours, 2),"150%","Weekday evening OT",)
+                            should_notify = True
 
                 else:
                     # 第一段：18:00 → 23:59
@@ -860,17 +858,6 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                     if h2 > 0:
                     append_ot_record(start_0000,ts_dt,0.0,round(h2, 2),"150%","Weekday evening OT (after midnight)",)
                     should_notify = True
-            
-            # Rule 5: OUT >= 18:30
-            elif ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
-                start_dt = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-                evening_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(evening_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday evening OT"
-                    append_ot_record(start_dt, ts_dt, 0.0, total_ot, ot_type, note)
-                    should_notify = True
 
     # --- Weekend / Holiday OT rules ---
     else:
@@ -883,17 +870,12 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 except Exception:
                     start_dt = None
             if start_dt is not None:
-                # Full shift as OT
-                if ts_dt < start_dt:
-                    ts_dt_adj = ts_dt + timedelta(days=1)
-                else:
-                    ts_dt_adj = ts_dt
+                ts_dt_adj = ts_dt if ts_dt >= start_dt else ts_dt + timedelta(days=1)
                 dur = max((ts_dt_adj - start_dt).total_seconds() / 3600.0, 0)
                 total_ot = round(dur, 2)
+          
                 if total_ot > 0:
-                    ot_type = "200%"
-                    note = "Weekend/Holiday full-shift OT"
-                    append_ot_record(start_dt, ts_dt_adj, 0.0, total_ot, ot_type, note)
+                    append_ot_record(start_dt,ts_dt_adj,0.0,total_ot,"200%","Weekend/Holiday full-shift OT",)
                     should_notify = True
                     weekday_msg = False  # use 'OT today' wording
 
