@@ -2394,43 +2394,42 @@ def normalize_fin_type(typ: str) -> Optional[str]:
 
 def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
     """
-    Find last mileage for a plate from BOTH FUEL_TAB and ODO_TAB,
-    using the most recent DateTime.
+    Find last mileage for a plate from FUEL_TAB only, scanning from bottom to top (previous record).
     """
     last_record = None  # (datetime, mileage)
 
-    def scan_tab(tab_name):
-        nonlocal last_record
-        ws = open_worksheet(tab_name)
-        vals = ws.get_all_values()
-        if not vals:
-            return
-        start_idx = 1 if any("plate" in c.lower() for c in vals[0] if c) else 0
-        for r in vals[start_idx:]:
-            if len(r) < 4:
+    try:
+        ws = open_worksheet(FUEL_TAB)
+        rows = ws.get_all_values()
+        if len(rows) < 2:
+            return None
+
+        header = rows[0]
+        idx_plate = header.index("Plate")
+        idx_mileage = header.index("Mileage")
+
+        # 从下往上找“上一条”
+        for r in reversed(rows[1:]):
+            if len(r) <= idx_mileage:
                 continue
-            rp = str(r[0]).strip()
-            dt_cell = str(r[2]).strip()
-            mileage_cell = str(r[3]).strip()
-            if rp != plate or not mileage_cell or not dt_cell:
+
+            rec_plate = str(r[idx_plate]).strip()
+            mileage_cell = str(r[idx_mileage]).strip()
+
+            if rec_plate != plate:
                 continue
+            if not mileage_cell:
+                continue
+
+            mileage_cell = mileage_cell.replace(",", "")
             try:
-                dt = datetime.strptime(dt_cell, "%Y-%m-%d %H:%M:%S")
-                m = re.search(r'(\d+)', mileage_cell)
-                if not m:
-                    continue
-                mileage = int(m.group(1))
-                if last_record is None or dt > last_record[0]:
-                    last_record = (dt, mileage)
+                return int(mileage_cell)
             except Exception:
                 continue
 
-    try:
-        scan_tab(FUEL_TAB)
-        scan_tab(ODO_TAB)
-        return last_record[1] if last_record else None
+        return None
     except Exception:
-        logger.exception("Failed to find last mileage for plate across tabs")
+        logger.exception("Failed to find last mileage for plate")
         return None
 
 def record_finance_odo_fuel(plate: str, mileage: str, fuel_cost: str, by_user: str = "", invoice: str = "", driver_paid: str = "") -> dict:
