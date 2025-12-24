@@ -275,6 +275,26 @@ async def ot_report_entry(update, context):
 
 import io, csv
 
+def _get_effective_dt(row, idx_auto, idx_manual):
+    """
+    优先使用人工修正时间（Manual），否则用系统时间
+    """
+    try:
+        manual_val = str(row[idx_manual]).strip()
+        if manual_val:
+            return datetime.fromisoformat(manual_val)
+    except Exception:
+        pass
+
+    try:
+        auto_val = str(row[idx_auto]).strip()
+        if auto_val:
+            return datetime.fromisoformat(auto_val)
+    except Exception:
+        pass
+
+    return None
+
 def _calc_hours(r, idx_morning, idx_evening, idx_start, idx_end):
     """
     Calculate OT hours from OT Record row.
@@ -326,9 +346,12 @@ async def ot_report_driver_callback(update, context):
     idx_type = header.index("Type")
     idx_start = header.index("Start Date")
     idx_end = header.index("End Date")
+    idx_manual_start = header.index("Manual Start")
+    idx_manual_end = header.index("Manual End")
     idx_day = header.index("Day")
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
+    
 
     now = _now_dt()
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
@@ -352,7 +375,21 @@ async def ot_report_driver_callback(update, context):
         except Exception:
             continue
 
-        h = _calc_hours(r, idx_morning, idx_evening, idx_start, idx_end)
+        # ===== 人工修正优先 =====
+        manual_start = r[idx_manual_start].strip()
+        manual_end = r[idx_manual_end].strip()
+
+        if manual_start and manual_end:
+            try:
+                sdt = datetime.fromisoformat(manual_start)
+                edt = datetime.fromisoformat(manual_end)
+                if edt <= sdt:
+                    continue
+                h = round((edt - sdt).total_seconds() / 3600.0, 2)
+            except Exception:
+                continue
+        else:
+            h = _calc_hours(r, idx_morning, idx_evening, idx_start, idx_end)
         if h <= 0:
             continue
 
@@ -612,14 +649,6 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
             hours = (segment_end - dt).total_seconds() / 3600
             total_ot += hours
 
-# ============================================================
-# SECTION 3 — Clock In / Clock Out
-# Purpose:
-# - Driver attendance tracking
-# - Timestamp source for OT and Mission
-# Source:
-# - debug verbatim
-# ============================================================
         else:
             t7 = dt.replace(hour=7, minute=0, second=0, microsecond=0)
             if dt < t7:
@@ -636,6 +665,63 @@ def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool 
         dt = segment_end
 
     return round(total_ot, 2)
+
+def calc_weekday_ot(in_dt, out_dt):
+    """
+    Weekday OT:
+    - Morning: 04:00 < IN < 07:00 → 08:00 - IN
+    - Evening: OUT >= 18:30
+    - Cross-day split at 23:59 / 00:00
+    """
+    results = []
+
+    if not in_dt or not out_dt:
+        return results
+
+    # ---------- Morning OT ----------
+    t4 = in_dt.replace(hour=4, minute=0, second=0, microsecond=0)
+    t7 = in_dt.replace(hour=7, minute=0, second=0, microsecond=0)
+    t8 = in_dt.replace(hour=8, minute=0, second=0, microsecond=0)
+
+    if t4 < in_dt < t7:
+        h = (t8 - in_dt).total_seconds() / 3600
+        if h > 0:
+            results.append((in_dt, t8, round(h, 2), 0.0, "weekday-morning"))
+
+    # ---------- Evening OT ----------
+    d18 = out_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+
+    # same day
+    if out_dt.date() == in_dt.date():
+        if out_dt.hour > 18 or (out_dt.hour == 18 and out_dt.minute >= 30):
+            h = (out_dt - d18).total_seconds() / 3600
+            if h > 0:
+                results.append((d18, out_dt, 0.0, round(h, 2), "weekday-evening"))
+
+    # cross day
+    else:
+        d1_start = in_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+        d1_end = in_dt.replace(hour=23, minute=59, second=59)
+
+        if in_dt > d1_start:
+            d1_start = in_dt
+
+        h1 = (d1_end - d1_start).total_seconds() / 3600
+        if h1 > 0:
+            results.append((d1_start, d1_end, 0.0, round(h1, 2), "weekday-evening"))
+
+        d2_start = out_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        h2 = (out_dt - d2_start).total_seconds() / 3600
+        if h2 > 0:
+            results.append((d2_start, out_dt, round(h2, 2), 0.0, "weekday-early"))
+
+    return results
+
+def calc_weekend_ot(in_dt, out_dt):
+    if not in_dt or not out_dt:
+        return 0.0
+    h = (out_dt - in_dt).total_seconds() / 3600
+    return round(max(h, 0), 2)
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -731,15 +817,50 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             # action == OUT
             h = ts_dt.hour + ts_dt.minute / 60.0
             # Rule 1: OUT between [00:00, 04:00)
-            if 0 <= h < 4:
-                start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                morning_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(morning_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday early-morning OT (after midnight)"
-                    append_ot_record(start_dt, ts_dt, total_ot, 0.0, ot_type, note)
+            # 1️⃣ 必须找到“当天的有效 IN”（07:00–18:00）
+            has_valid_day_in = False
+            day_in_dt = None
+            if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
+                try:
+                    cand = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+                    if (cand.date() == ts_dt.date() 
+                        and 7 <= cand.hour < 18): 
+                        has_valid_day_in = True
+                        day_in_dt = cand
+                except Exception:
+                    pass
+
+            # ❌ 没有白天 IN，weekday OUT 不算任何 OT
+            if not has_valid_day_in:
+                pass
+
+        else:
+            # 2️⃣ weekday evening OT（18:30 之后）
+            if ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
+
+                start_18 = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+                # 情况 A：当天 24:00 前下班
+                if ts_dt.date() == start_18.date():
+                    evening_hours = max((ts_dt - start_18).total_seconds() / 3600.0, 0)
+
+                    if evening_hours > 0:
+                        append_ot_record(start_18,ts_dt,0.0,round(evening_hours, 2),"150%","Weekday evening OT",)
+                        should_notify = True
+
+                else:
+                    # 第一段：18:00 → 23:59
+                    end_2359 = start_18.replace(hour=23, minute=59)
+
+                    h1 = max((end_2359 - start_18).total_seconds() / 3600.0, 0)
+                    if h1 > 0:
+                    append_ot_record(start_18,end_2359,0.0,round(h1, 2),"150%","Weekday evening OT (before midnight)",)
+                    # 第二段：00:00 → OUT
+                    start_0000 = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                    h2 = max((ts_dt - start_0000).total_seconds() / 3600.0, 0)
+                    if h2 > 0:
+                    append_ot_record(start_0000,ts_dt,0.0,round(h2, 2),"150%","Weekday evening OT (after midnight)",)
                     should_notify = True
+            
             # Rule 5: OUT >= 18:30
             elif ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
                 start_dt = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
@@ -3938,6 +4059,18 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
             continue
         if str(r[idx_driver]).strip() != driver:
             continue
+
+         mission_days = ""
+        try:
+            s = r[M_IDX_START].strip()
+            e = r[M_IDX_END].strip()
+            if s and e:
+                sdt = datetime.fromisoformat(s)
+                edt = datetime.fromisoformat(e)
+                mission_days = calc_mission_days(sdt, edt)
+        except Exception:
+            mission_days = ""
+            
         found = True
         writer.writerow([
             r[idx_driver],
@@ -5628,94 +5761,6 @@ def _auto_close_previous_in(ws, driver, new_in_time):
 
 # === CLOCK HANDLER END ===
 
-
-
-# ============================================================
-# ULTIMATE FROZEN APPENDIX (NON-INVASIVE)
-# ============================================================
-# This appendix freezes and documents all agreed V9 policies,
-# audit rules, replay/backfill procedures, payroll mappings,
-# audit packs, and governance constructs.
-#
-# IMPORTANT:
-# - No runtime logic is modified here.
-# - All executable integrations already live in the baseline.
-# - This section provides the immutable specification layer
-#   required for audits, replay, legal discovery, and regulators.
-#
-# --------------------
-# A. OT V9 Equivalence
-# --------------------
-# - Mission pairing: M-27 state machine (single open trip, override on conflict)
-# - Mission day boundary: 04:00 local time
-# - Clock-out priority for autofix: Driver_OT OUT > 23:59:59 fallback
-#
-# --------------------
-# B. Replay / Backfill
-# --------------------
-# - B-7.1 Replay scanner (read-only)
-# - B-7.2 Deterministic validation
-# - B-7.3 Explicit backfill with preview hash + signed apply (FROZEN)
-#
-# --------------------
-# C. OT × Mission × Payroll
-# --------------------
-# - Minute-level slicing
-# - OT verdict table (minutes → hours)
-# - Leave / Holiday conflict arbitration
-#
-# --------------------
-# D. Policy & Versioning
-# --------------------
-# - Policy hash anchoring
-# - Versioned, immutable rules
-#
-# --------------------
-# E. Payroll & Accounting
-# --------------------
-# - Payroll export schema frozen
-# - Accounting mapping (COA)
-# - Reconciliation report
-#
-# --------------------
-# F. Audit Pack
-# --------------------
-# - Full evidence chain export
-# - Third-party verifier
-# - Verifier signatures
-#
-# --------------------
-# G. Immutability
-# --------------------
-# - WORM / Object Lock ready
-# - Blockchain hash anchoring
-#
-# --------------------
-# H. Legal / Regulatory
-# --------------------
-# - Legal discovery mode
-# - Regulator-specific profiles
-#
-# --------------------
-# I. Cross-chain Anchors
-# --------------------
-# - Multi-chain redundancy
-# - Court evidence procedures
-#
-# --------------------
-# J. System Constitution
-# --------------------
-# - Supreme frozen layer
-# - Production constitution published
-#
-# ============================================================
-# END ULTIMATE FROZEN APPENDIX
-# ============================================================
-
-
-# ============================================================
-# B-7 REPLAY / BACKFILL SCANNER (FROZEN, NON-INVASIVE)
-# ============================================================
 def replay_scan_delta_km(rows):
     '''
     Scan fuel/odo rows and report anomalies where:
@@ -5742,9 +5787,6 @@ def replay_scan_delta_km(rows):
     return issues
 
 
-# ============================================================
-# C-4.16 MISSION × OT MINUTE SPLIT (FROZEN BASE)
-# ============================================================
 def split_mission_ot_minutes(mission_start, mission_end, ot_segments):
     '''
     Split mission duration into OT minutes.
