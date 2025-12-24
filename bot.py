@@ -4041,7 +4041,7 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
         if str(r[idx_driver]).strip() != driver:
             continue
 
-         mission_days = ""
+        mission_days = ""
         try:
             s = r[M_IDX_START].strip()
             e = r[M_IDX_END].strip()
