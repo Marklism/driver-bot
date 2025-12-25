@@ -829,8 +829,15 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 except Exception:
                     pass
 
-            # ❌ 没有白天 IN，weekday OUT 不算任何 OT
-            if not has_valid_day_in:
+            # Weekday OUT between 00:00–04:00 ALWAYS counts as OT (spec override)
+            if ts_dt.hour < 4:
+                start_0000 = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                h0 = max((ts_dt - start_0000).total_seconds() / 3600.0, 0)
+                if h0 > 0:
+                    append_ot_record(start_0000, ts_dt, round(h0, 2), 0.0, "150%", "Weekday early-morning OT")
+                    total_ot = round(h0, 2)
+                    should_notify = True
+            elif not has_valid_day_in:
                 pass
             else:
                 # 2️⃣ weekday evening OT（18:30 之后）
