@@ -852,21 +852,41 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                             append_ot_record(start_18,ts_dt,0.0,round(evening_hours, 2),"150%","Weekday evening OT",)
                             should_notify = True
 
+                
                 else:
-                    # 第一段：18:00 → 23:59
+                    # Weekday cross-day OUT handling (safe aligned)
+                    # Segment 1: 18:00 → 23:59 (always 150%)
                     end_2359 = start_18.replace(hour=23, minute=59)
                     h1 = max((end_2359 - start_18).total_seconds() / 3600.0, 0)
                     if h1 > 0:
-                        append_ot_record(start_18,end_2359,0.0,round(h1, 2),"150%","Weekday evening OT (before midnight)",)
-                    # 第二段：00:00 → OUT
+                        append_ot_record(
+                            start_18,
+                            end_2359,
+                            0.0,
+                            round(h1, 2),
+                            "150%",
+                            "Weekday evening OT (before midnight)",
+                        )
+
+                    # Segment 2: 00:00 → OUT
                     start_0000 = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
                     h2 = max((ts_dt - start_0000).total_seconds() / 3600.0, 0)
                     if h2 > 0:
-                        
-                    # after midnight segment
-                    next_is_weekend = _is_weekend(ts_dt) or _is_holiday(ts_dt)
-                    rate = "200%" if next_is_weekend else "150%"
-                    append_ot_record(start_0000,ts_dt,0.0,round(h2, 2),rate,"Weekday cross-day OT (after midnight)")
+                        # If next day is weekend/holiday → 200%, else 150%
+                        if _is_weekend(ts_dt) or _is_holiday(ts_dt):
+                            rate = "200%"
+                        else:
+                            rate = "150%"
+                        append_ot_record(
+                            start_0000,
+                            ts_dt,
+                            0.0,
+                            round(h2, 2),
+                            rate,
+                            "Weekday cross-day OT (after midnight)",
+                        )
+                        should_notify = True
+
 
                         should_notify = True
 
