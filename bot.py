@@ -848,16 +848,15 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 else:
                     # 第一段：18:00 → 23:59
                     end_2359 = start_18.replace(hour=23, minute=59)
-
                     h1 = max((end_2359 - start_18).total_seconds() / 3600.0, 0)
                     if h1 > 0:
-                    append_ot_record(start_18,end_2359,0.0,round(h1, 2),"150%","Weekday evening OT (before midnight)",)
+                        append_ot_record(start_18,end_2359,0.0,round(h1, 2),"150%","Weekday evening OT (before midnight)",)
                     # 第二段：00:00 → OUT
                     start_0000 = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
                     h2 = max((ts_dt - start_0000).total_seconds() / 3600.0, 0)
                     if h2 > 0:
-                    append_ot_record(start_0000,ts_dt,0.0,round(h2, 2),"150%","Weekday evening OT (after midnight)",)
-                    should_notify = True
+                        append_ot_record(start_0000,ts_dt,0.0,round(h2, 2),"150%","Weekday evening OT (after midnight)",)
+                        should_notify = True
 
     # --- Weekend / Holiday OT rules ---
     else:
@@ -4042,7 +4041,7 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
         if str(r[idx_driver]).strip() != driver:
             continue
 
-         mission_days = ""
+        mission_days = ""
         try:
             s = r[M_IDX_START].strip()
             e = r[M_IDX_END].strip()
