@@ -636,6 +636,23 @@ def _is_weekend(dt: datetime) -> bool:
 
 from datetime import datetime, timedelta
 
+def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type, note):
+    ws = open_worksheet(OT_RECORD_TAB)
+
+    day_str = (start_dt or end_dt).strftime("%Y-%m-%d")
+
+    row = [
+        day_str,                                        # Day
+        ot_type,                                        # 150% / 200%
+        start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
+        end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
+        f"{morning_h:.2f}" if morning_h else "",
+        f"{evening_h:.2f}" if evening_h else "",
+        note,
+    ]
+    ws.append_row(row, value_input_option="USER_ENTERED")
+
+
 # ============================
 # OT calculation helpers (PURE FUNCTIONS)
 # ============================
@@ -833,28 +850,17 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     # =================================================
     # 5️⃣ weekday / weekend 分流计算
     # =================================================
-    if is_normal_weekday:
-        ot_records = calc_weekday_ot(in_dt, out_dt)
-        ot_type = "150%"
-    else:
-        ot_records = calc_weekend_ot(in_dt, out_dt)
-        ot_type = "200%"
+    if is_weekday:
+        for st, ed, mh, eh, note in calc_weekday_ot(in_dt, out_dt):
+            append_ot_record(st, ed, mh, eh, "150%", note)
 
     # =================================================
     # 6️⃣ 写入 OT_RECORD_TAB（逐条、互不影响）
     # =================================================
-    for st, ed, mh, eh, note in ot_records:
-        append_ot_record(
-            st,
-            ed,
-            mh,
-            eh,
-            ot_type,
-            note,
-        )
-
-
-
+    else:
+        h = (out_dt - in_dt).total_seconds() / 3600
+        if h > 0:
+            append_ot_record(in_dt, out_dt, 0.0, round(h, 2), "200%", "weekend")
 
 
     # Helper: append one OT record row
