@@ -850,17 +850,25 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     # =================================================
     # 5️⃣ weekday / weekend 分流计算
     # =================================================
-    if is_weekday:
-        for st, ed, mh, eh, note in calc_weekday_ot(in_dt, out_dt):
-            append_ot_record(st, ed, mh, eh, "150%", note)
+    if is_normal_weekday:
+        ot_records = calc_weekday_ot(in_dt, out_dt)
+        ot_type = "150%"
+    else:
+        ot_records = calc_weekend_ot(in_dt, out_dt)
+        ot_type = "200%"
 
     # =================================================
     # 6️⃣ 写入 OT_RECORD_TAB（逐条、互不影响）
     # =================================================
-    else:
-        h = (out_dt - in_dt).total_seconds() / 3600
-        if h > 0:
-            append_ot_record(in_dt, out_dt, 0.0, round(h, 2), "200%", "weekend")
+    for st, ed, mh, eh, note in ot_records:
+        append_ot_record(
+            st,
+            ed,
+            mh,
+            eh,
+            ot_type,
+            note,
+        )
 
 
     # Helper: append one OT record row
