@@ -764,18 +764,24 @@ def calc_weekend_ot(in_dt, out_dt):
 
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     query = update.callback_query
     await query.answer()
 
-    user = update.effective_user
-    driver = user.username or user.first_name
+    tg_username = ""
+    if update and update.effective_user:
+        tg_username = (
+            update.effective_user.username
+            or update.effective_user.full_name
+            or str(update.effective_user.id)
+        )
+    driver = tg_username
 
+    # ===== 1. 读取上一条打卡 =====
     last = get_last_clock_entry(driver)
     now_in = last is None or (len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "OUT")
     action = "IN" if now_in else "OUT"
 
-    # 1️⃣ 先记录打卡
+    # ===== 2. 写入本次打卡（永远先写）=====
     rec = record_clock_entry(driver, action)
 
     try:
@@ -787,11 +793,34 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     is_holiday = _is_holiday(ts_dt)
     is_normal_weekday = (not is_weekend) and (not is_holiday)
 
-    # 3️⃣ 所有 OT 只在 OUT 计算
+    # =================================================
+    # 3️⃣ Weekday Morning OT（只在 IN 立刻算）
+    # =================================================
+    if action == "IN" and is_normal_weekday:
+        t4 = ts_dt.replace(hour=4, minute=0, second=0, microsecond=0)
+        t7 = ts_dt.replace(hour=7, minute=0, second=0, microsecond=0)
+        t8 = ts_dt.replace(hour=8, minute=0, second=0, microsecond=0)
+
+        if t4 < ts_dt < t7:
+            h = (t8 - ts_dt).total_seconds() / 3600
+            if h > 0:
+                append_ot_record(
+                    ts_dt,
+                    t8,
+                    round(h, 2),
+                    0.0,
+                    "150%",
+                    "weekday-morning",
+                )
+        return  # ✅ IN 只处理 morning OT，结束
+
+    # =================================================
+    # 4️⃣ 所有其余 OT：只在 OUT 处理
+    # =================================================
     if action != "OUT":
         return
 
-    # 必须有上一条 IN
+    # 必须存在上一条 IN
     if not last or last[O_IDX_ACTION] != "IN":
         return
 
@@ -801,7 +830,9 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     except Exception:
         return
 
-    # 4️⃣ weekday / weekend 分流
+    # =================================================
+    # 5️⃣ weekday / weekend 分流计算
+    # =================================================
     if is_normal_weekday:
         ot_records = calc_weekday_ot(in_dt, out_dt)
         ot_type = "150%"
@@ -809,9 +840,19 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         ot_records = calc_weekend_ot(in_dt, out_dt)
         ot_type = "200%"
 
-    # 5️⃣ 写入 OT Record（逐条，互不影响）
+    # =================================================
+    # 6️⃣ 写入 OT_RECORD_TAB（逐条、互不影响）
+    # =================================================
     for st, ed, mh, eh, note in ot_records:
-        append_ot_record(st, ed, mh, eh, ot_type, note)
+        append_ot_record(
+            st,
+            ed,
+            mh,
+            eh,
+            ot_type,
+            note,
+        )
+
 
 
 
