@@ -636,23 +636,6 @@ def _is_weekend(dt: datetime) -> bool:
 
 from datetime import datetime, timedelta
 
-def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type, note):
-    ws = open_worksheet(OT_RECORD_TAB)
-
-    day_str = (start_dt or end_dt).strftime("%Y-%m-%d")
-
-    row = [
-        day_str,                                        # Day
-        ot_type,                                        # 150% / 200%
-        start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
-        end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
-        f"{morning_h:.2f}" if morning_h else "",
-        f"{evening_h:.2f}" if evening_h else "",
-        note,
-    ]
-    ws.append_row(row, value_input_option="USER_ENTERED")
-
-
 # ============================
 # OT calculation helpers (PURE FUNCTIONS)
 # ============================
@@ -781,6 +764,25 @@ def calc_weekend_ot(in_dt, out_dt):
 
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type, note):
+        ws = open_worksheet(OT_RECORD_TAB)
+        try:
+            ensure_sheet_headers_match(ws, OT_RECORD_HEADERS)
+        except Exception:
+            pass
+
+        day_str = (start_dt or end_dt).strftime("%Y-%m-%d")
+        ws.append_row([
+            driver,                       # Name
+            ot_type,                      # 150% / 200%
+            start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
+            end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
+            day_str,
+            f"{morning_h:.2f}" if morning_h > 0 else "",
+            f"{evening_h:.2f}" if evening_h > 0 else "",
+            note,
+        ], value_input_option="USER_ENTERED")
+        
     query = update.callback_query
     await query.answer()
 
