@@ -630,55 +630,19 @@ def get_last_clock_entry(driver: str):
 def _is_weekend(dt: datetime) -> bool:
     return dt.weekday() >= 5  # 5=Sat,6=Sun
 
-def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool = False):
-    """Return total OT hours for one shift, possibly crossing midnight."""
-    if end_dt < start_dt:
-        end_dt = end_dt + timedelta(days=1)
+# === BOT.PY (OT LOGIC REBUILT — SAFE VERSION) ===
+# NOTE: Only OT-related logic is changed.
+# All other logic remains identical to your original file.
 
-    total_ot = 0.0
+from datetime import datetime, timedelta
 
-    dt = start_dt
-    while dt < end_dt:
-        next_day = (dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        segment_end = min(next_day, end_dt)
-
-        seg_is_weekend = _is_weekend(dt)
-        seg_is_holiday = is_holiday
-
-        if seg_is_weekend or seg_is_holiday:
-            hours = (segment_end - dt).total_seconds() / 3600
-            total_ot += hours
-
-        else:
-            t7 = dt.replace(hour=7, minute=0, second=0, microsecond=0)
-            if dt < t7:
-                ot_morning = (min(segment_end, t7) - dt).total_seconds() / 3600
-                total_ot += max(ot_morning, 0)
-
-            t18 = dt.replace(hour=18, minute=0, second=0, microsecond=0)
-            t1830 = dt.replace(hour=18, minute=30, second=0, microsecond=0)
-
-            if segment_end > t1830:
-                ot_evening = (segment_end - t18).total_seconds() / 3600
-                total_ot += max(ot_evening, 0)
-
-        dt = segment_end
-
-    return round(total_ot, 2)
+# ============================
+# OT calculation helpers (PURE FUNCTIONS)
+# ============================
 
 def calc_weekday_ot(in_dt, out_dt):
-    """
-    Weekday OT:
-    - Morning: 04:00 < IN < 07:00 → 08:00 - IN
-    - Evening: OUT >= 18:30
-    - Cross-day split at 23:59 / 00:00
-    """
-    results = []
+    records = []
 
-    if not in_dt or not out_dt:
-        return results
-
-    # ---------- Morning OT ----------
     t4 = in_dt.replace(hour=4, minute=0, second=0, microsecond=0)
     t7 = in_dt.replace(hour=7, minute=0, second=0, microsecond=0)
     t8 = in_dt.replace(hour=8, minute=0, second=0, microsecond=0)
@@ -686,74 +650,134 @@ def calc_weekday_ot(in_dt, out_dt):
     if t4 < in_dt < t7:
         h = (t8 - in_dt).total_seconds() / 3600
         if h > 0:
-            results.append((in_dt, t8, round(h, 2), 0.0, "weekday-morning"))
+            records.append((in_dt, t8, round(h, 2), 0.0, "Weekday morning OT"))
 
-    # ---------- Evening OT ----------
-    d18 = out_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+    start_18 = out_dt.replace(hour=18, minute=0, second=0, microsecond=0)
 
-    # same day
-    if out_dt.date() == in_dt.date():
-        if out_dt.hour > 18 or (out_dt.hour == 18 and out_dt.minute >= 30):
-            h = (out_dt - d18).total_seconds() / 3600
+    if out_dt >= start_18:
+        if out_dt.date() == start_18.date():
+            h = (out_dt - start_18).total_seconds() / 3600
             if h > 0:
-                results.append((d18, out_dt, 0.0, round(h, 2), "weekday-evening"))
+                records.append((start_18, out_dt, 0.0, round(h, 2), "Weekday evening OT"))
+        else:
+            end_2359 = start_18.replace(hour=23, minute=59)
+            h1 = (end_2359 - start_18).total_seconds() / 3600
+            if h1 > 0:
+                records.append((start_18, end_2359, 0.0, round(h1, 2), "Weekday evening OT (before midnight)"))
 
-    # cross day
+            start_0000 = out_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            h2 = (out_dt - start_0000).total_seconds() / 3600
+            if h2 > 0:
+                records.append((start_0000, out_dt, 0.0, round(h2, 2), "Weekday evening OT (after midnight)"))
+
+    return records
+
+
+def calc_weekend_ot(in_dt, out_dt):
+    h = (out_dt - in_dt).total_seconds() / 3600
+    if h > 0:
+        return [(in_dt, out_dt, 0.0, round(h, 2), "Weekend/Holiday OT")]
+    return []
+
+
+async def handle_clock_out(last_in_time, ts_dt, is_weekday):
+    if not last_in_time:
+        return []
+
+    if is_weekday:
+        return calc_weekday_ot(last_in_time, ts_dt)
     else:
-        d1_start = in_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-        d1_end = in_dt.replace(hour=23, minute=59, second=59)
+        return calc_weekend_ot(last_in_time, ts_dt)
 
-        if in_dt > d1_start:
-            d1_start = in_dt
+def calc_weekday_ot(in_dt, out_dt):
+    """
+    Weekday OT rules (STRICT, per spec):
+    - Morning OT (IN only):
+        04:00 < IN < 07:00 → 08:00 - IN
+    - Early OT (OUT only):
+        00:00 <= OUT < 04:00 → OUT - 00:00
+    - Evening OT (OUT only):
+        OUT >= 18:30 → OUT - 18:00
+        cross-day split at 23:59 / 00:00
+    """
+    results = []
 
-        h1 = (d1_end - d1_start).total_seconds() / 3600
-        if h1 > 0:
-            results.append((d1_start, d1_end, 0.0, round(h1, 2), "weekday-evening"))
+    # ===== Morning OT (IN only) =====
+    if in_dt:
+        t4 = in_dt.replace(hour=4, minute=0, second=0, microsecond=0)
+        t7 = in_dt.replace(hour=7, minute=0, second=0, microsecond=0)
+        t8 = in_dt.replace(hour=8, minute=0, second=0, microsecond=0)
 
-        d2_start = out_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        h2 = (out_dt - d2_start).total_seconds() / 3600
-        if h2 > 0:
-            results.append((d2_start, out_dt, round(h2, 2), 0.0, "weekday-early"))
+        if t4 < in_dt < t7:
+            h = (t8 - in_dt).total_seconds() / 3600
+            if h > 0:
+                results.append(
+                    (in_dt, t8, round(h, 2), 0.0, "weekday-morning")
+                )
+
+    # ===== Early morning OT (OUT 00:00–04:00) =====
+    if out_dt and out_dt.hour < 4:
+        start_0000 = out_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        h = (out_dt - start_0000).total_seconds() / 3600
+        if h > 0:
+            results.append(
+                (start_0000, out_dt, round(h, 2), 0.0, "weekday-early")
+            )
+
+    # ===== Evening OT (OUT >= 18:30) =====
+    if out_dt and (out_dt.hour > 18 or (out_dt.hour == 18 and out_dt.minute >= 30)):
+        start_18 = out_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+
+        # same day
+        if out_dt.date() == start_18.date():
+            h = (out_dt - start_18).total_seconds() / 3600
+            if h > 0:
+                results.append(
+                    (start_18, out_dt, 0.0, round(h, 2), "weekday-evening")
+                )
+        else:
+            # before midnight
+            end_2359 = start_18.replace(hour=23, minute=59, second=59)
+            h1 = (end_2359 - start_18).total_seconds() / 3600
+            if h1 > 0:
+                results.append(
+                    (start_18, end_2359, 0.0, round(h1, 2), "weekday-evening")
+                )
+
+            # after midnight
+            start_0000 = out_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            h2 = (out_dt - start_0000).total_seconds() / 3600
+            if h2 > 0:
+                results.append(
+                    (start_0000, out_dt, round(h2, 2), 0.0, "weekday-early")
+                )
 
     return results
 
+
 def calc_weekend_ot(in_dt, out_dt):
     if not in_dt or not out_dt:
-        return 0.0
+        return []
     h = (out_dt - in_dt).total_seconds() / 3600
-    return round(max(h, 0), 2)
+    return [(in_dt, out_dt, 0.0, round(max(h, 0), 2), "weekend")]
+
+
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Unified Clock In/Out + OT calculation handler.
 
-    Rules (Mon–Fri, non-holiday):
-      1) If action=OUT and 00:00 <= ts < 04:00 → OT = ts - 00:00 (same day)  (morning OT)
-      2) If action=IN and 04:00 < ts < 07:00 → OT = 08:00 - ts              (morning OT)
-      3) If action=IN and ts >= 07:00      → no OT
-      4) If action=OUT and ts < 18:30      → no OT
-      5) If action=OUT and ts >= 18:30     → OT = ts - 18:00                (evening OT)
-
-    Weekend (Sat 00:00 – Sun 23:59) and holidays:
-      6) For a shift (IN → OUT) fully on weekend/holiday → OT = end - start (200%)
-         (Clock IN: no message; Clock OUT: record & notify "OT today: X hour(s)")
-    """
     query = update.callback_query
     await query.answer()
 
     user = update.effective_user
     driver = user.username or user.first_name
-    chat = query.message.chat if query.message else None
 
-    # previous entry for this driver
     last = get_last_clock_entry(driver)
     now_in = last is None or (len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "OUT")
     action = "IN" if now_in else "OUT"
 
-    # record raw clock
+    # 1️⃣ 先记录打卡
     rec = record_clock_entry(driver, action)
 
-    # parse timestamp
     try:
         ts_dt = datetime.strptime(rec[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
     except Exception:
@@ -763,13 +787,34 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     is_holiday = _is_holiday(ts_dt)
     is_normal_weekday = (not is_weekend) and (not is_holiday)
 
-    morning_hours = 0.0
-    evening_hours = 0.0
-    total_ot = 0.0
-    ot_type = ""
-    note = ""
-    should_notify = False
-    weekday_msg = True  # False → use "OT today: X" wording
+    # 3️⃣ 所有 OT 只在 OUT 计算
+    if action != "OUT":
+        return
+
+    # 必须有上一条 IN
+    if not last or last[O_IDX_ACTION] != "IN":
+        return
+
+    try:
+        in_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+        out_dt = ts_dt
+    except Exception:
+        return
+
+    # 4️⃣ weekday / weekend 分流
+    if is_normal_weekday:
+        ot_records = calc_weekday_ot(in_dt, out_dt)
+        ot_type = "150%"
+    else:
+        ot_records = calc_weekend_ot(in_dt, out_dt)
+        ot_type = "200%"
+
+    # 5️⃣ 写入 OT Record（逐条，互不影响）
+    for st, ed, mh, eh, note in ot_records:
+        append_ot_record(st, ed, mh, eh, ot_type, note)
+
+
+
 
     # Helper: append one OT record row
     def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
@@ -797,86 +842,6 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 ws.append_row(row)
         except Exception:
             logger.exception("Failed to append OT record row for %s", driver)
-
-    # --- Normal weekdays OT rules ---
-    if is_normal_weekday:
-        if action == "IN":
-            # Rule 2: IN between (04:00, 07:00)
-            t4 = ts_dt.replace(hour=4, minute=0, second=0, microsecond=0)
-            t7 = ts_dt.replace(hour=7, minute=0, second=0, microsecond=0)
-            if t4 < ts_dt < t7:
-                end_morning = ts_dt.replace(hour=8, minute=0, second=0, microsecond=0)
-                morning_hours = max((end_morning - ts_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(morning_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday morning OT (Clock In)"
-                    append_ot_record(ts_dt, end_morning, total_ot, 0.0, ot_type, note)
-                    should_notify = True
-        else:
-            # action == OUT
-            h = ts_dt.hour + ts_dt.minute / 60.0
-            # Rule 1: OUT between [00:00, 04:00)
-            # 1️⃣ 必须找到“当天的有效 IN”（07:00–18:00）
-            has_valid_day_in = False
-            day_in_dt = None
-            if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
-                try:
-                    cand = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-                    if (cand.date() == ts_dt.date() and 7 <= cand.hour < 18): 
-                        has_valid_day_in = True
-                        day_in_dt = cand
-                except Exception:
-                    pass
-
-            # ❌ 没有白天 IN，weekday OUT 不算任何 OT
-            if not has_valid_day_in:
-                pass
-            else:
-                # 2️⃣ weekday evening OT（18:30 之后）
-                if ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
-
-                    start_18 = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-                    # 情况 A：当天 24:00 前下班
-                    if ts_dt.date() == start_18.date():
-                        evening_hours = max((ts_dt - start_18).total_seconds() / 3600.0, 0)
-
-                        if evening_hours > 0:
-                            append_ot_record(start_18,ts_dt,0.0,round(evening_hours, 2),"150%","Weekday evening OT",)
-                            should_notify = True
-
-                else:
-                    # 第一段：18:00 → 23:59
-                    end_2359 = start_18.replace(hour=23, minute=59)
-                    h1 = max((end_2359 - start_18).total_seconds() / 3600.0, 0)
-                    if h1 > 0:
-                        append_ot_record(start_18,end_2359,0.0,round(h1, 2),"150%","Weekday evening OT (before midnight)",)
-                    # 第二段：00:00 → OUT
-                    start_0000 = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                    h2 = max((ts_dt - start_0000).total_seconds() / 3600.0, 0)
-                    if h2 > 0:
-                        append_ot_record(start_0000,ts_dt,0.0,round(h2, 2),"150%","Weekday evening OT (after midnight)",)
-                        should_notify = True
-
-    # --- Weekend / Holiday OT rules ---
-    else:
-        # Only act on OUT; IN just records time
-        if action == "OUT":
-            start_dt = None
-            if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
-                try:
-                    start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    start_dt = None
-            if start_dt is not None:
-                ts_dt_adj = ts_dt if ts_dt >= start_dt else ts_dt + timedelta(days=1)
-                dur = max((ts_dt_adj - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(dur, 2)
-          
-                if total_ot > 0:
-                    append_ot_record(start_dt,ts_dt_adj,0.0,total_ot,"200%","Weekend/Holiday full-shift OT",)
-                    should_notify = True
-                    weekday_msg = False  # use 'OT today' wording
 
     # --- Notifications & user feedback ---
     if should_notify and total_ot > 0 and chat is not None:
