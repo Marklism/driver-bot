@@ -862,7 +862,12 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                     start_0000 = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
                     h2 = max((ts_dt - start_0000).total_seconds() / 3600.0, 0)
                     if h2 > 0:
-                        append_ot_record(start_0000,ts_dt,0.0,round(h2, 2),"150%","Weekday evening OT (after midnight)",)
+                        
+                    # after midnight segment
+                    next_is_weekend = _is_weekend(ts_dt) or _is_holiday(ts_dt)
+                    rate = "200%" if next_is_weekend else "150%"
+                    append_ot_record(start_0000,ts_dt,0.0,round(h2, 2),rate,"Weekday cross-day OT (after midnight)")
+
                         should_notify = True
 
     # --- Weekend / Holiday OT rules ---
@@ -875,13 +880,17 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                     start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
                 except Exception:
                     start_dt = None
-            if start_dt is not None:
+            if start_dt is None:
+                # No clock-in record today
+                append_ot_record(None, ts_dt, 0.0, 0.0, "200%", "No Clock In Record today")
+                should_notify = True
+            else:
                 ts_dt_adj = ts_dt if ts_dt >= start_dt else ts_dt + timedelta(days=1)
                 dur = max((ts_dt_adj - start_dt).total_seconds() / 3600.0, 0)
                 total_ot = round(dur, 2)
           
                 if total_ot > 0:
-                    append_ot_record(start_dt,ts_dt_adj,0.0,total_ot,"200%","Weekend/Holiday full-shift OT",)
+                    append_ot_record(start_dt,ts_dt_adj,0.0,total_ot,"200%","Weekend/Holiday OT (full or cross-day)",)
                     should_notify = True
                     weekday_msg = False  # use 'OT today' wording
 
