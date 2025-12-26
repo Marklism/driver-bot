@@ -2231,6 +2231,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
     # ===== 核心修改点：再次统一使用 Telegram username =====
     # FIXED: removed illegal assignment to read-only User.username
     if update and update.effective_user:
+        pass
         # FIXED: removed illegal assignment to read-only User.username
 
     try:
