@@ -2196,9 +2196,9 @@ def start_mission_record(driver: str, plate: str, departure: str, update=None) -
         guid = str(uuid.uuid4())
 
         # ✅ 强制使用 Telegram username
-        update.effective_user.username = "UNKNOWN"
+        # FIXED: removed illegal assignment to read-only User.username
         if update and update.effective_user:
-            update.effective_user.username = (update.effective_user.username or update.effective_user.full_name)
+            # FIXED: removed illegal assignment to read-only User.username
 
         row = [""] * M_MANDATORY_COLS
         row[M_IDX_GUID] = guid
@@ -2228,9 +2228,9 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
         return {"ok": False, "message": "Could not open missions sheet: " + str(e)}
 
     # ===== 核心修改点：再次统一使用 Telegram username =====
-    update.effective_user.username = "UNKNOWN"
+    # FIXED: removed illegal assignment to read-only User.username
     if update and update.effective_user:
-        update.effective_user.username = (update.effective_user.username or update.effective_user.full_name)
+        # FIXED: removed illegal assignment to read-only User.username
 
     try:
         vals, start_idx = _missions_get_values_and_data_rows(ws)
@@ -4214,7 +4214,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
-    #application.add_handler(CommandHandler("mission_report", mission_report_entry))
+#   application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry)) # OT menu entry (buttons -> CSV)
