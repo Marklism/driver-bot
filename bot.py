@@ -4221,7 +4221,7 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
     application.add_handler(CallbackQueryHandler(plate_callback))
-        application.add_handler(CallbackQueryHandler(mission_start_plate_callback, pattern=r"^mission_start_plate:"))
+    application.add_handler(CallbackQueryHandler(mission_start_plate_callback, pattern=r"^mission_start_plate:"))
     application.add_handler(CallbackQueryHandler(mission_end_plate_callback, pattern=r"^mission_end_plate:"))
     # Clock In/Out buttons handler
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
