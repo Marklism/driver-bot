@@ -3509,7 +3509,11 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         _, plate = parts
         # show departure choices
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": (update.effective_user.username or update.effective_user.first_name), {}).get("driver")}
+        context.user_data["pending_mission"] = {
+            "action": "start",
+            "plate": plate,
+            "driver": (update.effective_user.username or update.effective_user.first_name),
+        }
         kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"),
                InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
         await q.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
