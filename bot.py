@@ -2198,6 +2198,7 @@ def start_mission_record(driver: str, plate: str, departure: str, update=None) -
         # ✅ 强制使用 Telegram username
         # FIXED: removed illegal assignment to read-only User.username
         if update and update.effective_user:
+            pass
             # FIXED: removed illegal assignment to read-only User.username
 
         row = [""] * M_MANDATORY_COLS
