@@ -2726,6 +2726,53 @@ async def mission_end_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         allowed = driver_map.get(user.username)
     await update.effective_chat.send_message(t(context.user_data.get("lang", DEFAULT_LANG), "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate", allowed_plates=allowed))
 
+async def mission_start_plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    # callback_data = mission_start_plate:<PLATE>
+    plate = query.data.split(":", 1)[1]
+    driver_map = get_driver_map()
+    driver = None
+    for d, plates in driver_map.items():
+        if plate in plates:
+            driver = d
+            break
+    context.user_data["pending_mission"] = {
+        "type": "start",
+        "plate": plate,
+        "driver": driver,
+    }
+
+    await query.edit_message_text(
+         f"🚀 Mission Start\n"
+        f"Driver: {driver}\n"
+        f"Plate: {plate}\n\n"
+        f"Please enter departure:"
+    )
+
+async def mission_end_plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    # callback_data = mission_end_plate:<PLATE>
+    plate = query.data.split(":", 1)[1]
+    driver_map = get_driver_map()
+    driver = None
+    for d, plates in driver_map.items():
+        if plate in plates:
+            driver = d
+            break
+    context.user_data["pending_mission"] = {
+        "type": "end",
+        "plate": plate,
+        "driver": driver,
+    }
+
+    await query.edit_message_text(
+        t(context.user_data.get("lang", DEFAULT_LANG), "mission_end_prompt_arrival")
+    )
+
 async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.effective_message:
@@ -3022,6 +3069,45 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data.pop("pending_fin_simple", None)
             return
 
+    pending_mission = context.user_data.get("pending_mission")
+    if pending_mission:
+        plate = pending_mission.get("plate")
+        mtype = pending_mission.get("type")
+
+        try:
+            await update.effective_message.delete()
+        except Exception:
+            pass
+
+        if mtype == "start":
+            start_mission_record(
+                driver=pending_mission["driver"],
+                plate=pending_mission["plate"],
+                departure=text,
+                update=update,
+            )
+            try:
+                await update.effective_chat.send_message(f"✅ Mission started for {plate}")
+            except Exception:
+                pass
+
+        elif mtype == "end":
+            end_mission_record(
+                driver=user.username or "",
+                plate=plate,
+                arrival=text,
+                update=update,
+            )
+            try:
+                await update.effective_chat.send_message(f"✅ Mission ended for {plate}")
+            except Exception:
+                pass
+
+        context.user_data.pop("pending_mission", None)
+        return
+    
+    
+        
     pending_leave = context.user_data.get("pending_leave")
     if pending_leave:
         parts = text.split()
@@ -4135,15 +4221,15 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
     application.add_handler(CallbackQueryHandler(plate_callback))
+        application.add_handler(CallbackQueryHandler(mission_start_plate_callback, pattern=r"^mission_start_plate:"))
+    application.add_handler(CallbackQueryHandler(mission_end_plate_callback, pattern=r"^mission_end_plate:"))
     # Clock In/Out buttons handler
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
     application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
-    
-    # ===============================
-    
+
     # Debug command for runtime self-check
     application.add_handler(CommandHandler('debug_bot', debug_bot_command))
     async def _set_cmds():
@@ -4412,9 +4498,6 @@ def save_mission_cycles_to_sheet(mission_cycles):
     _MISSION_CYCLE_STORE.update(mission_cycles or {})
 
 
-
-
-
 # === BEGIN: OT Summary integration (added) ===
 
 def compute_window_for_time(now_dt: Optional[datetime] = None):
@@ -4621,9 +4704,6 @@ except Exception:
     pass
 # === END: OT Summary integration ===
 
-
-
-
 # === BEGIN: lightweight /chatid command (added) ===
 async def chatid_command(update, context):
     """Return the current chat's ID. Safe, non-intrusive addition."""
@@ -4679,8 +4759,6 @@ except Exception:
 # === END: lightweight /chatid command (added) ===
 
 
-
-
 # === BEGIN: lightweight /chatid command (added) ===
 async def chatid_command(update, context):
     """Return the current chat's ID. Safe, non-intrusive addition."""
@@ -4734,14 +4812,6 @@ except Exception:
     except Exception:
         pass
 # === END: lightweight /chatid command (added) ===
-
-
-
-
-# === BEGIN: MULTILANG EXTENSION (ADDED) ===
-# Provides per-user language persistence and admin overrides using the Bot_State worksheet.
-# Adds commands: /setlang, /mylang, /forcelang
-# Adds a lightweight sync handler that synchronizes context.user_data['lang'] from persisted store.
 
 SUPPORTED_STORE_PREFIX = "lang:user:"
 SUPPORTED_OVERRIDE_PREFIX = "lang:override:"
@@ -5006,23 +5076,6 @@ for k, v in list(TR.get("en", {}).items()):
 
 # === END: MULTILANG EXTENSION ===
 
-
-
-
-# === BEGIN: OT & MISSION REPORTS EXTENSION (ADDED) ===
-# Adds commands:
-#   /ot_report   - generate per-driver OT reports for the most recently completed 16th->16th period
-#   /mission_report - generate per-driver Mission reports for the most recently completed 1st->1st period
-#
-# Behavior assumptions (non-invasive):
-# - Reads Google Sheets worksheets named "OT" and "Mission" respectively.
-# - Expected columns (case-insensitive):
-#   OT sheet: username, name, date, hours, ot_type (ot_type values expected like "150%" or "200%")
-#   Mission sheet: username, name, mission_start, mission_end, description (optional)
-# - If sheets or columns are not found, handlers will reply with an explanatory message and not modify other logic.
-# - Generates CSV files per driver in /tmp and sends them as documents when possible.
-# - Does not change any existing logic elsewhere.
-#
 import csv
 
 def _parse_date_guess(val):
@@ -5703,14 +5756,8 @@ try:
 except Exception:
     pass
 
-# ======================
-# OT REPORT PATCH V7
-# ======================
 import io, csv
 
-# =============================
-# OT Holiday Base (FROZEN)
-# =============================
 BASE_OT_HOLIDAYS = {
     # 2025
     "2025-12-29",
@@ -5818,9 +5865,6 @@ def split_mission_ot_minutes(mission_start, mission_end, ot_segments):
             minutes += int((overlap_end - overlap_start).total_seconds() // 60)
     return minutes
 
-# === END B-7 + C-4.16 ===
-
-
 # ===============================
 # NEW MISSION REPORT (OT-STYLE, DRIVER BUTTON + CSV)
 # ===============================
@@ -5836,3 +5880,72 @@ from telegram.ext import CallbackQueryHandler, CommandHandler
 # ---- END DEBUG BOT CODE ----
 
 # If debug code defines a main/start routine, it will run as-is.
+
+
+
+# =====================
+# ROUND TRIP EXTENSIONS
+# =====================
+
+def _direction_from_places(dep: str, arr: str):
+    if not dep or not arr:
+        return None
+    return f"{dep.strip()}→{arr.strip()}"
+
+def _is_reverse_direction(d1: str, d2: str):
+    if not d1 or not d2:
+        return False
+    a, b = d1.split("→")
+    c, d = d2.split("→")
+    return a == d and b == c
+
+def _find_recent_completed_mission(rows, driver, plate, within_hours):
+    now = datetime.utcnow()
+    best = None
+    for r in rows:
+        try:
+            if r.get("Driver") != driver or r.get("Plate") != plate:
+                continue
+            if not r.get("End Time"):
+                continue
+            end_ts = datetime.fromisoformat(r.get("End Time"))
+            if now - end_ts <= timedelta(hours=within_hours):
+                best = r
+        except Exception:
+            pass
+    return best
+
+def _emit_roundtrip_summary(bot, driver, plate, out_dir, in_dir):
+    msgs = [
+        "🔁 Round Trip Completed",
+        f"Driver: {driver}",
+        f"Plate: {plate}",
+        f"Outbound: {out_dir}",
+        f"Return: {in_dir}",
+    ]
+    for m in msgs:
+        try:
+            bot.send_message(chat_id=bot._chat_id, text=m)
+        except Exception:
+            pass
+
+def try_finalize_roundtrip(context, current_mission_row, all_rows, window_hours=24):
+    driver = current_mission_row.get("Driver")
+    plate = current_mission_row.get("Plate")
+    dep = current_mission_row.get("Departure")
+    arr = current_mission_row.get("Arrival")
+    cur_dir = _direction_from_places(dep, arr)
+
+    prev = _find_recent_completed_mission(all_rows, driver, plate, window_hours)
+    if not prev:
+        return False
+
+    prev_dir = _direction_from_places(prev.get("Departure"), prev.get("Arrival"))
+    if not _is_reverse_direction(prev_dir, cur_dir):
+        return False
+
+    current_mission_row["RoundTrip"] = "TRUE"
+    prev["RoundTrip"] = "TRUE"
+    current_mission_row["Return Start"] = prev.get("Start Time")
+    current_mission_row["Return End"] = current_mission_row.get("End Time")
+    return True
