@@ -3420,12 +3420,439 @@ async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await process_force_reply(update, context)
 
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Legacy plate_callback retained for non-mission flows only.
-    # Mission flows are handled exclusively by mission_*_plate_callback.
-    query = update.callback_query
-    await query.answer()
-    return
+    q = update.callback_query
+    # If this callback is for clock buttons, delegate to the clock handler immediately.
+    try:
+        data_check = (q.data or "").strip()
+    except Exception:
+        data_check = ""
+    if data_check.startswith("clock_"):
+        # call dedicated handler to avoid being handled as invalid selection by plate_callback
+        return await handle_clock_button(update, context)
 
+    await q.answer()
+    data = q.data
+    user = q.from_user
+    username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
+    user_lang = context.user_data.get("lang", DEFAULT_LANG)
+
+    if data == "show_start":
+        await q.edit_message_text(t(user_lang, "choose_start"), reply_markup=build_plate_keyboard("start"))
+        return
+    if data == "show_end":
+        await q.edit_message_text(t(user_lang, "choose_end"), reply_markup=build_plate_keyboard("end"))
+        return
+    if data == "show_mission_start":
+        await q.edit_message_text(t(user_lang, "mission_start_prompt_plate"), reply_markup=build_plate_keyboard("mission_start_plate"))
+        return
+    if data == "show_mission_end":
+        await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=build_plate_keyboard("mission_end_plate"))
+        return
+    if data == "help":
+        await q.edit_message_text(t(user_lang, "help"))
+        return
+
+    if data == "admin_finance":
+        if (q.from_user.username or "") not in BOT_ADMINS:
+            await q.edit_message_text("❌ Admins only.")
+            return
+        return await admin_finance_callback_handler(update, context)
+    if data.startswith("fin_type|"):
+        return await admin_fin_type_selected(update, context)
+
+    if data.startswith("fin_plate|"):
+        parts = data.split("|", 2)
+        if len(parts) < 3:
+            await q.edit_message_text("Invalid selection.")
+            return
+        _, typ, plate = parts
+        if (q.from_user.username or "") not in BOT_ADMINS:
+            await q.edit_message_text("❌ Admins only.")
+            return
+        origin_info = {"chat": q.message.chat.id, "msg_id": q.message.message_id, "typ": typ}
+        if typ == "odo_fuel":
+            # Set pending state but DO NOT send a separate "Enter odometer..." ForceReply message.
+            context.user_data["pending_fin_multi"] = {"type": "odo_fuel", "plate": plate, "step": "km", "origin": origin_info}
+            try:
+                # Edit the callback message minimally to reflect pending state; do not send a new ForceReply prompt.
+                await q.edit_message_text(f"Pending ODO+Fuel entry for {plate}. Please send odometer (KM) in chat.")
+            except Exception:
+                logger.exception("Failed to edit message for pending odo_fuel entry.")
+            return
+        if typ in ("parking", "wash", "repair", "fuel"):
+            # Set pending simple state but DO NOT send a separate "Enter amount..." ForceReply message.
+            context.user_data["pending_fin_simple"] = {"type": typ, "plate": plate, "origin": origin_info}
+            try:
+                await q.edit_message_text(f"Pending {typ} entry for {plate}. Please send amount in chat.")
+            except Exception:
+                logger.exception("Failed to edit message for pending simple finance entry.")
+            return
+
+    if data == "leave_menu":
+        # Mark leave pending and edit the callback message to a short prompt (avoid duplicate long messages)
+        try:
+            context.user_data["pending_leave"] = {"prompt_chat": q.message.chat.id, "prompt_msg_id": q.message.message_id, "origin": {"chat": q.message.chat.id, "msg_id": q.message.message_id}}
+            user_lang = context.user_data.get("lang", DEFAULT_LANG)
+            try:
+                await q.edit_message_text(t(user_lang, "leave_pending"))
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("Failed to prompt leave.")
+        return
+
+    # ---------- mission-related handlers ----------
+    if data.startswith("mission_start_plate|"):
+        parts = data.split("|", 1)
+        if len(parts) < 2:
+            logger.warning("mission_start_plate callback missing plate: %s", data)
+            return
+        _, plate = parts
+        # show departure choices
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": context.user_data.get("pending_mission", {}).get("driver")}
+        kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"),
+               InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
+        await q.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+        # Legacy mission end callback from old menus: "mission_end|{plate}"
+    if data.startswith("mission_end|") and not data.startswith("mission_end_plate|"):
+        try:
+            _, legacy_plate = data.split("|", 1)
+            data = f"mission_end_now|{legacy_plate}"
+        except Exception:
+            logger.warning("legacy mission_end callback invalid: %s", data)
+            return
+        # Normalize to new-style callback so existing handler works
+        data = f"mission_end_now|{legacy_plate}"
+
+    if data.startswith("mission_end_plate|"):
+        parts = data.split("|", 1)
+        if len(parts) < 2:
+            logger.warning("mission_end_plate callback missing plate: %s", data)
+            return
+        _, plate = parts
+        context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": tg_username}
+        # allow immediate end (auto arrival) button; callback includes plate for robustness
+        kb = [[InlineKeyboardButton("End mission now (auto arrival)", callback_data=f"mission_end_now|{plate}")]]
+        await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if data.startswith("mission_depart|"):
+        parts = data.split("|")
+        if len(parts) < 3:
+            logger.warning("mission_depart callback missing fields: %s", data)
+            return
+        _, dep, plate = parts
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": tg_username}
+        res = start_mission_record(tg_username, plate, dep, update=update)
+        if res.get("ok"):
+            # mission_start_ok template already adjusted to not show the word "plate"
+            await q.edit_message_text(t(user_lang, "mission_start_ok", driver=username, plate=plate, dep=dep, ts=res.get("start_ts")))
+        else:
+            await q.edit_message_text("❌ " + res.get("message", ""))
+        return
+
+    # support both "mission_end_now|{plate}" and "mission_end_now"
+    if data.startswith("mission_end_now|") or data == "mission_end_now":
+        if data == "mission_end_now":
+            # try to get plate from pending_mission
+            pending = context.user_data.get("pending_mission") or {}
+            plate = pending.get("plate")
+            if not plate:
+                logger.warning("mission_end_now callback without plate and no pending_mission: %s", data)
+                return
+        else:
+            _, plate = data.split("|", 1)
+
+        # permission check
+        driver_map = get_driver_map()
+        allowed = driver_map.get(username, []) if username else []
+        if allowed and plate not in allowed:
+            await q.edit_message_text(t(user_lang, "not_allowed", plate=plate))
+            return
+        try:
+            # find last open mission for this driver+plate
+            ws = open_worksheet(MISSIONS_TAB)
+            vals, start_idx = _missions_get_values_and_data_rows(ws)
+            found_idx = None
+            found_dep = None
+            for i in range(len(vals) - 1, start_idx - 1, -1):
+                r = _ensure_row_length(vals[i], M_MANDATORY_COLS)
+                rn = str(r[M_IDX_NAME]).strip()
+                rp = str(r[M_IDX_PLATE]).strip()
+                rend = str(r[M_IDX_END]).strip()
+                dep = str(r[M_IDX_DEPART]).strip()
+                if rn == username and rp == plate and not rend:
+                    found_idx = i
+                    found_dep = dep
+                    break
+            if found_idx is None:
+                await q.edit_message_text(t(user_lang, "mission_no_open", plate=plate))
+                return
+
+            # arrival automatically opposite of departure
+            arrival = "SHV" if found_dep == "PP" else "PP"
+            res = end_mission_record(tg_username, plate, arrival, update=update)
+
+            if not res.get("ok"):
+                await q.edit_message_text("❌ " + res.get("message", ""))
+                return
+
+            # Show standardized arrival message
+            end_ts = res.get("end_ts") or ""
+            try:
+                await q.edit_message_text(t(user_lang, "mission_end_ok", driver=username, plate=plate, arr=arrival, ts=end_ts))
+            except Exception:
+                try:
+                    await q.message.chat.send_message(t(user_lang, "mission_end_ok", driver=username, plate=plate, arr=arrival, ts=end_ts))
+                    await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
+                except Exception:
+                    pass
+
+            # If merged roundtrip, send summary (uses roundtrip_merged_notify template)
+            if res.get("merged"):
+                # ==== merged roundtrip handling (clean replacement) ====
+                # Ensure mission_cycle loaded
+                try:
+                    _ensure_mission_cycle_loaded(context.chat_data)
+                except Exception:
+                    pass
+                key_cycle = f"mission_cycle|{username}|{plate}"
+                cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 0) + 1
+                context.chat_data.setdefault("mission_cycle", {})[key_cycle] = cur_cycle
+                logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
+                # persist immediately (best-effort)
+                try:
+                    save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
+                except Exception:
+                    try:
+                        logger.exception("Failed to persist mission_cycle after update")
+                    except Exception:
+                        pass
+                # A merged roundtrip was just detected -> compute and send summary immediately
+                # roundtrip is complete (outbound + return)
+                try:
+                    nowdt = _now_dt()
+                    month_start = datetime(nowdt.year, nowdt.month, 1)
+                    if nowdt.month == 12:
+                        month_end = datetime(nowdt.year + 1, 1, 1)
+                    else:
+                        month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+                    counts = count_roundtrips_per_driver_month(month_start, month_end)
+                    d_month = counts.get(username, 0)
+                    year_start = datetime(nowdt.year, 1, 1)
+                    counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
+                    d_year = counts_year.get(username, 0)
+                    plate_counts_month = 0
+                    plate_counts_year = 0
+                    try:
+                        vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                        target_plate = str(plate).strip()
+                        year_end = datetime(nowdt.year + 1, 1, 1)
+                        for r in vals_all[sidx:]:
+                            r = _ensure_row_length(r, M_MANDATORY_COLS)
+                            rpl = str(r[M_IDX_PLATE]).strip() if len(r) > M_IDX_PLATE else ""
+                            rrt = str(r[M_IDX_ROUNDTRIP]).strip().lower() if len(r) > M_IDX_ROUNDTRIP else ""
+                            rstart = str(r[M_IDX_START]).strip() if len(r) > M_IDX_START else ""
+                            if not rpl or rpl != target_plate or rrt != "yes":
+                                continue
+                            sdt = parse_ts(rstart)
+                            if not sdt:
+                                continue
+                            if month_start <= sdt < month_end:
+                                plate_counts_month += 1
+                            if year_start <= sdt < year_end:
+                                plate_counts_year += 1
+                    except Exception:
+                        try:
+                            logger.exception("Failed to compute plate roundtrip counts")
+                        except Exception:
+                            pass
+                    month_label = month_start.strftime("%B")
+                    msg = t(user_lang, "roundtrip_merged_notify", driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                    
+                    try:
+                        md_month = 0
+                        md_today = 0
+                        today_dt = nowdt.date()
+                        try:
+                            vals_all, sidx = _missions_get_values_and_data_rows(open_worksheet(MISSIONS_TAB))
+                            for r in vals_all[sidx:]:
+                                r = _ensure_row_length(r, M_MANDATORY_COLS)
+                                ruser = str(r[M_IDX_NAME]).strip() if len(r) > M_IDX_NAME else ''
+                                if not ruser or ruser != username:
+                                    continue
+                                rstart = parse_ts(str(r[M_IDX_START]).strip()) if len(r) > M_IDX_START else None
+                                rend = parse_ts(str(r[M_IDX_END]).strip()) if len(r) > M_IDX_END else None
+                                if not rstart or not rend:
+                                    continue
+                                m_start = max(rstart.date(), month_start.date())
+                                m_end = min(rend.date(), (month_end - timedelta(days=1)).date())
+                                if m_start <= m_end:
+                                    md_month += (m_end - m_start).days + 1
+                                t_start = max(rstart.date(), today_dt)
+                                t_end = min(rend.date(), today_dt)
+                                if t_start <= t_end:
+                                    md_today += (t_end - t_start).days + 1
+                        except Exception:
+                            try:
+                                logger.exception('Failed to compute mission days for notification (safe)')
+                            except Exception:
+                                pass
+                        month_label = month_start.strftime('%B')
+                        line1 = t(user_lang, 'roundtrip_merged_notify', driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                        # Build line2 and line3 explicitly
+                        line2 = f"🚹Driver {username} has {md_month} mission day(s) in {month_label} {nowdt.year}."
+                        line3 = f"🚘{plate} completed {plate_counts_month} mission(s) in {month_label} and {plate_counts_year} mission(s) in {nowdt.year}."
+                        try:
+                            if line1 and line1.strip():
+                                await q.message.chat.send_message(line1)
+                            else:
+                                summary_line1 = f"🛫Driver {username} completed {d_month} mission(s) in {month_label} and {d_year} mission(s) in {nowdt.year}."
+                            await q.message.chat.send_message(line2)
+                            await q.message.chat.send_message(line3)
+                        except Exception as e:
+                            logger.exception(f"Failed to send merged roundtrip summary: {e}")
+                        # record sent time and reset cycle counter
+                        try:
+                            last_map = context.chat_data.get("last_merge_sent", {})
+                            last_map[f"{username}|{plate}"] = nowdt.isoformat()
+                            context.chat_data["last_merge_sent"] = last_map
+                            context.chat_data["mission_cycle"][key_cycle] = 0
+                            try:
+                                save_mission_cycles_to_sheet(context.chat_data.get("mission_cycle", {}))
+                            except Exception:
+                                try:
+                                    logger.exception("Failed to persist mission_cycle after reset")
+                                except Exception:
+                                    pass
+                        except Exception:
+                            try:
+                                logger.exception("Failed to persist last_merge_sent timestamp or reset cycle")
+                            except Exception:
+                                pass
+                    except Exception:
+                        try:
+                            logger.exception("Failed to send merged roundtrip summary.")
+                        except Exception:
+                            pass
+                except Exception:
+                    try:
+                        logger.exception("Failed preparing merged roundtrip summary.")
+                    except Exception:
+                        pass
+
+    # ---------- end mission-related handlers ----------
+
+        except Exception:
+            try:
+                logger.exception("Closed missing except for mission handler")
+            except Exception:
+                pass
+            pass
+    if data.startswith("start|") or data.startswith("end|"):
+        try:
+            action, plate = data.split("|", 1)
+        except Exception:
+            await q.edit_message_text("Invalid selection.")
+            return
+        driver_map = get_driver_map()
+        allowed = driver_map.get(username, []) if username else []
+        if allowed and plate not in allowed:
+            await q.edit_message_text(t(user_lang, "not_allowed", plate=plate))
+            return
+        if action == "start":
+            res = record_start_trip(username, plate)
+            if res.get("ok"):
+                try:
+                    await q.edit_message_text(t(user_lang, "start_ok", driver=username, plate=plate, ts=res.get("ts")))
+                except Exception:
+                    try:
+                        await q.message.chat.send_message(t(user_lang, "start_ok", driver=username, plate=plate, ts=res.get("ts")))
+                        await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
+                    except Exception:
+                        pass
+            else:
+                try:
+                    await q.edit_message_text("❌ " + res.get("message", ""))
+                except Exception:
+                    pass
+            return
+        elif action == "end":
+            res = record_end_trip(username, plate)
+            if res.get("ok"):
+                ts = res.get("ts")
+                dur = res.get("duration") or ""
+                nowdt = _now_dt()
+                n_today = count_trips_for_day(username, nowdt)
+                month_start = datetime(nowdt.year, nowdt.month, 1)
+                if nowdt.month == 12:
+                    month_end = datetime(nowdt.year + 1, 1, 1)
+                else:
+                    month_end = datetime(nowdt.year, nowdt.month + 1, 1)
+                n_month = count_trips_for_month(username, month_start, month_end)
+                # year counts
+                year_start = datetime(nowdt.year, 1, 1)
+                year_end = datetime(nowdt.year + 1, 1, 1)
+                n_year = count_trips_for_month(username, year_start, year_end)
+                # plate counts
+                p_today = 0
+                p_month = 0
+                p_year = 0
+                try:
+                    ws = open_worksheet(RECORDS_TAB)
+                    vals = ws.get_all_values()
+                    if vals:
+                        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
+                        for r in vals[start_idx:]:
+                            if len(r) < COL_START:
+                                continue
+                            dr = r[1] if len(r) > 1 else ""
+                            pl = r[2] if len(r) > 2 else ""
+                            s_ts = r[3] if len(r) > 3 else ""
+                            e_ts = r[4] if len(r) > 4 else ""
+                            if pl != plate:
+                                continue
+                            if not s_ts or not e_ts:
+                                continue
+                            sdt = parse_ts(s_ts)
+                            if not sdt:
+                                continue
+                            if sdt.date() == nowdt.date():
+                                p_today += 1
+                            if month_start <= sdt < month_end:
+                                p_month += 1
+                            if year_start <= sdt < year_end:
+                                p_year += 1
+                except Exception:
+                    logger.exception("Failed to compute plate trip counts")
+                try:
+                    await q.edit_message_text(t(user_lang, "end_ok", driver=username, plate=plate, ts=ts))
+                except Exception:
+                    try:
+                        await q.message.chat.send_message(t(user_lang, "end_ok", driver=username, plate=plate, ts=ts))
+                        await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
+                    except Exception:
+                        pass
+                try:
+                    month_label = month_start.strftime("%B")
+                    await q.message.chat.send_message(t(user_lang, "trip_summary", driver=username, n_today=n_today, n_month=n_month, month=month_label, n_year=n_year, plate=plate, p_today=p_today, p_month=p_month, p_year=p_year, year=nowdt.year))
+                except Exception:
+                    logger.exception("Failed to send trip summary")
+            else:
+                try:
+                    await q.edit_message_text("❌ " + res.get("message", ""))
+                except Exception:
+                    pass
+            return
+
+
+    # Prevent spurious "Invalid selection" after mission_end_now handlers
+    if data.startswith("mission_end_now|") or data == "mission_end_now":
+        return
+
+    await q.edit_message_text(t(user_lang, "invalid_sel"))
 
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_user_lang(update, context)
