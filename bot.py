@@ -4192,50 +4192,49 @@ def main():
                 print("Warning: failed to set Telegram commands via HTTP API:", e)
     except Exception:
         pass
-    # --- end set commands ---
 
+    # --- Timezone sanity check ---
     if LOCAL_TZ and ZoneInfo:
         try:
             ZoneInfo(LOCAL_TZ)
             logger.info("Using LOCAL_TZ=%s", LOCAL_TZ)
         except Exception:
-            logger.info("LOCAL_TZ=%s but failed to initialize ZoneInfo; using system time.", LOCAL_TZ)
+            logger.info("LOCAL_TZ=%s invalid; using system timezone.", LOCAL_TZ)
     else:
         logger.info("LOCAL_TZ not set; using system local time.")
 
+    # --- Persistence (optional) ---
     persistence = None
     try:
         persistence = PicklePersistence(filepath="driver_bot_persistence.pkl")
     except Exception:
         persistence = None
 
+    # --- Build application ---
+    application = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .persistence(persistence)
+        .build()
+    )
+
+    # --- Error handler ---
     application.add_error_handler(global_error_handler)
-application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+
+    # --- Register handlers ---
     register_ui_handlers(application)
 
-    # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
+    # --- Startup debug report (fire-and-forget) ---
     try:
-        import asyncio
-        loop = None
-        try:
-            loop = asyncio.get_running_loop()
-        except Exception:
-            try:
-                loop = asyncio.get_event_loop()
-            except Exception:
-                loop = None
-        if loop and hasattr(loop, "create_task"):
-            loop.create_task(_send_startup_debug(application))
-        else:
-            try:
-                if hasattr(application, "create_task"):
-                    application.create_task(_send_startup_debug(application))
-            except Exception:
-                pass
+        if hasattr(application, "create_task"):
+            application.create_task(_send_startup_debug(application))
     except Exception:
         pass
+
+    # --- Schedule daily summary ---
     schedule_daily_summary(application)
 
+    # --- Start bot (webhook or polling) ---
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     PORT = int(os.getenv("PORT", "8443"))
 
@@ -4251,23 +4250,21 @@ application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).bui
             logger.exception("Failed to start webhook mode.")
     else:
         try:
-            logger.info("No WEBHOOK_URL set — attempting to delete existing webhook (if any) before polling.")
-            ok = _delete_telegram_webhook(BOT_TOKEN)
-            if not ok:
-                logger.warning("deleteWebhook call returned failure or error; proceeding to polling anyway.")
+            logger.info("No WEBHOOK_URL set — attempting to delete existing webhook (if any).")
+            _delete_telegram_webhook(BOT_TOKEN)
         except Exception:
-            logger.exception("Error while attempting deleteWebhook; proceeding to polling.")
+            logger.exception("Error while deleting webhook; proceeding to polling.")
+
         logger.info("Starting driver-bot polling...")
         try:
-            if not globals().get('POLLING_STARTED'):
-        globals()['POLLING_STARTED']=True
-        application.run_polling()
+            if not globals().get("POLLING_STARTED"):
+                globals()["POLLING_STARTED"] = True
+                application.run_polling()
         except Exception:
             logger.exception("Polling exited with exception.")
-
 if __name__ == "__main__":
     main()
-    
+
 # === In-memory override for mission cycle persistence ===
 # We deliberately avoid any Google Sheets I/O for mission_cycle state
 # to reduce API usage and prevent OAuth scope issues. The mission
