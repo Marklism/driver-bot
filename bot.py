@@ -200,141 +200,101 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
         text=text,
         reply_markup=reply_markup,
     )
-
 from datetime import datetime, timedelta
-import io, csv
+import io, csv, zipfile
 
-def parse_dt(s: str):
-    """
-    统一解析 OT Record 里的时间格式
-    支持:
-    - 2025-12-26 18:00:00
-    - 2025/12/21 7:16:00
-    """
-    s = s.strip().replace("/", "-")
-    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
-
+# -----------------------------
+# 工具函数
+# -----------------------------
 
 def build_name_alias(username: str):
     """
-    Username -> 在 OT Record.Name 中允许匹配的值
-    Mao Mong -> {"mao", "mao mong"}
-    其他 -> {"username"}
+    Mao Mong -> {"mao mong", "mao"}
+    Others   -> {"username"}
     """
     u = username.strip().lower()
-    aliases = {u}
-
-    # Mao Mong -> Mao
+    s = {u}
     if " " in u:
-        aliases.add(u.split(" ")[0])
-
-    return aliases
-
-
-async def ot_report_entry(update, context):
-    driver_map = get_driver_map()   # Drivers.Username
-    drivers = sorted(driver_map.keys())
-
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
-        for d in drivers
-    ]
-
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+        s.add(u.split(" ")[0])
+    return s
 
 
-async def ot_report_driver_callback(update, context):
-    query = update.callback_query
-    await query.answer()
+def get_period_window(now):
+    now = now.replace(tzinfo=None)
+    start = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
+    if now < start:
+        start = (start - timedelta(days=31)).replace(day=16)
 
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    if start.month == 12:
+        end = start.replace(year=start.year + 1, month=1)
+    else:
+        end = start.replace(month=start.month + 1)
 
-    # Telegram 里选中的 Username
-    username = query.data.split(":", 1)[1].strip()
+    end = end.replace(hour=4, minute=0, second=0, microsecond=0)
+    return start, end
+
+
+def collect_driver_ot(username, rows, header, start_window, end_window):
+    idx = {h: header.index(h) for h in header}
+
     valid_names = build_name_alias(username)
 
-    ws = open_worksheet("OT Record")
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        await context.bot.send_message(query.from_user.id, "❌ No OT records.")
-        return
+    ot150 = []
+    ot200 = []
+    t150 = 0.0
+    t200 = 0.0
 
-    header, data = rows[0], rows[1:]
-    idx_name = header.index("Name")
-    idx_type = header.index("Type")
-    idx_start = header.index("Start Date")
-    idx_end = header.index("End Date")
-    idx_morning = header.index("Morning OT")
-    idx_evening = header.index("Evening OT")
-
-    now = _now_dt().replace(tzinfo=None)
-
-    start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
-    if now < start_window:
-        start_window = (start_window - timedelta(days=31)).replace(day=16)
-
-    end_window = (
-        start_window.replace(year=start_window.year + 1, month=1)
-        if start_window.month == 12
-        else start_window.replace(month=start_window.month + 1)
-    ).replace(hour=4, minute=0, second=0, microsecond=0)
-
-    ot150, ot200 = [], []
-    t150 = t200 = 0.0
-
-    for r in data:
-        name_in_sheet = r[idx_name].strip().lower()
-        if name_in_sheet not in valid_names:
+    for r in rows:
+        name = r[idx["Name"]].strip().lower()
+        if name not in valid_names:
             continue
 
         try:
-            start_dt = datetime.fromisoformat(r[idx_start].strip())
+            start_dt = datetime.fromisoformat(r[idx["Start Date"]].strip())
         except Exception:
             continue
 
-        # ✅ 只用 Start Date 判断周期
         if not (start_window <= start_dt < end_window):
             continue
 
         try:
-            m_h = float(r[idx_morning]) if r[idx_morning] else 0.0
-            e_h = float(r[idx_evening]) if r[idx_evening] else 0.0
+            m = float(r[idx["Morning OT"]] or 0)
+            e = float(r[idx["Evening OT"]] or 0)
         except Exception:
             continue
 
-        hours = round(m_h + e_h, 2)
+        hours = round(m + e, 2)
         if hours <= 0:
             continue
 
-        row = [r[idx_start], r[idx_end], f"{hours:.2f}"]
+        row = [
+            r[idx["Start Date"]],
+            r[idx["End Date"]],
+            f"{hours:.2f}"
+        ]
 
-        if r[idx_type] == "150%":
+        if r[idx["Type"]] == "150%":
             ot150.append(row)
             t150 += hours
-        elif r[idx_type] == "200%":
+        elif r[idx["Type"]] == "200%":
             ot200.append(row)
             t200 += hours
 
     ot150.sort(key=lambda x: x[0])
     ot200.sort(key=lambda x: x[0])
 
+    return ot150, ot200, round(t150, 2), round(t200, 2)
+
+
+def build_csv(username, start_window, end_window, ot150, ot200, t150, t200):
     out = io.StringIO()
     w = csv.writer(out)
 
     w.writerow(["Driver", username])
-    w.writerow(["Period", f"{start_window:%Y-%m-%d %H:%M} to {end_window:%Y-%m-%d %H:%M}"])
+    w.writerow([
+        "Period",
+        f"{start_window:%Y-%m-%d %H:%M} to {end_window:%Y-%m-%d %H:%M}"
+    ])
     w.writerow([])
 
     if ot150:
@@ -352,15 +312,103 @@ async def ot_report_driver_callback(update, context):
         w.writerow([])
 
     w.writerow(["GRAND TOTAL", "", f"{t150 + t200:.2f}"])
+    return out.getvalue()
 
-    bio = io.BytesIO(out.getvalue().encode("utf-8"))
-    bio.name = f"OT_Report_{username}.csv"
 
-    await context.bot.send_document(
-        query.from_user.id,
-        bio,
-        caption=f"OT report for {username}"
+# -----------------------------
+# 入口：选择司机
+# -----------------------------
+
+async def ot_report_entry(update, context):
+    driver_map = get_driver_map()
+    drivers = sorted(driver_map.keys())
+
+    keyboard = [
+        [InlineKeyboardButton(d, callback_data=f"OTR_ONE:{d}")]
+        for d in drivers
+    ]
+    keyboard.append(
+        [InlineKeyboardButton("📦 Export ALL Drivers", callback_data="OTR_ALL")]
     )
+
+    await reply_private(
+        update,
+        context,
+        "Select driver:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# -----------------------------
+# 回调处理
+# -----------------------------
+
+async def ot_report_driver_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    ws = open_worksheet("OT Record")
+    rows = ws.get_all_values()
+    header, data = rows[0], rows[1:]
+
+    start_window, end_window = get_period_window(_now_dt())
+
+    # ---------- 单个司机 ----------
+    if query.data.startswith("OTR_ONE:"):
+        username = query.data.split(":", 1)[1]
+
+        ot150, ot200, t150, t200 = collect_driver_ot(
+            username, data, header, start_window, end_window
+        )
+
+        csv_text = build_csv(
+            username, start_window, end_window, ot150, ot200, t150, t200
+        )
+
+        bio = io.BytesIO(csv_text.encode("utf-8"))
+        bio.name = f"OT_Report_{username}.csv"
+
+        await context.bot.send_document(
+            query.from_user.id,
+            bio,
+            caption=f"OT report for {username}"
+        )
+        return
+
+    # ---------- 所有司机 ----------
+    if query.data == "OTR_ALL":
+        driver_map = get_driver_map()
+        drivers = sorted(driver_map.keys())
+
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for username in drivers:
+                ot150, ot200, t150, t200 = collect_driver_ot(
+                    username, data, header, start_window, end_window
+                )
+
+                if not ot150 and not ot200:
+                    continue
+
+                csv_text = build_csv(
+                    username, start_window, end_window, ot150, ot200, t150, t200
+                )
+                zf.writestr(f"OT_Report_{username}.csv", csv_text)
+
+        zip_buf.seek(0)
+        zip_buf.name = "OT_Report_ALL_Drivers.zip"
+
+        await context.bot.send_document(
+            query.from_user.id,
+            zip_buf,
+            caption="OT report for ALL drivers"
+        )
+
 
 
 # ===== END FIX =====
