@@ -215,9 +215,29 @@ def parse_dt(s: str):
     return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
 
 
+def build_name_alias(username: str):
+    """
+    Username -> 在 OT Record.Name 中允许匹配的值
+    Mao Mong -> {"mao", "mao mong"}
+    其他 -> {"username"}
+    """
+    u = username.strip().lower()
+    aliases = {u}
+
+    # Mao Mong -> Mao
+    if " " in u:
+        aliases.add(u.split(" ")[0])
+
+    return aliases
+
+
 async def ot_report_entry(update, context):
     driver_map = get_driver_map()   # Drivers.Username
     drivers = sorted(driver_map.keys())
+
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
 
     keyboard = [
         [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
@@ -241,12 +261,17 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
+    # Telegram 里选中的 Username
     username = query.data.split(":", 1)[1].strip()
+    valid_names = build_name_alias(username)
 
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
-    header, data = rows[0], rows[1:]
+    if len(rows) < 2:
+        await context.bot.send_message(query.from_user.id, "❌ No OT records.")
+        return
 
+    header, data = rows[0], rows[1:]
     idx_name = header.index("Name")
     idx_type = header.index("Type")
     idx_start = header.index("Start Date")
@@ -254,51 +279,60 @@ async def ot_report_driver_callback(update, context):
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
-    # === 周期（与你 Excel 完全一致） ===
     now = _now_dt().replace(tzinfo=None)
+
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
     if now < start_window:
         start_window = (start_window - timedelta(days=31)).replace(day=16)
 
-    if start_window.month == 12:
-        end_window = start_window.replace(year=start_window.year + 1, month=1)
-    else:
-        end_window = start_window.replace(month=start_window.month + 1)
-    end_window = end_window.replace(hour=4, minute=0, second=0, microsecond=0)
+    end_window = (
+        start_window.replace(year=start_window.year + 1, month=1)
+        if start_window.month == 12
+        else start_window.replace(month=start_window.month + 1)
+    ).replace(hour=4, minute=0, second=0, microsecond=0)
 
     ot150, ot200 = [], []
     t150 = t200 = 0.0
 
     for r in data:
-        if r[idx_name].strip() != username:
+        name_in_sheet = r[idx_name].strip().lower()
+        if name_in_sheet not in valid_names:
             continue
 
         try:
-            start_dt = parse_dt(r[idx_start])
+            start_dt = datetime.fromisoformat(r[idx_start].strip())
         except Exception:
             continue
 
+        # ✅ 只用 Start Date 判断周期
         if not (start_window <= start_dt < end_window):
             continue
 
-        # ✅ 不算！直接读表
-        m = float(r[idx_morning] or 0)
-        e = float(r[idx_evening] or 0)
-        h = m + e
-        if h <= 0:
+        try:
+            m_h = float(r[idx_morning]) if r[idx_morning] else 0.0
+            e_h = float(r[idx_evening]) if r[idx_evening] else 0.0
+        except Exception:
             continue
 
-        row = [r[idx_start], r[idx_end], f"{h:.2f}"]
+        hours = round(m_h + e_h, 2)
+        if hours <= 0:
+            continue
+
+        row = [r[idx_start], r[idx_end], f"{hours:.2f}"]
 
         if r[idx_type] == "150%":
             ot150.append(row)
-            t150 += h
+            t150 += hours
         elif r[idx_type] == "200%":
             ot200.append(row)
-            t200 += h
+            t200 += hours
+
+    ot150.sort(key=lambda x: x[0])
+    ot200.sort(key=lambda x: x[0])
 
     out = io.StringIO()
     w = csv.writer(out)
+
     w.writerow(["Driver", username])
     w.writerow(["Period", f"{start_window:%Y-%m-%d %H:%M} to {end_window:%Y-%m-%d %H:%M}"])
     w.writerow([])
