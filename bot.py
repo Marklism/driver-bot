@@ -3705,7 +3705,12 @@ def _report_entry_self_check(application):
     except Exception as e:
         print("[REPORT CHECK] failed:", e)
 # ===============================
-
+def ensure_env():
+    """
+    Startup environment hook.
+    Intentionally kept as a no-op placeholder.
+    """
+    pass
 
 def main():
     ensure_env()
