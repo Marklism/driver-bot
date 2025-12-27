@@ -723,19 +723,6 @@ async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result += f"\n\nTotal OT: **{round(total_ot, 2)} hours**"
 
     await update.message.reply_text(result)
-# ---------------------------------------------------------
-# Driver / Mission / Leave / Finance Helpers
-
-# Register OT handlers (inserted)
-try:
-    # These handlers implement Clock In/Out toggle and OT reporting
-    application.add_handler(CallbackQueryHandler(clock_callback_handler, pattern=r"^clock_toggle$"))
-    application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    # [DISABLED] legacy mission_monthly_report handler
-
-except Exception:
-    # If application not available at import time, registration will be attempted in register_ui_handlers
-    pass
 
 import json
 import base64
@@ -3582,14 +3569,11 @@ def register_ui_handlers(application):
     application.add_handler(CommandHandler(["end_trip", "end"], end_trip_command))
     application.add_handler(CommandHandler("mission_start", mission_start_command))
     application.add_handler(CommandHandler("mission_end", mission_end_command))
-#   application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CommandHandler("leave", leave_command))
     application.add_handler(CommandHandler("lang", lang_command))
     application.add_handler(CommandHandler("ot_report", ot_report_entry)) # OT menu entry (buttons -> CSV)
-    # [DISABLED] legacy mission_monthly_report handler
     application.add_handler(CallbackQueryHandler(ot_report_driver_callback, pattern=r"^OTR_DRIVER:"))
     application.add_handler(CallbackQueryHandler(handle_clock_button, pattern=r"^clock_(in|out)$"))
-    # Register NEW mission report handlers
     application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
     
@@ -4553,19 +4537,6 @@ async def mission_report_command(update, context):
             pass
         await update.effective_chat.send_message(t(context, "mission_report_failed"))
 
-# Register handlers
-try:
-    application.add_handler(CommandHandler("ot_report", ot_report_entry))
-    application.add_handler(CommandHandler("mission_report", mission_report_command))
-except Exception:
-    # safe fallback: expose register function
-    def register_report_handlers(app):
-        try:
-            app.add_handler(CommandHandler("ot_report", ot_report_entry))
-            app.add_handler(CommandHandler("mission_report", mission_report_command))
-        except Exception:
-            pass
-    globals().setdefault("register_report_handlers", register_report_handlers)
 
 # Add minimal Khmer phrases into TR["km"] for report-related messages (user should replace with full colloquial translations).
 try:
