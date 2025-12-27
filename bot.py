@@ -607,65 +607,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                         total_ot = dur
                         should_notify = True
 
-    # --- Notifications & user feedback ---
-    if should_notify and total_ot > 0 and chat is not None:
-        try:
-            rate_label = (
-                "holiday" if is_holiday else
-                "weekend" if is_weekend else
-                "weekday-morning" if (ts_dt.hour < 8) else
-                "weekday-evening"
-            )
-
-            cross_day = ""
-            if last and last[O_IDX_ACTION] == "IN":
-                try:
-                    last_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-                    if last_dt.date() != ts_dt.date():
-                        cross_day = " (cross-day)"
-                except Exception:
-                    pass
-
-            msg_lines = [f"💰Driver {driver}:"]
-
-            if last and last[O_IDX_ACTION] == "IN":
-                try:
-                    last_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-
-                    # 跨日 OT，拆成两天显示
-                    if last_dt.date() != ts_dt.date():
-                        # Day 1: last_dt.date() evening
-                        day1 = last_dt.date()
-                        day2 = ts_dt.date()
-                        # evening part (day1)
-                        evening_hours = 0.0
-                        start_evening = last_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-                        if last_dt < start_evening:
-                            start_evening = start_evening
-                        else:
-                            start_evening = last_dt
-                        end_evening = last_dt.replace(hour=23, minute=59, second=59)
-                        evening_hours = max((end_evening - start_evening).total_seconds() / 3600, 0)
-
-                        # morning part (day2)
-                        morning_hours = max((ts_dt - ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds() / 3600, 0)
-
-                        if evening_hours > 0:
-                            msg_lines.append(f"🌟{day1.strftime('%Y-%m-%d')} (weekday-evening): {evening_hours:.2f} hour(s)")
-                        if morning_hours > 0:
-                            msg_lines.append(f"🌞{day2.strftime('%Y-%m-%d')} (weekday-morning): {morning_hours:.2f} hour(s) (cross-day)")
-                    else:
-                        msg_lines.append(f"💰{ts_dt.strftime('%Y-%m-%d')} ({rate_label}): {total_ot:.2f} hour(s)")
-                except Exception:
-                    msg_lines.append(f"💰{ts_dt.strftime('%Y-%m-%d')} ({rate_label}): {total_ot:.2f} hour(s)")
-            else:
-                msg_lines.append(f"💰{ts_dt.strftime('%Y-%m-%d')} ({rate_label}): {total_ot:.2f} hour(s)")
-
-            msg = build_message(msg_lines)
-            await context.bot.send_message(chat_id=chat.id, text=msg)
-        except Exception:
-            logger.exception("Failed to send OT notification")
-
+   
 # Edit the inline-button message as a confirmation
 
     try:
@@ -2027,48 +1969,56 @@ def record_finance_odo_fuel(
     try:
         ws = open_worksheet(FUEL_TAB)
 
-        # —— 强制触发一次读，避免 WorksheetProxy 缓存 / header 不同步 ——
-        _ = ws.get_all_values()
+        # 强制刷新，避免缓存
+        rows = ws.get_all_values()
 
-        # —— 确保 Fuel header 正确 ——
+        # -------------------------
+        # 解析当前里程
+        # -------------------------
         try:
-            ensure_sheet_headers_match(ws, HEADERS_BY_TAB[FUEL_TAB])
+            m_int = int(re.search(r"(\d+)", str(mileage).replace(",", "")).group(1))
         except Exception:
-            pass
+            return {"ok": False, "message": "Invalid mileage"}
 
-        # —— 解析当前里程 ——
-        m_int = None
-        try:
-            m_int = int(re.search(r"(\d+)", str(mileage)).group(1))
-        except Exception:
-            m_int = None
-
-        # —— 仅从 Fuel 表查上一次里程（逻辑闭环） ——
+        # -------------------------
+        # 从 Fuel tab 找“上一条里程”
+        # （只认 Fuel tab，不碰 ODO tab）
+        # -------------------------
         prev_m = None
-        try:
-            ws_odo = open_worksheet(ODO_TAB)
-            rows = ws_odo.get_all_values()
-            if len(rows) > 1:
-                for r in reversed(rows[1:]):
-                    if len(r) >= 4 and str(r[0]).strip() == plate:
-                        try:
-                            prev_m = int(re.search(r"(\d+)", str(r[3])).group(1))
-                            break
-                        except Exception:
-                            break
-        except Exception:
-            prev_m = None
+        if len(rows) > 1:
+            for r in reversed(rows[1:]):
+                if len(r) >= 4 and str(r[0]).strip() == plate:
+                    try:
+                        prev_m = int(re.search(r"(\d+)", r[3].replace(",", "")).group(1))
+                        break
+                    except Exception:
+                        continue
+
+        # -------------------------
+        # 计算 delta km
+        # -------------------------
         delta = ""
-        if prev_m is not None and m_int is not None:
+        if prev_m is not None:
+            if m_int < prev_m:
+                return {"ok": False, "message": "Mileage smaller than previous"}
             delta = str(m_int - prev_m)
 
-        dt = now_str()
-
+        # -------------------------
+        # 写入 Fuel tab
+        # A Plate
+        # B Driver
+        # C DateTime
+        # D Mileage
+        # E Delta KM
+        # F Fuel Cost
+        # G Invoice
+        # H DriverPaid
+        # -------------------------
         row = [
             plate,
             by_user or "Unknown",
-            dt,
-            str(m_int) if m_int is not None else str(mileage),
+            now_str(),
+            str(m_int),
             delta,
             str(fuel_cost),
             invoice or "",
@@ -2076,11 +2026,6 @@ def record_finance_odo_fuel(
         ]
 
         ws.append_row(row, value_input_option="USER_ENTERED")
-
-        logger.info(
-            "Recorded FUEL: plate=%s mileage=%s delta=%s fuel=%s invoice=%s paid=%s",
-            plate, m_int, delta, fuel_cost, invoice, driver_paid
-        )
 
         return {
             "ok": True,
@@ -2090,8 +2035,9 @@ def record_finance_odo_fuel(
         }
 
     except Exception as e:
-        logger.exception("Failed to append fuel row: %s", e)
+        logger.exception("Failed to record fuel")
         return {"ok": False, "message": str(e)}
+
 
 
 def record_parking(plate: str, amount: str, by_user: str = "", notes: str = "") -> dict:
