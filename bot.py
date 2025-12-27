@@ -201,28 +201,16 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
         reply_markup=reply_markup,
     )
 async def ot_report_entry(update, context):
-    ws = open_worksheet(OT_RECORD_TAB)
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        await reply_private(update, context, "❌ No OT records.")
-        return
+    driver_map = get_driver_map()   # Drivers.Username 列
+    drivers = sorted(driver_map.keys())
 
-    header = rows[0]
-    idx_name = header.index("Name")
-
-    # 直接从 OT Record 取唯一 Name
-    names = sorted({r[idx_name].strip() for r in rows[1:] if r[idx_name].strip()})
-
-    if not names:
+    if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
         return
 
     keyboard = [
-        [InlineKeyboardButton(
-            name,
-            callback_data=f"OTR_DRIVER:{name}"
-        )]
-        for name in names
+        [InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")]
+        for d in drivers
     ]
 
     await reply_private(
@@ -231,6 +219,7 @@ async def ot_report_entry(update, context):
         "Select driver:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
 async def ot_report_driver_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -240,9 +229,14 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    driver_name = query.data.split(":", 1)[1].strip()  # = OT Record.Name
+    # 🔴 Telegram 里选中的 = Drivers.Username
+    username = query.data.split(":", 1)[1].strip()
 
-    ws = open_worksheet(OT_RECORD_TAB)
+    # 🔴 Drivers 表：Username → 显示名（只用于展示）
+    driver_map = get_driver_map()
+    display_name = username  # 强制逻辑只用 Username
+
+    ws = open_worksheet("OT Record")   # ⚠️ 明确用 OT Record
     rows = ws.get_all_values()
     if len(rows) < 2:
         await context.bot.send_message(query.from_user.id, "❌ No OT records.")
@@ -256,30 +250,23 @@ async def ot_report_driver_callback(update, context):
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
-    # ===== 16th 04:00 window =====
     now = _now_dt()
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
     if now < start_window:
         start_window = (start_window - timedelta(days=31)).replace(day=16)
 
-    if start_window.month == 12:
-        end_window = start_window.replace(
-            year=start_window.year + 1,
-            month=1,
-            hour=4, minute=0, second=0, microsecond=0
-        )
-    else:
-        end_window = start_window.replace(
-            month=start_window.month + 1,
-            hour=4, minute=0, second=0, microsecond=0
-        )
+    end_window = (
+        start_window.replace(year=start_window.year + 1, month=1)
+        if start_window.month == 12
+        else start_window.replace(month=start_window.month + 1)
+    ).replace(hour=4, minute=0, second=0, microsecond=0)
 
     ot150, ot200 = [], []
     t150 = t200 = 0.0
 
     for r in data:
-        # === 核心：严格匹配 Name ===
-        if r[idx_name].strip() != driver_name:
+        # 🔴 核心：OT Record 的 Name 必须 == Username
+        if r[idx_name].strip() != username:
             continue
 
         try:
@@ -299,28 +286,23 @@ async def ot_report_driver_callback(update, context):
 
         if r[idx_type] == "150%":
             h = m_h + e_h
-            if h <= 0:
-                continue
-            ot150.append([r[idx_start], r[idx_end], f"{h:.2f}"])
-            t150 += h
+            if h > 0:
+                ot150.append([r[idx_start], r[idx_end], f"{h:.2f}"])
+                t150 += h
 
         elif r[idx_type] == "200%":
             h = round((end_dt - start_dt).total_seconds() / 3600, 2)
-            if h <= 0:
-                continue
-            ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
-            t200 += h
+            if h > 0:
+                ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
+                t200 += h
 
     ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
     ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
 
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["Driver", driver_name])
-    w.writerow([
-        "Period",
-        f"{start_window:%Y-%m-%d %H:%M} to {end_window:%Y-%m-%d %H:%M}"
-    ])
+    w.writerow(["Driver", username])
+    w.writerow(["Period", f"{start_window:%Y-%m-%d %H:%M} to {end_window:%Y-%m-%d %H:%M}"])
     w.writerow([])
 
     if ot150:
@@ -337,15 +319,15 @@ async def ot_report_driver_callback(update, context):
         w.writerow(["Subtotal", "", f"{t200:.2f}"])
         w.writerow([])
 
-    w.writerow(["GRAND TOTAL", "", f"{(t150 + t200):.2f}"])
+    w.writerow(["GRAND TOTAL", "", f"{t150 + t200:.2f}"])
 
     bio = io.BytesIO(out.getvalue().encode("utf-8"))
-    bio.name = f"OT_Report_{driver_name}.csv"
+    bio.name = f"OT_Report_{username}.csv"
 
     await context.bot.send_document(
         query.from_user.id,
         bio,
-        caption=f"OT report for {driver_name}"
+        caption=f"OT report for {username}"
     )
 
 # ===== END FIX =====
