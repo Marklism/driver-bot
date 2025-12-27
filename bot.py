@@ -4052,8 +4052,10 @@ def schedule_daily_summary(application):
             else:
                 tz = None
             job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
-            if application.job_queue:
+            try:
         application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
+except Exception:
+        pass
             logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
         else:
             logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
