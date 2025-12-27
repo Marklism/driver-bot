@@ -1144,7 +1144,17 @@ class WorksheetProxy:
             return _callable
         return getattr(self._ws, name)
 # --- END: Google Sheets API queue, caching and Worksheet proxy helpers ---
-
+OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT_Records")
+OT_RECORD_HEADERS = [
+    "Name",
+    "Type",
+    "Start Date",
+    "End Date",
+    "Day",
+    "Morning OT",
+    "Evening OT",
+    "Note",
+]
 HEADERS_BY_TAB: Dict[str, List[str]] = {
     RECORDS_TAB: ["Date", "Driver", "Plate", "Start DateTime", "End DateTime", "Duration"],
     MISSIONS_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
