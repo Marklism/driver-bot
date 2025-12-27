@@ -3567,7 +3567,7 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     bio = io.BytesIO(out.getvalue().encode("utf-8"))
     bio.name = f"Mission_Report_{driver}.csv"
     await context.bot.send_document(chat_id=query.from_user.id, document=bio, caption=f"Mission report for {driver}")
-
+from telegram.ext import CommandHandler, CallbackQueryHandler
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
