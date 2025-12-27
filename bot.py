@@ -753,6 +753,7 @@ import json
 import base64
 import logging
 import uuid
+import urllib.request
 import re
 from typing import Optional, Dict, List
 import gspread
@@ -3711,10 +3712,22 @@ def ensure_env():
     Intentionally kept as a no-op placeholder.
     """
     pass
+async def global_error_handler(update, context):
+    """
+    Global Telegram error handler.
+    Intentionally minimal to avoid startup failures.
+    """
+    logger.exception("Unhandled exception in handler", exc_info=context.error)
 
+async def _send_startup_debug(application):
+    """Startup debug task (no-op)."""
+    return
+def schedule_daily_summary(application):
+    """Schedule daily summary (no-op placeholder)."""
+    return
 def main():
     ensure_env()
-
+    check_deployment_requirements()
     # --- Set Telegram slash commands on startup (HTTP API, non-async) ---
     try:
         token_tmp = os.getenv("BOT_TOKEN")
@@ -3771,7 +3784,10 @@ def main():
         .persistence(persistence)
         .build()
     )
-
+    assert callable(ensure_env)
+    assert callable(check_deployment_requirements)
+    assert callable(register_ui_handlers)
+    assert callable(schedule_daily_summary)
     # --- Error handler ---
     application.add_error_handler(global_error_handler)
 
