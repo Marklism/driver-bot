@@ -5059,3 +5059,62 @@ from telegram.ext import CallbackQueryHandler, CommandHandler
 # ---- END DEBUG BOT CODE ----
 
 # If debug code defines a main/start routine, it will run as-is.
+
+
+# ===================== HOTFIX OVERRIDES (AUTO-GENERATED) =====================
+# This section intentionally overrides logic without touching original code.
+
+# ---- FIX 1: Fuel / ODO delta km ----
+def _get_last_odo_km(plate: str):
+    ws = open_worksheet(ODO_TAB)
+    rows = ws.get_all_values()
+    if len(rows) <= 1:
+        return None
+    for r in reversed(rows[1:]):
+        if len(r) >= 4 and str(r[0]).strip() == plate:
+            try:
+                return float(str(r[3]).strip())
+            except Exception:
+                return None
+    return None
+
+def _calc_delta_km(plate: str, current_km: float):
+    last_km = _get_last_odo_km(plate)
+    if last_km is None:
+        return ""
+    if current_km < last_km:
+        raise ValueError("ODO ERROR: current km < last km")
+    return round(current_km - last_km, 1)
+
+# ---- FIX 2: Weekend / Holiday OT must be calculated ----
+_original_clock_handler = clock_callback_handler
+
+async def clock_callback_handler(update, context):
+    await _original_clock_handler(update, context)
+    try:
+        user = update.effective_user.username
+        ws = open_worksheet(OT_TAB)
+        rows = ws.get_all_values()
+        if len(rows) < 2:
+            return
+        last = rows[-1]
+        if last[O_IDX_ACTION] != "OUT":
+            return
+
+        start = datetime.strptime(rows[-2][O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+        end = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+        if end < start:
+            end += timedelta(days=1)
+
+        if _is_weekend(start) or _is_holiday(start):
+            dur = round((end - start).total_seconds() / 3600, 2)
+            if dur > 0:
+                append_ot_record(start, end, 0.0, dur, "200%", "Weekend/Holiday OT")
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"OT Summary: {dur} hour(s) @ 200%"
+                )
+    except Exception:
+        logger.exception("Weekend OT hotfix failed")
+
+# =================== END HOTFIX OVERRIDES ===================
