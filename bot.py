@@ -3725,6 +3725,11 @@ async def _send_startup_debug(application):
 def schedule_daily_summary(application):
     """Schedule daily summary (no-op placeholder)."""
     return
+
+def check_deployment_requirements():
+    """Deployment requirements check (no-op placeholder)."""
+    pass
+    
 def main():
     ensure_env()
     check_deployment_requirements()
