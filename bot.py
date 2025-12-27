@@ -305,8 +305,8 @@ async def ot_report_driver_callback(update, context):
 
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["Driver", display_name])
-    w.writerow(["Period", f"{start_window:%Y-%m-%d %H:%M} → {end_window:%Y-%m-%d %H:%M}"])
+    w.writerow(["Driver", driver])
+    w.writerow(["Period", f"{start_window:%Y-%m-%d %H:%M} to {end_window:%Y-%m-%d %H:%M}"])
     w.writerow([])
 
     if ot150:
@@ -326,11 +326,11 @@ async def ot_report_driver_callback(update, context):
     w.writerow(["GRAND TOTAL", "", "%.2f" % (t150 + t200)])
 
     bio = io.BytesIO(out.getvalue().encode("utf-8"))
-    bio.name = f"OT_Report_{display_name}.csv"
+    bio.name = f"OT_Report_{driver}.csv"
     await context.bot.send_document(
         query.from_user.id,
         bio,
-        caption=f"OT report for {display_name}"
+        caption=f"OT report for {driver}"
     )
 
 # ===== END FIX =====
