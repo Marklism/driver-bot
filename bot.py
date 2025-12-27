@@ -253,7 +253,7 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        if r[idx_name].strip() != driver:
+        if r[idx_name].strip().lower() != driver.strip().lower():
             continue
         try:
             start_str = r[idx_start].strip()
