@@ -222,7 +222,6 @@ async def ot_report_entry(update, context):
     )
 
 
-
 async def ot_report_driver_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -232,7 +231,7 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    # Telegram 里选中的 = Username
+    # Telegram 里选中的 Username
     username = query.data.split(":", 1)[1].strip()
 
     ws = open_worksheet("OT Record")
@@ -264,16 +263,25 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        # ✅ 唯一匹配条件：Username
+        # ✅ 唯一匹配条件：OT Record.Name == Username
         if r[idx_name].strip() != username:
             continue
 
         try:
-            start_dt = datetime.fromisoformat(r[idx_start].strip())
-            end_dt = datetime.fromisoformat(r[idx_end].strip())
-            check_dt = end_dt if r[idx_type] == "200%" else start_dt
-            if not (start_window <= check_dt < end_window):
+            # ✅ 关键修复：不用 fromisoformat，强制指定格式
+            start_dt = datetime.strptime(
+                r[idx_start].strip(),
+                "%Y-%m-%d %H:%M:%S"
+            )
+            end_dt = datetime.strptime(
+                r[idx_end].strip(),
+                "%Y-%m-%d %H:%M:%S"
+            )
+
+            # ✅ 只用 Start Date 判断月份
+            if not (start_window <= start_dt < end_window):
                 continue
+
         except Exception:
             continue
 
@@ -295,8 +303,8 @@ async def ot_report_driver_callback(update, context):
                 ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
                 t200 += h
 
-    ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
-    ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
+    ot150.sort(key=lambda x: datetime.strptime(x[0], "%Y-%m-%d %H:%M:%S"))
+    ot200.sort(key=lambda x: datetime.strptime(x[0], "%Y-%m-%d %H:%M:%S"))
 
     out = io.StringIO()
     w = csv.writer(out)
