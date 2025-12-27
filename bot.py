@@ -235,7 +235,7 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    # ✅ Telegram 选择的就是 Username
+    # Telegram 里选中的 Username
     username = query.data.split(":", 1)[1].strip()
 
     ws = open_worksheet("OT Record")
@@ -252,23 +252,30 @@ async def ot_report_driver_callback(update, context):
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
-    # ✅ 工资周期：16 号 04:00 → 下月 16 号 04:00
-    now = _now_dt()
+    # 🔴 统一用 naive datetime
+    now = _now_dt().replace(tzinfo=None)
+
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
     if now < start_window:
         start_window = (start_window - timedelta(days=31)).replace(day=16)
 
-    end_window = (
-        start_window.replace(year=start_window.year + 1, month=1)
-        if start_window.month == 12
-        else start_window.replace(month=start_window.month + 1)
-    ).replace(hour=4, minute=0, second=0, microsecond=0)
+    if start_window.month == 12:
+        end_window = start_window.replace(
+            year=start_window.year + 1,
+            month=1,
+            hour=4, minute=0, second=0, microsecond=0
+        )
+    else:
+        end_window = start_window.replace(
+            month=start_window.month + 1,
+            hour=4, minute=0, second=0, microsecond=0
+        )
 
     ot150, ot200 = [], []
     t150 = t200 = 0.0
 
     for r in data:
-        # ✅ 唯一姓名匹配规则
+        # ✅ 唯一匹配条件：Name == Username
         if r[idx_name].strip() != username:
             continue
 
@@ -278,7 +285,7 @@ async def ot_report_driver_callback(update, context):
         except Exception:
             continue
 
-        # ✅ 只用 Start Date 判断周期
+        # ✅ 只用 Start Date 判断周期（你明确要求的）
         if not (start_window <= start_dt < end_window):
             continue
 
