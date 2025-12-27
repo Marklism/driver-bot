@@ -205,10 +205,6 @@ from datetime import datetime, timedelta
 import io, csv
 
 
-def _norm(s: str) -> str:
-    return s.strip().lower()
-
-
 async def ot_report_entry(update, context):
     driver_map = get_driver_map()   # Drivers.Username
     drivers = sorted(driver_map.keys())
@@ -241,7 +237,6 @@ async def ot_report_driver_callback(update, context):
 
     # Telegram 里选中的 Username
     username = query.data.split(":", 1)[1].strip()
-    username_n = _norm(username)
 
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
@@ -253,11 +248,10 @@ async def ot_report_driver_callback(update, context):
     idx_name = header.index("Name")
     idx_type = header.index("Type")
     idx_start = header.index("Start Date")
-    idx_end = header.index("End Date")
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
-    # === 结算周期：16号 04:00 ===
+    # ===== 16 号周期（只算 Start Date）=====
     now = _now_dt().replace(tzinfo=None)
 
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
@@ -265,23 +259,18 @@ async def ot_report_driver_callback(update, context):
         start_window = (start_window - timedelta(days=31)).replace(day=16)
 
     if start_window.month == 12:
-        end_window = start_window.replace(
-            year=start_window.year + 1,
-            month=1,
-            hour=4, minute=0, second=0, microsecond=0
-        )
+        end_window = start_window.replace(year=start_window.year + 1, month=1)
     else:
-        end_window = start_window.replace(
-            month=start_window.month + 1,
-            hour=4, minute=0, second=0, microsecond=0
-        )
+        end_window = start_window.replace(month=start_window.month + 1)
+
+    end_window = end_window.replace(hour=4, minute=0, second=0, microsecond=0)
 
     ot150, ot200 = [], []
     t150 = t200 = 0.0
 
     for r in data:
-        # ✅ 只按 Username 匹配
-        if _norm(r[idx_name]) != username_n:
+        # ✅ 唯一身份规则
+        if r[idx_name].strip() != username:
             continue
 
         try:
@@ -296,30 +285,27 @@ async def ot_report_driver_callback(update, context):
         try:
             m_h = float(r[idx_morning]) if r[idx_morning] else 0.0
             e_h = float(r[idx_evening]) if r[idx_evening] else 0.0
+            h = round(m_h + e_h, 2)
         except Exception:
             continue
 
+        if h <= 0:
+            continue
+
         if r[idx_type] == "150%":
-            h = m_h + e_h
-            if h <= 0:
-                continue
-            ot150.append([r[idx_start], r[idx_end], f"{h:.2f}"])
+            ot150.append([r[idx_start], "", f"{h:.2f}"])
             t150 += h
 
         elif r[idx_type] == "200%":
-            # 🔴 直接取 Evening OT（表里已算好）
-            h = e_h
-            if h <= 0:
-                continue
-            ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
+            ot200.append([r[idx_start], "", f"{h:.2f}"])
             t200 += h
 
     ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
     ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
 
+    # ===== 输出 CSV =====
     out = io.StringIO()
     w = csv.writer(out)
-
     w.writerow(["Driver", username])
     w.writerow([
         "Period",
@@ -351,7 +337,6 @@ async def ot_report_driver_callback(update, context):
         bio,
         caption=f"OT report for {username}"
     )
-
 
 # ===== END FIX =====
 
