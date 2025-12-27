@@ -1462,7 +1462,10 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     REPAIR_TAB: ["Plate", "Driver", "DateTime", "Amount", "Notes"],
     ODO_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Notes"],
 }
-
+try:
+    M_MANDATORY_COLS = len(HEADERS_BY_TAB.get(MISSIONS_TAB, []))
+except Exception:
+    M_MANDATORY_COLS = 12
 # Ensure OT-related tabs have canonical headers
 HEADERS_BY_TAB.setdefault(OT_TAB, OT_HEADERS)
 HEADERS_BY_TAB.setdefault(OT_RECORD_TAB, OT_RECORD_HEADERS)
