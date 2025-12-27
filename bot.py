@@ -205,6 +205,10 @@ from datetime import datetime, timedelta
 import io, csv
 
 
+def _norm(s: str) -> str:
+    return s.strip().lower()
+
+
 async def ot_report_entry(update, context):
     driver_map = get_driver_map()   # Drivers.Username
     drivers = sorted(driver_map.keys())
@@ -237,6 +241,7 @@ async def ot_report_driver_callback(update, context):
 
     # Telegram 里选中的 Username
     username = query.data.split(":", 1)[1].strip()
+    username_n = _norm(username)
 
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
@@ -252,7 +257,7 @@ async def ot_report_driver_callback(update, context):
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
-    # 🔴 统一用 naive datetime
+    # === 结算周期：16号 04:00 ===
     now = _now_dt().replace(tzinfo=None)
 
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
@@ -275,17 +280,16 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        # ✅ 唯一匹配条件：Name == Username
-        if r[idx_name].strip() != username:
+        # ✅ 只按 Username 匹配
+        if _norm(r[idx_name]) != username_n:
             continue
 
         try:
             start_dt = datetime.fromisoformat(r[idx_start].strip())
-            end_dt = datetime.fromisoformat(r[idx_end].strip())
         except Exception:
             continue
 
-        # ✅ 只用 Start Date 判断周期（你明确要求的）
+        # ✅ 只用 Start Date 判断周期
         if not (start_window <= start_dt < end_window):
             continue
 
@@ -297,21 +301,25 @@ async def ot_report_driver_callback(update, context):
 
         if r[idx_type] == "150%":
             h = m_h + e_h
-            if h > 0:
-                ot150.append([r[idx_start], r[idx_end], f"{h:.2f}"])
-                t150 += h
+            if h <= 0:
+                continue
+            ot150.append([r[idx_start], r[idx_end], f"{h:.2f}"])
+            t150 += h
 
         elif r[idx_type] == "200%":
-            h = round((end_dt - start_dt).total_seconds() / 3600, 2)
-            if h > 0:
-                ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
-                t200 += h
+            # 🔴 直接取 Evening OT（表里已算好）
+            h = e_h
+            if h <= 0:
+                continue
+            ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
+            t200 += h
 
     ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
     ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
 
     out = io.StringIO()
     w = csv.writer(out)
+
     w.writerow(["Driver", username])
     w.writerow([
         "Period",
