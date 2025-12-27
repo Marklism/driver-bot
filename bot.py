@@ -295,14 +295,32 @@ from telegram.ext import ContextTypes
 import os
 from telegram import BotCommand
 
+OT_HOLIDAYS = {
+    "2026-01-01",
+    "2026-01-07",
+    "2026-02-16", "2026-02-17", "2026-02-18",
+    "2026-03-08", "2026-03-09",
+    "2026-04-14", "2026-04-15", "2026-04-16",
+    "2026-05-01", "2026-05-05", "2026-05-14",
+    "2026-06-18",
+    "2026-09-24",
+    "2026-10-10", "2026-10-11", "2026-10-12",
+    "2026-10-13", "2026-10-15", "2026-10-29",
+    "2026-11-09", "2026-11-23", "2026-11-24", "2026-11-25",
+    "2026-12-29",
+}
+
 def _validate_2026_holidays():
-    h2026 = [d for d in OT_HOLIDAYS if str(d).startswith("2026-")]
+    h2026 = sorted(d for d in OT_HOLIDAYS if d.startswith("2026-"))
     if len(h2026) != 26:
         raise RuntimeError(
-            f"[HOLIDAY FREEZE] 2026 holidays must be 26 days, got {len(h2026)}"
+            f"[HOLIDAY FREEZE] 2026 holidays must be 26 days, got {len(h2026)}: {h2026}"
         )
 
 _validate_2026_holidays()
+
+# Backward compatibility (IMPORTANT)
+HOLIDAYS = OT_HOLIDAYS
 
 def _is_holiday(dt: datetime) -> bool:
     return dt.strftime("%Y-%m-%d") in OT_HOLIDAYS
