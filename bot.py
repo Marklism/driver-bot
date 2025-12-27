@@ -1097,7 +1097,7 @@ class WorksheetProxy:
             return _callable
         return getattr(self._ws, name)
 # --- END: Google Sheets API queue, caching and Worksheet proxy helpers ---
-OT_RECORD_TAB =  "OT Records"
+OT_RECORD_TAB =  "OT Record"
 OT_RECORD_HEADERS = [
     "Name",
     "Type",
