@@ -201,19 +201,28 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
         reply_markup=reply_markup,
     )
 async def ot_report_entry(update, context):
-    driver_map = get_driver_map()              # {username: display_name}
-    drivers = sorted(driver_map.keys())        # 强制只用 Username
+    ws = open_worksheet(OT_RECORD_TAB)
+    rows = ws.get_all_values()
+    if len(rows) < 2:
+        await reply_private(update, context, "❌ No OT records.")
+        return
 
-    if not drivers:
+    header = rows[0]
+    idx_name = header.index("Name")
+
+    # 直接从 OT Record 取唯一 Name
+    names = sorted({r[idx_name].strip() for r in rows[1:] if r[idx_name].strip()})
+
+    if not names:
         await reply_private(update, context, "❌ No drivers found.")
         return
 
     keyboard = [
         [InlineKeyboardButton(
-            d,                                 # 按钮显示 Username（不再玩 display name）
-            callback_data=f"OTR_DRIVER:{d}"    # callback 只传 Username
+            name,
+            callback_data=f"OTR_DRIVER:{name}"
         )]
-        for d in drivers
+        for name in names
     ]
 
     await reply_private(
@@ -231,16 +240,7 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    # === 唯一身份：Username ===
-    driver = query.data.split(":", 1)[1].strip().lower()
-
-    # 所有合法司机（来自 Drivers.Username）
-    driver_map = get_driver_map()
-    valid_users = {u.strip().lower() for u in driver_map.keys()}
-
-    if driver not in valid_users:
-        await context.bot.send_message(query.from_user.id, "❌ Invalid driver.")
-        return
+    driver_name = query.data.split(":", 1)[1].strip()  # = OT Record.Name
 
     ws = open_worksheet(OT_RECORD_TAB)
     rows = ws.get_all_values()
@@ -256,7 +256,7 @@ async def ot_report_driver_callback(update, context):
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
-    # === 16th 04:00 window ===
+    # ===== 16th 04:00 window =====
     now = _now_dt()
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
     if now < start_window:
@@ -278,9 +278,8 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        # === 核心匹配逻辑（定稿）===
-        record_user = r[idx_name].strip().lower()
-        if record_user != driver:
+        # === 核心：严格匹配 Name ===
+        if r[idx_name].strip() != driver_name:
             continue
 
         try:
@@ -315,10 +314,9 @@ async def ot_report_driver_callback(update, context):
     ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
     ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
 
-    # === CSV 输出 ===
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["Driver", driver])
+    w.writerow(["Driver", driver_name])
     w.writerow([
         "Period",
         f"{start_window:%Y-%m-%d %H:%M} to {end_window:%Y-%m-%d %H:%M}"
@@ -342,44 +340,12 @@ async def ot_report_driver_callback(update, context):
     w.writerow(["GRAND TOTAL", "", f"{(t150 + t200):.2f}"])
 
     bio = io.BytesIO(out.getvalue().encode("utf-8"))
-    bio.name = f"OT_Report_{driver}.csv"
+    bio.name = f"OT_Report_{driver_name}.csv"
 
     await context.bot.send_document(
         query.from_user.id,
         bio,
-        caption=f"OT report for {driver}"
-    )
-    ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
-    ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
-
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(["Driver", driver])
-    w.writerow(["Period", f"{start_window:%Y-%m-%d %H:%M} to {end_window:%Y-%m-%d %H:%M}"])
-    w.writerow([])
-
-    if ot150:
-        w.writerow(["150% OT"])
-        w.writerow(["Start", "End", "Hours"])
-        w.writerows(ot150)
-        w.writerow(["Subtotal", "", "%.2f" % t150])
-        w.writerow([])
-
-    if ot200:
-        w.writerow(["200% OT"])
-        w.writerow(["Start", "End", "Hours"])
-        w.writerows(ot200)
-        w.writerow(["Subtotal", "", "%.2f" % t200])
-        w.writerow([])
-
-    w.writerow(["GRAND TOTAL", "", "%.2f" % (t150 + t200)])
-
-    bio = io.BytesIO(out.getvalue().encode("utf-8"))
-    bio.name = f"OT_Report_{driver}.csv"
-    await context.bot.send_document(
-        query.from_user.id,
-        bio,
-        caption=f"OT report for {driver}"
+        caption=f"OT report for {driver_name}"
     )
 
 # ===== END FIX =====
