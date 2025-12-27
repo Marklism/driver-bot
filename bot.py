@@ -235,9 +235,10 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    # Username = Name 列
+    # ===== 选中的司机（Username）=====
     username = query.data.split(":", 1)[1].strip()
 
+    # ===== 读取 OT Record =====
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
     if len(rows) < 2:
@@ -245,7 +246,6 @@ async def ot_report_driver_callback(update, context):
         return
 
     header, data = rows[0], rows[1:]
-
     idx_name = header.index("Name")
     idx_type = header.index("Type")
     idx_start = header.index("Start Date")
@@ -253,7 +253,7 @@ async def ot_report_driver_callback(update, context):
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
-    # ===== 16 号周期（只看 Start Date）=====
+    # ===== 16 号周期（只用于筛选）=====
     now = _now_dt().replace(tzinfo=None)
 
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
@@ -261,21 +261,26 @@ async def ot_report_driver_callback(update, context):
         start_window = (start_window - timedelta(days=31)).replace(day=16)
 
     if start_window.month == 12:
-        end_window = start_window.replace(year=start_window.year + 1, month=1)
+        end_window = start_window.replace(
+            year=start_window.year + 1, month=1,
+            hour=4, minute=0, second=0, microsecond=0
+        )
     else:
-        end_window = start_window.replace(month=start_window.month + 1)
+        end_window = start_window.replace(
+            month=start_window.month + 1,
+            hour=4, minute=0, second=0, microsecond=0
+        )
 
-    end_window = end_window.replace(hour=4, minute=0, second=0, microsecond=0)
-
+    # ===== 结果容器 =====
     ot150, ot200 = [], []
     t150 = t200 = 0.0
 
     for r in data:
-        # 1️⃣ Name 筛选
+        # 1️⃣ Name 必须等于 Username
         if r[idx_name].strip() != username:
             continue
 
-        # 2️⃣ Start Date 筛选
+        # 2️⃣ 只用 Start Date 判断周期
         try:
             start_dt = datetime.fromisoformat(r[idx_start].strip())
         except Exception:
@@ -284,31 +289,36 @@ async def ot_report_driver_callback(update, context):
         if not (start_window <= start_dt < end_window):
             continue
 
-        # 3️⃣ 直接取已算好的 OT
+        # 3️⃣ 直接引用 Excel 已算好的 OT
         try:
-            m = float(r[idx_morning]) if r[idx_morning] else 0.0
-            e = float(r[idx_evening]) if r[idx_evening] else 0.0
-            h = round(m + e, 2)
+            morning = float(r[idx_morning]) if r[idx_morning] else 0.0
+            evening = float(r[idx_evening]) if r[idx_evening] else 0.0
         except Exception:
             continue
 
-        if h <= 0:
+        hours = morning + evening
+        if hours <= 0:
             continue
 
-        row = [r[idx_start], r[idx_end], f"{h:.2f}"]
+        row = [
+            r[idx_start],
+            r[idx_end],
+            f"{hours:.2f}"
+        ]
 
-        # 4️⃣ 按 Type 分组
+        # 4️⃣ 按 Type 分组（不参与任何计算）
         if r[idx_type] == "150%":
             ot150.append(row)
-            t150 += h
+            t150 += hours
         elif r[idx_type] == "200%":
             ot200.append(row)
-            t200 += h
+            t200 += hours
 
-    ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
-    ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
+    # ===== 排序（等同 Excel 按 Start Date）=====
+    ot150.sort(key=lambda x: x[0])
+    ot200.sort(key=lambda x: x[0])
 
-    # ===== 输出 CSV（等同 Excel 报表）=====
+    # ===== 输出 CSV =====
     out = io.StringIO()
     w = csv.writer(out)
 
