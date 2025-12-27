@@ -206,9 +206,6 @@ def build_driver_alias_map():
     {
         username_lower: {所有可能出现在 OT Record.Name 里的值}
     }
-    规则：
-    - Username 本身
-    - 如果有空格，自动加入首词（Mao Mong → Mao）
     """
     ws = open_worksheet("Drivers")
     rows = ws.get_all_values()
@@ -217,26 +214,32 @@ def build_driver_alias_map():
 
     header = rows[0]
     idx_username = header.index("Username")
+    idx_name = header.index("Name")   # 🔴 关键：显示名来源
 
     alias_map = {}
 
     for r in rows[1:]:
-        if len(r) <= idx_username:
+        if len(r) <= max(idx_username, idx_name):
             continue
 
-        u = r[idx_username].strip()
-        if not u:
+        username = r[idx_username].strip()
+        name = r[idx_name].strip()
+
+        if not username or not name:
             continue
 
-        ul = u.lower()
-        s = set()
-        s.add(ul)
+        u = username.lower()
+        aliases = set()
 
-        parts = ul.split()
+        # 显示名原样
+        aliases.add(name.lower())
+
+        # Mao Mong → Mao
+        parts = name.lower().split()
         if len(parts) > 1:
-            s.add(parts[0])
+            aliases.add(parts[0])
 
-        alias_map[ul] = s
+        alias_map[u] = aliases
 
     return alias_map
 
@@ -271,13 +274,19 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    # Telegram 里选中的 = Drivers.Username
-    username = query.data.split(":", 1)[1].strip()
-    username_l = username.lower()
+    # Telegram 选中的 Username
+    username = query.data.split(":", 1)[1].strip().lower()
 
-    # Username → Name 别名集合
+    # Username → 显示名 alias 集合
     alias_map = build_driver_alias_map()
-    valid_names = alias_map.get(username_l, {username_l})
+    valid_names = alias_map.get(username)
+
+    if not valid_names:
+        await context.bot.send_message(
+            query.from_user.id,
+            f"❌ No driver mapping for {username}"
+        )
+        return
 
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
@@ -298,17 +307,11 @@ async def ot_report_driver_callback(update, context):
     if now < start_window:
         start_window = (start_window - timedelta(days=31)).replace(day=16)
 
-    if start_window.month == 12:
-        end_window = start_window.replace(
-            year=start_window.year + 1,
-            month=1,
-            hour=4, minute=0, second=0, microsecond=0
-        )
-    else:
-        end_window = start_window.replace(
-            month=start_window.month + 1,
-            hour=4, minute=0, second=0, microsecond=0
-        )
+    end_window = (
+        start_window.replace(year=start_window.year + 1, month=1)
+        if start_window.month == 12
+        else start_window.replace(month=start_window.month + 1)
+    ).replace(hour=4, minute=0, second=0, microsecond=0)
 
     ot150, ot200 = [], []
     t150 = t200 = 0.0
