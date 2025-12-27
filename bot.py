@@ -1906,31 +1906,24 @@ def normalize_fin_type(typ: str) -> Optional[str]:
     return None
 
 def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
-    """
-    Find last mileage for a plate from FUEL_TAB only, scanning from bottom to top (previous record).
-    """
-    last_record = None  # (datetime, mileage)
-
     try:
         ws = open_worksheet(FUEL_TAB)
         rows = ws.get_all_values()
         if len(rows) < 2:
             return None
 
-        header = rows[0]
-        idx_plate = header.index("Plate")
-        idx_mileage = header.index("Mileage")
+        # 固定列号（不要再用 header.index）
+        IDX_PLATE = 0      # A
+        IDX_MILEAGE = 3    # D
 
-        # 从下往上找“上一条”
         for r in reversed(rows[1:]):
-            if len(r) <= idx_mileage:
+            if len(r) <= IDX_MILEAGE:
                 continue
 
-            rec_plate = str(r[idx_plate]).strip()
-            mileage_cell = str(r[idx_mileage]).strip()
-
-            if rec_plate != plate:
+            if str(r[IDX_PLATE]).strip() != plate:
                 continue
+
+            mileage_cell = str(r[IDX_MILEAGE]).strip()
             if not mileage_cell:
                 continue
 
@@ -1944,7 +1937,7 @@ def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
     except Exception:
         logger.exception("Failed to find last mileage for plate")
         return None
-
+        
 def record_finance_odo_fuel(
     plate: str,
     mileage: str,
