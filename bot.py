@@ -210,7 +210,7 @@ async def ot_report_entry(update, context):
 
     keyboard = [
         [InlineKeyboardButton(
-            driver_map[d],                 # 显示名（和 mission 一样）
+            driver_map.get(d) or d,                 # 显示名（和 mission 一样）
             callback_data=f"OTR_DRIVER:{d}"  # 系统 driver（用于筛数据）
         )]
         for d in drivers
