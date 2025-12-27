@@ -202,13 +202,26 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
     )
 
 async def ot_report_entry(update, context):
-    driver_map = get_driver_map()
+    driver_map = get_driver_map()   # {system_driver: display_name}
     drivers = sorted(driver_map.keys())
     if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
         return
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"OTR_DRIVER:{d}")] for d in drivers]
-    await reply_private(update, context, "Select driver:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    keyboard = [
+        [InlineKeyboardButton(
+            driver_map[d],                 # 显示名（和 mission 一样）
+            callback_data=f"OTR_DRIVER:{d}"  # 系统 driver（用于筛数据）
+        )]
+        for d in drivers
+    ]
+
+    await reply_private(
+        update,
+        context,
+        "Select driver:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def ot_report_driver_callback(update, context):
     query = update.callback_query
@@ -218,7 +231,8 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    driver = query.data.split(":", 1)[1]
+    driver = query.data.split(":", 1)[1]   # system driver（与 mission 对齐）
+
     ws = open_worksheet(OT_RECORD_TAB)
     rows = ws.get_all_values()
     if len(rows) < 2:
@@ -237,6 +251,7 @@ async def ot_report_driver_callback(update, context):
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
     if now < start_window:
         start_window = (start_window - timedelta(days=31)).replace(day=16)
+
     if start_window.month == 12:
         end_window = start_window.replace(
             year=start_window.year + 1,
@@ -253,14 +268,12 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
+        # 🔴 关键：与 mission 对齐，用 system driver 精确匹配
+        if r[idx_name].strip() != driver:
+            continue
+
         try:
-            start_str = r[idx_start].strip()
-            if not start_str:
-                continue
-            try:
-                start_dt = datetime.fromisoformat(start_str)
-            except Exception:
-                continue
+            start_dt = datetime.fromisoformat(r[idx_start].strip())
             if not (start_window <= start_dt < end_window):
                 continue
         except Exception:
@@ -273,7 +286,6 @@ async def ot_report_driver_callback(update, context):
         except Exception:
             continue
 
-        
         if h <= 0:
             continue
 
@@ -283,8 +295,8 @@ async def ot_report_driver_callback(update, context):
         elif r[idx_type] == "200%":
             ot200.append(row); t200 += h
 
-    ot150.sort(key=lambda x: datetime.strptime(x[0], "%Y-%m-%d %H:%M:%S"))
-    ot200.sort(key=lambda x: datetime.strptime(x[0], "%Y-%m-%d %H:%M:%S"))
+    ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
+    ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -293,19 +305,20 @@ async def ot_report_driver_callback(update, context):
     w.writerow([])
 
     if ot150:
-        w.writerow(["150% OT"]); 
-        w.writerow(["Start","End","Hours"])
-        w.writerows(ot150); 
-        w.writerow(["Subtotal","","%.2f"%t150]); 
-        w.writerow([])
-    if ot200:
-        w.writerow(["200% OT"]); 
-        w.writerow(["Start","End","Hours"])
-        w.writerows(ot200); 
-        w.writerow(["Subtotal","","%.2f"%t200]); 
+        w.writerow(["150% OT"])
+        w.writerow(["Start", "End", "Hours"])
+        w.writerows(ot150)
+        w.writerow(["Subtotal", "", "%.2f" % t150])
         w.writerow([])
 
-    w.writerow(["GRAND TOTAL","","%.2f"%(t150+t200)])
+    if ot200:
+        w.writerow(["200% OT"])
+        w.writerow(["Start", "End", "Hours"])
+        w.writerows(ot200)
+        w.writerow(["Subtotal", "", "%.2f" % t200])
+        w.writerow([])
+
+    w.writerow(["GRAND TOTAL", "", "%.2f" % (t150 + t200)])
 
     bio = io.BytesIO(out.getvalue().encode("utf-8"))
     bio.name = f"OT_Report_{driver}.csv"
@@ -3579,7 +3592,7 @@ def register_ui_handlers(application):
     # Register NEW mission report handlers
     application.add_handler(CommandHandler("mission_report", mission_report_entry))
     application.add_handler(CallbackQueryHandler(mission_report_driver_callback, pattern="^MR_DRIVER:"))
-    application.add_handler(CallbackQueryHandler(plate_callback))
+    
     # Clock In/Out buttons handler
     application.add_handler(MessageHandler(filters.REPLY & filters.TEXT & (~filters.COMMAND), process_force_reply))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), location_or_staff))
@@ -3589,6 +3602,7 @@ def register_ui_handlers(application):
     
     # Debug command for runtime self-check
     application.add_handler(CommandHandler('debug_bot', debug_bot_command))
+    application.add_handler(CallbackQueryHandler(plate_callback))
     async def _set_cmds():
         try:
             await application.bot.set_my_commands([
