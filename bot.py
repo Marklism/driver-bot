@@ -1946,9 +1946,10 @@ def record_finance_odo_fuel(
     invoice: str = "",
     driver_paid: str = "",
 ) -> dict:
+    logger.error("### record_finance_odo_fuel CALLED ###")
     try:
         ws = open_worksheet(FUEL_TAB)
-
+        ensure_sheet_headers_match(ws, HEADERS_BY_TAB[FUEL_TAB])
         # 强制刷新，避免缓存
         rows = ws.get_all_values()
 
@@ -2001,7 +2002,33 @@ def record_finance_odo_fuel(
         logger.exception("Failed to record fuel")
         return {"ok": False, "message": str(e)}
 
+async def handle_fuel(update, context):
+    try:
+        parts = update.message.text.strip().split()
+        plate = parts[1]
+        km = parts[2]
+        fuel_amt = parts[3]
 
+        res = record_finance_odo_fuel(
+            plate=plate,
+            mileage=km,
+            fuel_cost=fuel_amt,
+            by_user=update.effective_user.username or "",
+            invoice="",
+            driver_paid="",
+        )
+
+        if not res.get("ok"):
+            await update.message.reply_text(f"Fuel record failed: {res.get('message')}")
+            return
+
+        await update.message.reply_text(
+            f"Recorded {plate}: {res['mileage']}KM and ${fuel_amt} fuel. "
+            f"Delta {res.get('delta','')} km."
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"Fuel error: {e}")
 
 def record_parking(plate: str, amount: str, by_user: str = "", notes: str = "") -> dict:
     try:
@@ -2279,10 +2306,21 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 else:
                     fuel_amt = am.group(1)
                 km = pending_multi.get("km", "")
-                try:
-                    res = record_finance_odo_fuel(plate, km, fuel_amt, by_user=user.username or "", invoice=invoice, driver_paid=driver_paid)
-                except Exception:
-                    res = {"ok": False}
+                res = record_finance_odo_fuel(
+                    plate,
+                    km,
+                    fuel_amt,
+                    by_user=user.username or "",
+                    invoice=invoice,
+                    driver_paid=driver_paid
+                )
+                if not res.get("ok"):
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=f"Fuel record FAILED: {res.get('message','unknown error')}"
+                    )
+                    context.user_data.pop("pending_fin_multi", None)
+                    return
                 try:
                     await update.effective_message.delete()
                 except Exception:
@@ -4995,36 +5033,6 @@ from telegram.ext import CallbackQueryHandler, CommandHandler
 
 # ===================== HOTFIX OVERRIDES (AUTO-GENERATED) =====================
 # This section intentionally overrides logic without touching original code.
-
-async def handle_fuel(update, context):
-    try:
-        text = update.message.text.strip()
-        parts = text.split()
-
-        plate = parts[1]
-        km = parts[2]
-        fuel_amt = parts[3] if len(parts) > 3 else ""
-
-        res = record_finance_odo_fuel(
-            plate=plate,
-            mileage=km,
-            fuel_cost=fuel_amt,
-            by_user=update.effective_user.username or "",
-            invoice="",
-            driver_paid="",
-        )
-
-        if not res.get("ok"):
-            await update.message.reply_text(f"Fuel record failed: {res.get('message')}")
-            return
-
-        await update.message.reply_text(
-            f"Recorded {plate}: {res['mileage']}KM and ${fuel_amt} fuel. "
-            f"Delta {res.get('delta','')} km."
-        )
-
-    except Exception as e:
-        await update.message.reply_text(f"Fuel error: {e}")
 
 
 # ---- FIX 2: Weekend / Holiday OT must be calculated ----
