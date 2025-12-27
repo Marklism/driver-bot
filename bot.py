@@ -274,8 +274,6 @@ async def ot_report_driver_callback(update, context):
 
         try:
             start_dt = datetime.fromisoformat(r[idx_start].strip())
-            if not (start_window <= start_dt < end_window):
-                continue
         except Exception:
             continue
 
