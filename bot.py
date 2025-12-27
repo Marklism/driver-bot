@@ -4046,19 +4046,39 @@ def ensure_env():
 
 def schedule_daily_summary(application):
     try:
-        if SUMMARY_CHAT_ID:
-            if ZoneInfo and SUMMARY_TZ:
-                tz = ZoneInfo(SUMMARY_TZ)
-            else:
-                tz = None
-            job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
-            try:
-                application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
-            except Exception:
-                pass
-            logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
-        else:
+        if not SUMMARY_CHAT_ID:
             logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
+            return
+
+        if not getattr(application, "job_queue", None):
+            logger.warning("Job queue not available; daily summary not scheduled.")
+            return
+
+        tz = None
+        if ZoneInfo and SUMMARY_TZ:
+            try:
+                tz = ZoneInfo(SUMMARY_TZ)
+            except Exception:
+                logger.exception("Invalid SUMMARY_TZ: %s; fallback to system timezone", SUMMARY_TZ)
+                tz = None
+
+        job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
+
+        application.job_queue.run_daily(
+            send_daily_summary_job,
+            time=job_time,
+            context={"chat_id": SUMMARY_CHAT_ID},
+            name="daily_summary",
+            tz=tz,
+        )
+
+        logger.info(
+            "Scheduled daily summary at %02d:00 (%s) to %s",
+            SUMMARY_HOUR,
+            SUMMARY_TZ,
+            SUMMARY_CHAT_ID,
+        )
+
     except Exception:
         logger.exception("Failed to schedule daily summary.")
 
@@ -4140,33 +4160,36 @@ def main():
     check_deployment_requirements()
     ensure_env()
 
-    # --- Set Telegram slash commands on startup (uses direct HTTP API to avoid coroutine issues) ---
+    # --- Set Telegram slash commands on startup (HTTP API, non-async) ---
     try:
         token_tmp = os.getenv("BOT_TOKEN")
         if token_tmp:
+            cmds_payload = [
+                {"command": "start", "description": "Show menu"},
+                {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
+                {"command": "leave", "description": "Request leave"},
+                {"command": "finance", "description": "Add finance record"},
+                {"command": "mission_end", "description": "End mission"},
+                {"command": "clock_in", "description": "Clock In"},
+                {"command": "clock_out", "description": "Clock Out"},
+            ]
             try:
-                # Build command list for Telegram API
-                cmds_payload = [
-                    {"command": "start", "description": "Show menu"},
-                    {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
-                    {"command": "leave", "description": "Request leave"},
-                    {"command": "finance", "description": "Add finance record"},
-                    {"command": "mission_end", "description": "End mission"},
-                    {"command": "clock_in", "description": "Clock In"},
-                    {"command": "clock_out", "description": "Clock Out"}
-                ]
-                try:
-                    import json, urllib.request
-                    url = f"https://api.telegram.org/bot{token_tmp}/setMyCommands"
-                    data = json.dumps({ "commands": cmds_payload }).encode("utf-8")
-                    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        resp_text = resp.read().decode("utf-8", errors="ignore")
-                        print("Set my commands via HTTP API:", resp_text[:200])
-                except Exception as e:
-                    print("Warning: failed to set Telegram commands via HTTP API:", e)
+                import json
+                import urllib.request
+
+                url = f"https://api.telegram.org/bot{token_tmp}/setMyCommands"
+                data = json.dumps({"commands": cmds_payload}).encode("utf-8")
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    resp_text = resp.read().decode("utf-8", errors="ignore")
+                    print("Set my commands via HTTP API:", resp_text[:200])
             except Exception as e:
-                print("Warning: could not prepare setting commands:", e)
+                print("Warning: failed to set Telegram commands via HTTP API:", e)
     except Exception:
         pass
     # --- end set commands ---
