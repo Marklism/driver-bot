@@ -282,7 +282,8 @@ async def ot_report_driver_callback(update, context):
 
         # 2️⃣ 只用 Start Date 判断周期
         try:
-            start_dt = datetime.fromisoformat(r[idx_start].strip())
+            start_str = r[idx_start].strip().replace("/", "-")
+            start_dt = datetime.fromisoformat(start_str)
         except Exception:
             continue
 
