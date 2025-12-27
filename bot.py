@@ -201,28 +201,6 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
         reply_markup=reply_markup,
     )
 
-async def ot_report_entry(update, context):
-    driver_map = get_driver_map()   # {system_driver: display_name}
-    drivers = sorted(driver_map.keys())
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton(
-            driver_map.get(d) or d,                 # 显示名（和 mission 一样）
-            callback_data=f"OTR_DRIVER:{d}"  # 系统 driver（用于筛数据）
-        )]
-        for d in drivers
-    ]
-
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
 async def ot_report_driver_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -231,7 +209,9 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    driver = query.data.split(":", 1)[1]   # system driver（与 mission 对齐）
+    driver = query.data.split(":", 1)[1]   # system driver
+    driver_map = get_driver_map()
+    display_name = driver_map.get(driver) or driver
 
     ws = open_worksheet(OT_RECORD_TAB)
     rows = ws.get_all_values()
@@ -268,37 +248,45 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        # 🔴 关键：与 mission 对齐，用 system driver 精确匹配
-        if r[idx_name].strip() != driver:
+        # 按显示名筛选（与写入 OT Record 的 Name 列一致）
+        if r[idx_name].strip() != display_name:
             continue
 
         try:
             start_dt = datetime.fromisoformat(r[idx_start].strip())
+            end_dt = datetime.fromisoformat(r[idx_end].strip())
+            check_dt = end_dt if r[idx_type] == "200%" else start_dt
+            if not (start_window <= check_dt < end_window):
+                continue
         except Exception:
             continue
 
         try:
             m_h = float(r[idx_morning]) if r[idx_morning] else 0.0
             e_h = float(r[idx_evening]) if r[idx_evening] else 0.0
-            h = m_h + e_h
         except Exception:
             continue
 
-        if h <= 0:
-            continue
-
-        row = [r[idx_start], r[idx_end], f"{h:.2f}"]
         if r[idx_type] == "150%":
-            ot150.append(row); t150 += h
+            h = m_h + e_h
+            if h <= 0:
+                continue
+            ot150.append([r[idx_start], r[idx_end], f"{h:.2f}"])
+            t150 += h
+
         elif r[idx_type] == "200%":
-            ot200.append(row); t200 += h
+            h = round((end_dt - start_dt).total_seconds() / 3600, 2)
+            if h <= 0:
+                continue
+            ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
+            t200 += h
 
     ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
     ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
 
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["Driver", driver])
+    w.writerow(["Driver", display_name])
     w.writerow(["Period", f"{start_window:%Y-%m-%d %H:%M} → {end_window:%Y-%m-%d %H:%M}"])
     w.writerow([])
 
@@ -319,8 +307,12 @@ async def ot_report_driver_callback(update, context):
     w.writerow(["GRAND TOTAL", "", "%.2f" % (t150 + t200)])
 
     bio = io.BytesIO(out.getvalue().encode("utf-8"))
-    bio.name = f"OT_Report_{driver}.csv"
-    await context.bot.send_document(query.from_user.id, bio, caption=f"OT report for {driver}")
+    bio.name = f"OT_Report_{display_name}.csv"
+    await context.bot.send_document(
+        query.from_user.id,
+        bio,
+        caption=f"OT report for {display_name}"
+    )
 
 # ===== END FIX =====
 
