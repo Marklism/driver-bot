@@ -3708,7 +3708,6 @@ def _report_entry_self_check(application):
 
 
 def main():
-    check_deployment_requirements()
     ensure_env()
 
     # --- Set Telegram slash commands on startup (HTTP API, non-async) ---
