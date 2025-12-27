@@ -364,6 +364,82 @@ O_IDX_NOTE = 5
 # ---------------------------------------------------------
 #  OT SECTION — Clock In/Out + OT Calculation
 # ---------------------------------------------------------
+def hours(td):
+    return round(td.total_seconds() / 3600, 2)
+def split_ot_segments(start_dt, end_dt):
+    segments = []
+    cur = start_dt
+    if end_dt < start_dt:
+        end_dt = end_dt + timedelta(days=1)
+
+    while cur < end_dt:
+        if cur.hour < 4:
+            cut = cur.replace(hour=4, minute=0, second=0)
+        elif cur.hour < 23 or (cur.hour == 23 and cur.minute <= 59):
+            cut = cur.replace(hour=23, minute=59, second=59)
+        else:
+            cut = (cur + timedelta(days=1)).replace(hour=4, minute=0, second=0)
+
+        if cut > end_dt:
+            cut = end_dt
+
+        segments.append((cur, cut))
+        cur = cut
+
+    return segments
+def weekday_ot(start_dt, end_dt):
+    records = []
+
+    if 4 < start_dt.hour < 7:
+        ot_end = start_dt.replace(hour=8, minute=0, second=0)
+        records.append(("150%", start_dt, ot_end, hours(ot_end-start_dt), 0))
+
+    if end_dt.hour > 18 or (end_dt.hour == 18 and end_dt.minute >= 30):
+        ot_start = end_dt.replace(hour=18, minute=0, second=0)
+        records.append(("150%", ot_start, end_dt, 0, hours(end_dt-ot_start)))
+
+    return records
+
+def weekday_crossday_ot(start_dt, end_dt):
+    records = []
+    cur = start_dt
+
+    while cur < end_dt:
+        if cur.hour >= 18:
+            cut = cur.replace(hour=23, minute=59, second=59)
+            if cut > end_dt:
+                cut = end_dt
+            records.append(("150%", cur, cut, 0, hours(cut-cur)))
+        elif cur.hour < 4:
+            ot_type = "200%" if _is_weekend(cur) or _is_holiday(cur) else "150%"
+            cut = cur.replace(hour=4, minute=0, second=0)
+            if cut > end_dt:
+                cut = end_dt
+            records.append((ot_type, cur, cut, hours(cut-cur), 0))
+        cur = cut
+
+    return records
+
+def weekend_ot(start_dt, end_dt, has_clock_in):
+    if not has_clock_in:
+        return None
+
+    records = []
+    cur = start_dt
+
+    while cur < end_dt:
+        if cur.hour < 4 and not (_is_weekend(cur) or _is_holiday(cur)):
+            cut = cur.replace(hour=4, minute=0, second=0)
+            if cut > end_dt:
+                cut = end_dt
+            records.append(("150%", cur, cut, hours(cut-cur), 0))
+        else:
+            cut = end_dt
+            records.append(("200%", cur, cut, 0, hours(cut-cur)))
+        cur = cut
+
+    return records
+
 
 def record_clock_entry(driver: str, action: str, note: str = ""):
     dt = _now_dt()
@@ -403,49 +479,7 @@ def get_last_clock_entry(driver: str):
 def _is_weekend(dt: datetime) -> bool:
     return dt.weekday() >= 5  # 5=Sat,6=Sun
 
-def compute_ot_for_shift(start_dt: datetime, end_dt: datetime, is_holiday: bool = False):
-    """Return total OT hours for one shift, possibly crossing midnight."""
-    if end_dt < start_dt:
-        end_dt = end_dt + timedelta(days=1)
 
-    total_ot = 0.0
-
-    dt = start_dt
-    while dt < end_dt:
-        next_day = (dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        segment_end = min(next_day, end_dt)
-
-        seg_is_weekend = _is_weekend(dt)
-        seg_is_holiday = is_holiday
-
-        if seg_is_weekend or seg_is_holiday:
-            hours = (segment_end - dt).total_seconds() / 3600
-            total_ot += hours
-
-# ============================================================
-# SECTION 3 — Clock In / Clock Out
-# Purpose:
-# - Driver attendance tracking
-# - Timestamp source for OT and Mission
-# Source:
-# - debug verbatim
-# ============================================================
-        else:
-            t7 = dt.replace(hour=7, minute=0, second=0, microsecond=0)
-            if dt < t7:
-                ot_morning = (min(segment_end, t7) - dt).total_seconds() / 3600
-                total_ot += max(ot_morning, 0)
-
-            t18 = dt.replace(hour=18, minute=0, second=0, microsecond=0)
-            t1830 = dt.replace(hour=18, minute=30, second=0, microsecond=0)
-
-            if segment_end > t1830:
-                ot_evening = (segment_end - t18).total_seconds() / 3600
-                total_ot += max(ot_evening, 0)
-
-        dt = segment_end
-
-    return round(total_ot, 2)
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -492,13 +526,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     is_weekend = _is_weekend(shift_ref_dt)
     is_holiday = _is_holiday(shift_ref_dt)
     is_normal_weekday = (not is_weekend) and (not is_holiday)
-    
-    morning_hours = 0.0
-    evening_hours = 0.0
-    total_ot = 0.0
-    ot_type = ""
-    note = ""
-    should_notify = False
+    records = []
 
     # Helper: append one OT record row
     def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
@@ -509,10 +537,11 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 ensure_sheet_headers_match(ws, OT_RECORD_HEADERS)
             except Exception:
                 pass
+
             day_str = (start_dt or end_dt).strftime("%Y-%m-%d") if (start_dt or end_dt) else ""
             row = [
-                driver,                      # Name
-                ot_type_str,                 # Type 150% / 200%
+                driver,
+                ot_type_str,
                 start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
                 end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
                 day_str,
@@ -520,94 +549,52 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 f"{evening_h:.2f}" if evening_h > 0 else "",
                 note_str,
             ]
+
             try:
                 ws.append_row(row, value_input_option="USER_ENTERED")
             except Exception:
                 ws.append_row(row)
+
         except Exception:
             logger.exception("Failed to append OT record row for %s", driver)
 
-    # --- Normal weekdays OT rules ---
-    if is_normal_weekday:
-        if action == "IN":
-            # Rule 2: IN between (04:00, 07:00)
-            t4 = ts_dt.replace(hour=4, minute=0, second=0, microsecond=0)
-            t7 = ts_dt.replace(hour=7, minute=0, second=0, microsecond=0)
-            if t4 < ts_dt < t7:
-                end_morning = ts_dt.replace(hour=8, minute=0, second=0, microsecond=0)
-                morning_hours = max((end_morning - ts_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(morning_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday morning OT (Clock In)"
-                    append_ot_record(ts_dt, end_morning, total_ot, 0.0, ot_type, note)
-                    should_notify = True
-        else:
-            # action == OUT
-            h = ts_dt.hour + ts_dt.minute / 60.0
-            # Rule 1: OUT between [00:00, 04:00)
-            if 0 <= h < 4:
-                start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                morning_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(morning_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday early-morning OT (after midnight)"
-                    append_ot_record(start_dt, ts_dt, total_ot, 0.0, ot_type, note)
-                    should_notify = True
-            # Rule 5: OUT >= 18:30
-            elif ts_dt.hour > 18 or (ts_dt.hour == 18 and ts_dt.minute >= 30):
-                start_dt = ts_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-                evening_hours = max((ts_dt - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(evening_hours, 2)
-                if total_ot > 0:
-                    ot_type = "150%"
-                    note = "Weekday evening OT"
-                    append_ot_record(start_dt, ts_dt, 0.0, total_ot, ot_type, note)
-                    should_notify = True
-            elif ts_dt.hour < 4:
-                start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                morning_hours = (ts_dt - start_dt).total_seconds() / 3600.0
-                morning_hours = max(morning_hours, 0)
-                if morning_hours > 0:
-                    ot_type = "150%"
-                    note = "Weekday cross-day morning OT"
-                    append_ot_record(start_dt, ts_dt, morning_hours, 0.0, ot_type, note)
-                    total_ot = round(morning_hours, 2)
-                    should_notify = True
+    # ===== OT calculation starts here =====
+    if action == "OUT":
 
-    # --- Weekend / Holiday OT rules ---
-    # --- Weekend / Holiday OT rules (STRICT TABLE RULE) ---
-    else:
-        if action == "OUT":
-            if not last or last[O_IDX_ACTION] != "IN":
-                # No clock-in record today
-                should_notify = True
-                total_ot = 0.0
+        if not last or last[O_IDX_ACTION] != "IN":
+            append_ot_record(
+                None,
+                ts_dt,
+                0,
+                0,
+                "200%",
+                "Missing clock-in, manual adjustment required"
+            )
+            return
+
+        start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+        end_dt = ts_dt
+
+        if is_normal_weekday:
+            if end_dt.date() == start_dt.date():
+                records = weekday_ot(start_dt, end_dt)
             else:
-                try:
-                    start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    start_dt = None
+                records = weekday_crossday_ot(start_dt, end_dt)
+        else:
+            records = weekend_ot(start_dt, end_dt, True)
 
-                if start_dt:
-                    end_dt = ts_dt if ts_dt >= start_dt else ts_dt + timedelta(days=1)
-                    dur = (end_dt - start_dt).total_seconds() / 3600.0
-                    dur = round(max(dur, 0), 2)
+        if records:
+            for ot_type, s, e, m_h, e_h in records:
+                append_ot_record(
+                    s,
+                    e,
+                    m_h,
+                    e_h,
+                    ot_type,
+                    "Auto OT"
+                )
 
-                    if dur > 0:
-                        append_ot_record(
-                            start_dt,
-                            end_dt,
-                            0.0,
-                            dur,
-                            "200%",
-                            "Weekend/Holiday full-shift OT",
-                        )
-                        total_ot = dur
-                        should_notify = True
 
-   
 # Edit the inline-button message as a confirmation
 
     try:
@@ -1979,24 +1966,7 @@ def record_finance_odo_fuel(
             m_int = int(re.search(r"(\d+)", str(mileage).replace(",", "")).group(1))
         except Exception:
             return {"ok": False, "message": "Invalid mileage"}
-
-        # -------------------------
-        # 从 Fuel tab 找“上一条里程”
-        # （只认 Fuel tab，不碰 ODO tab）
-        # -------------------------
-        prev_m = None
-        if len(rows) > 1:
-            for r in reversed(rows[1:]):
-                if len(r) >= 4 and str(r[0]).strip() == plate:
-                    try:
-                        prev_m = int(re.search(r"(\d+)", r[3].replace(",", "")).group(1))
-                        break
-                    except Exception:
-                        continue
-
-        # -------------------------
-        # 计算 delta km
-        # -------------------------
+        prev_m = _find_last_mileage_for_plate(plate)
         delta = ""
         if prev_m is not None:
             if m_int < prev_m:
