@@ -482,11 +482,17 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         ts_dt = datetime.strptime(rec[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
     except Exception:
         ts_dt = _now_dt()
+    shift_ref_dt = ts_dt
+    if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
+        try:
+            shift_ref_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            shift_ref_dt = ts_dt
 
-    is_weekend = _is_weekend(ts_dt)
-    is_holiday = _is_holiday(ts_dt)
+    is_weekend = _is_weekend(shift_ref_dt)
+    is_holiday = _is_holiday(shift_ref_dt)
     is_normal_weekday = (not is_weekend) and (not is_holiday)
-
+    
     morning_hours = 0.0
     evening_hours = 0.0
     total_ot = 0.0
@@ -559,30 +565,47 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                     note = "Weekday evening OT"
                     append_ot_record(start_dt, ts_dt, 0.0, total_ot, ot_type, note)
                     should_notify = True
+            elif ts_dt.hour < 4:
+                start_dt = ts_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                morning_hours = (ts_dt - start_dt).total_seconds() / 3600.0
+                morning_hours = max(morning_hours, 0)
+                if morning_hours > 0:
+                    ot_type = "150%"
+                    note = "Weekday cross-day morning OT"
+                    append_ot_record(start_dt, ts_dt, morning_hours, 0.0, ot_type, note)
+                    total_ot = round(morning_hours, 2)
+                    should_notify = True
 
     # --- Weekend / Holiday OT rules ---
+    # --- Weekend / Holiday OT rules (STRICT TABLE RULE) ---
     else:
-        # Only act on OUT; IN just records time
         if action == "OUT":
-            start_dt = None
-            if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
+            if not last or last[O_IDX_ACTION] != "IN":
+                # No clock-in record today
+                should_notify = True
+                total_ot = 0.0
+            else:
                 try:
                     start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
                 except Exception:
                     start_dt = None
-            if start_dt is not None:
-                # Full shift as OT
-                if ts_dt < start_dt:
-                    ts_dt_adj = ts_dt + timedelta(days=1)
-                else:
-                    ts_dt_adj = ts_dt
-                dur = max((ts_dt_adj - start_dt).total_seconds() / 3600.0, 0)
-                total_ot = round(dur, 2)
-                if total_ot > 0:
-                    ot_type = "200%"
-                    note = "Weekend/Holiday full-shift OT"
-                    append_ot_record(start_dt, ts_dt_adj, 0.0, total_ot, ot_type, note)
-                    should_notify = True
+
+                if start_dt:
+                    end_dt = ts_dt if ts_dt >= start_dt else ts_dt + timedelta(days=1)
+                    dur = (end_dt - start_dt).total_seconds() / 3600.0
+                    dur = round(max(dur, 0), 2)
+
+                    if dur > 0:
+                        append_ot_record(
+                            start_dt,
+                            end_dt,
+                            0.0,
+                            dur,
+                            "200%",
+                            "Weekend/Holiday full-shift OT",
+                        )
+                        total_ot = dur
+                        should_notify = True
 
     # --- Notifications & user feedback ---
     if should_notify and total_ot > 0 and chat is not None:
@@ -2023,18 +2046,18 @@ def record_finance_odo_fuel(
         # —— 仅从 Fuel 表查上一次里程（逻辑闭环） ——
         prev_m = None
         try:
-            rows = ws.get_all_values()
+            ws_odo = open_worksheet(ODO_TAB)
+            rows = ws_odo.get_all_values()
             if len(rows) > 1:
                 for r in reversed(rows[1:]):
-                    if len(r) >= 4 and r[0] == plate:
+                    if len(r) >= 4 and str(r[0]).strip() == plate:
                         try:
-                            prev_m = int(re.search(r"(\d+)", r[3]).group(1))
+                            prev_m = int(re.search(r"(\d+)", str(r[3])).group(1))
                             break
                         except Exception:
-                            continue
+                            break
         except Exception:
             prev_m = None
-
         delta = ""
         if prev_m is not None and m_int is not None:
             delta = str(m_int - prev_m)
@@ -5085,7 +5108,37 @@ def _calc_delta_km(plate: str, current_km: float):
     if current_km < last_km:
         raise ValueError("ODO ERROR: current km < last km")
     return round(current_km - last_km, 1)
+async def handle_fuel(update, context):
+    """
+    Fuel / ODO 记录入口
+    """
+    try:
+        text = update.message.text.strip()
+        parts = text.split()
+        # 示例: /fuel ABC123 45678 120.5
+        plate = parts[1]
+        current_km = float(parts[2])
+        fuel_cost = float(parts[3]) if len(parts) > 3 else ""
 
+        # ===== 核心修复点 =====
+        delta_km = _calc_delta_km(plate, current_km)
+
+        ws = open_worksheet(FUEL_TAB)
+        ws.append_row([
+            plate,                         # A: Plate
+            update.effective_user.username,  # B: Driver
+            now_str(),                     # C: Time
+            current_km,                    # D: Current KM
+            delta_km,                      # E: Delta KM (FIXED)
+            fuel_cost,                     # F: Fuel Cost
+        ])
+
+        await update.message.reply_text(
+            f"Fuel recorded.\nPlate: {plate}\nKM: {current_km}\nDelta: {delta_km}"
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"Fuel error: {e}")
 # ---- FIX 2: Weekend / Holiday OT must be calculated ----
 _original_clock_handler = clock_callback_handler
 
