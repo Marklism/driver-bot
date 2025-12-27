@@ -267,7 +267,7 @@ async def ot_report_driver_callback(update, context):
 
     for r in data:
         # 按显示名筛选（与写入 OT Record 的 Name 列一致）
-        if r[idx_name].strip() != driver:
+        if r[idx_name].strip().lower() != driver.strip().lower():
             continue
 
         try:
