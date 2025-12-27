@@ -258,7 +258,7 @@ async def ot_report_driver_callback(update, context):
             if not start_str:
                 continue
             try:
-                start_dt = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
+                start_dt = datetime.fromisoformat(start_str)
             except Exception:
                 continue
             if not (start_window <= start_dt < end_window):
