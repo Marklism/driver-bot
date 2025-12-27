@@ -230,7 +230,6 @@ async def ot_report_driver_callback(update, context):
     idx_type = header.index("Type")
     idx_start = header.index("Start Date")
     idx_end = header.index("End Date")
-    idx_day = header.index("Day")
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
@@ -238,7 +237,17 @@ async def ot_report_driver_callback(update, context):
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
     if now < start_window:
         start_window = (start_window - timedelta(days=31)).replace(day=16)
-    end_window = (start_window + timedelta(days=31)).replace(day=16, hour=4)
+    if start_window.month == 12:
+        end_window = start_window.replace(
+            year=start_window.year + 1,
+            month=1,
+            hour=4, minute=0, second=0, microsecond=0
+        )
+    else:
+        end_window = start_window.replace(
+            month=start_window.month + 1,
+            hour=4, minute=0, second=0, microsecond=0
+        )
 
     ot150, ot200 = [], []
     t150 = t200 = 0.0
@@ -247,11 +256,14 @@ async def ot_report_driver_callback(update, context):
         if r[idx_name].strip() != driver:
             continue
         try:
-            day_str = r[idx_day].strip()
-            if not day_str:
+            start_str = r[idx_start].strip()
+            if not start_str:
                 continue
-            day_dt = datetime.fromisoformat(day_str)
-            if not (start_window.date() <= day_dt.date() < end_window.date()):
+            try:
+                start_dt = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+            if not (start_window <= start_dt < end_window):
                 continue
         except Exception:
             continue
@@ -266,8 +278,8 @@ async def ot_report_driver_callback(update, context):
         elif r[idx_type] == "200%":
             ot200.append(row); t200 += h
 
-    ot150.sort(key=lambda x: x[0])
-    ot200.sort(key=lambda x: x[0])
+    ot150.sort(key=lambda x: datetime.strptime(x[0], "%Y-%m-%d %H:%M:%S"))
+    ot200.sort(key=lambda x: datetime.strptime(x[0], "%Y-%m-%d %H:%M:%S"))
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -276,11 +288,17 @@ async def ot_report_driver_callback(update, context):
     w.writerow([])
 
     if ot150:
-        w.writerow(["150% OT"]); w.writerow(["Start","End","Hours"])
-        w.writerows(ot150); w.writerow(["Subtotal","","%.2f"%t150]); w.writerow([])
+        w.writerow(["150% OT"]); 
+        w.writerow(["Start","End","Hours"])
+        w.writerows(ot150); 
+        w.writerow(["Subtotal","","%.2f"%t150]); 
+        w.writerow([])
     if ot200:
-        w.writerow(["200% OT"]); w.writerow(["Start","End","Hours"])
-        w.writerows(ot200); w.writerow(["Subtotal","","%.2f"%t200]); w.writerow([])
+        w.writerow(["200% OT"]); 
+        w.writerow(["Start","End","Hours"])
+        w.writerows(ot200); 
+        w.writerow(["Subtotal","","%.2f"%t200]); 
+        w.writerow([])
 
     w.writerow(["GRAND TOTAL","","%.2f"%(t150+t200)])
 
