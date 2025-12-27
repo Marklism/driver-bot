@@ -4996,58 +4996,37 @@ from telegram.ext import CallbackQueryHandler, CommandHandler
 # ===================== HOTFIX OVERRIDES (AUTO-GENERATED) =====================
 # This section intentionally overrides logic without touching original code.
 
-# ---- FIX 1: Fuel / ODO delta km ----
-def _get_last_odo_km(plate: str):
-    ws = open_worksheet(ODO_TAB)
-    rows = ws.get_all_values()
-    if len(rows) <= 1:
-        return None
-    for r in reversed(rows[1:]):
-        if len(r) >= 4 and str(r[0]).strip() == plate:
-            try:
-                return float(str(r[3]).strip())
-            except Exception:
-                return None
-    return None
-
-def _calc_delta_km(plate: str, current_km: float):
-    last_km = _get_last_odo_km(plate)
-    if last_km is None:
-        return ""
-    if current_km < last_km:
-        raise ValueError("ODO ERROR: current km < last km")
-    return round(current_km - last_km, 1)
 async def handle_fuel(update, context):
-    """
-    Fuel / ODO 记录入口
-    """
     try:
         text = update.message.text.strip()
         parts = text.split()
-        # 示例: /fuel ABC123 45678 120.5
+
         plate = parts[1]
-        current_km = float(parts[2])
-        fuel_cost = float(parts[3]) if len(parts) > 3 else ""
+        km = parts[2]
+        fuel_amt = parts[3] if len(parts) > 3 else ""
 
-        # ===== 核心修复点 =====
-        delta_km = _calc_delta_km(plate, current_km)
+        res = record_finance_odo_fuel(
+            plate=plate,
+            mileage=km,
+            fuel_cost=fuel_amt,
+            by_user=update.effective_user.username or "",
+            invoice="",
+            driver_paid="",
+        )
 
-        ws = open_worksheet(FUEL_TAB)
-        ws.append_row([
-            plate,                         # A: Plate
-            update.effective_user.username,  # B: Driver
-            now_str(),                     # C: Time
-            current_km,                    # D: Current KM
-            delta_km,                      # E: Delta KM (FIXED)
-            fuel_cost,                     # F: Fuel Cost
-        ])
+        if not res.get("ok"):
+            await update.message.reply_text(f"Fuel record failed: {res.get('message')}")
+            return
 
         await update.message.reply_text(
-            f"Fuel recorded.\nPlate: {plate}\nKM: {current_km}\nDelta: {delta_km}"
+            f"Recorded {plate}: {res['mileage']}KM and ${fuel_amt} fuel. "
+            f"Delta {res.get('delta','')} km."
         )
 
     except Exception as e:
         await update.message.reply_text(f"Fuel error: {e}")
+
+
 # ---- FIX 2: Weekend / Holiday OT must be calculated ----
 _original_clock_handler = clock_callback_handler
 
