@@ -202,10 +202,15 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
     )
 
 from datetime import datetime, timedelta
-from dateutil import parser as dtparser
+import io, csv
+
 
 def norm_name(s: str) -> str:
     return s.strip().lower().split()[0]
+
+
+def parse_dt(s: str) -> datetime:
+    return datetime.fromisoformat(s.strip())
 
 
 async def ot_report_entry(update, context):
@@ -240,7 +245,7 @@ async def ot_report_driver_callback(update, context):
 
     # Telegram 选中的 = Drivers.Username
     username = query.data.split(":", 1)[1].strip()
-    username_key = norm_name(username)   # 🔴 核心
+    username_key = norm_name(username)
 
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
@@ -271,15 +276,13 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        # 🔴 唯一正确的 Name 匹配方式
+        # 🔴 核心匹配：首词
         if norm_name(r[idx_name]) != username_key:
             continue
 
         try:
-            start_dt = dtparser.parse(r[idx_start])
-            end_dt = dtparser.parse(r[idx_end])
-
-            # 只用 Start Date 判断月份
+            start_dt = parse_dt(r[idx_start])
+            end_dt = parse_dt(r[idx_end])
             if not (start_window <= start_dt < end_window):
                 continue
         except Exception:
@@ -303,8 +306,8 @@ async def ot_report_driver_callback(update, context):
                 ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
                 t200 += h
 
-    ot150.sort(key=lambda x: dtparser.parse(x[0]))
-    ot200.sort(key=lambda x: dtparser.parse(x[0]))
+    ot150.sort(key=lambda x: parse_dt(x[0]))
+    ot200.sort(key=lambda x: parse_dt(x[0]))
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -339,7 +342,6 @@ async def ot_report_driver_callback(update, context):
         bio,
         caption=f"OT report for {username}"
     )
-
 
 # ===== END FIX =====
 
