@@ -201,8 +201,15 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
         reply_markup=reply_markup,
     )
 
+from datetime import datetime, timedelta
+from dateutil import parser as dtparser
+
+def norm_name(s: str) -> str:
+    return s.strip().lower().split()[0]
+
+
 async def ot_report_entry(update, context):
-    driver_map = get_driver_map()   # Drivers.Username
+    driver_map = get_driver_map()          # Drivers.Username
     drivers = sorted(driver_map.keys())
 
     if not drivers:
@@ -231,8 +238,9 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    # Telegram 里选中的 Username
+    # Telegram 选中的 = Drivers.Username
     username = query.data.split(":", 1)[1].strip()
+    username_key = norm_name(username)   # 🔴 核心
 
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
@@ -263,25 +271,17 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        # ✅ 唯一匹配条件：OT Record.Name == Username
-        if r[idx_name].strip() != username:
+        # 🔴 唯一正确的 Name 匹配方式
+        if norm_name(r[idx_name]) != username_key:
             continue
 
         try:
-            # ✅ 关键修复：不用 fromisoformat，强制指定格式
-            start_dt = datetime.strptime(
-                r[idx_start].strip(),
-                "%Y-%m-%d %H:%M:%S"
-            )
-            end_dt = datetime.strptime(
-                r[idx_end].strip(),
-                "%Y-%m-%d %H:%M:%S"
-            )
+            start_dt = dtparser.parse(r[idx_start])
+            end_dt = dtparser.parse(r[idx_end])
 
-            # ✅ 只用 Start Date 判断月份
+            # 只用 Start Date 判断月份
             if not (start_window <= start_dt < end_window):
                 continue
-
         except Exception:
             continue
 
@@ -303,8 +303,8 @@ async def ot_report_driver_callback(update, context):
                 ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
                 t200 += h
 
-    ot150.sort(key=lambda x: datetime.strptime(x[0], "%Y-%m-%d %H:%M:%S"))
-    ot200.sort(key=lambda x: datetime.strptime(x[0], "%Y-%m-%d %H:%M:%S"))
+    ot150.sort(key=lambda x: dtparser.parse(x[0]))
+    ot200.sort(key=lambda x: dtparser.parse(x[0]))
 
     out = io.StringIO()
     w = csv.writer(out)
