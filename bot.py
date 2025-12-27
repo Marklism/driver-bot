@@ -205,16 +205,8 @@ from datetime import datetime, timedelta
 import io, csv
 
 
-def norm_name(s: str) -> str:
-    return s.strip().lower().split()[0]
-
-
-def parse_dt(s: str) -> datetime:
-    return datetime.fromisoformat(s.strip())
-
-
 async def ot_report_entry(update, context):
-    driver_map = get_driver_map()          # Drivers.Username
+    driver_map = get_driver_map()   # Drivers.Username
     drivers = sorted(driver_map.keys())
 
     if not drivers:
@@ -243,9 +235,8 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    # Telegram 选中的 = Drivers.Username
+    # ✅ Telegram 选择的就是 Username
     username = query.data.split(":", 1)[1].strip()
-    username_key = norm_name(username)
 
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
@@ -261,6 +252,7 @@ async def ot_report_driver_callback(update, context):
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
+    # ✅ 工资周期：16 号 04:00 → 下月 16 号 04:00
     now = _now_dt()
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
     if now < start_window:
@@ -276,16 +268,18 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        # 🔴 核心匹配：首词
-        if norm_name(r[idx_name]) != username_key:
+        # ✅ 唯一姓名匹配规则
+        if r[idx_name].strip() != username:
             continue
 
         try:
-            start_dt = parse_dt(r[idx_start])
-            end_dt = parse_dt(r[idx_end])
-            if not (start_window <= start_dt < end_window):
-                continue
+            start_dt = datetime.fromisoformat(r[idx_start].strip())
+            end_dt = datetime.fromisoformat(r[idx_end].strip())
         except Exception:
+            continue
+
+        # ✅ 只用 Start Date 判断周期
+        if not (start_window <= start_dt < end_window):
             continue
 
         try:
@@ -306,8 +300,8 @@ async def ot_report_driver_callback(update, context):
                 ot200.append([r[idx_start], r[idx_end], f"{h:.2f}"])
                 t200 += h
 
-    ot150.sort(key=lambda x: parse_dt(x[0]))
-    ot200.sort(key=lambda x: parse_dt(x[0]))
+    ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
+    ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -342,6 +336,7 @@ async def ot_report_driver_callback(update, context):
         bio,
         caption=f"OT report for {username}"
     )
+
 
 # ===== END FIX =====
 
