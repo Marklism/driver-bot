@@ -1,4 +1,11 @@
 
+async def global_error_handler(update, context):
+    try:
+        logger.exception("Unhandled exception", exc_info=context.error)
+    except Exception:
+        pass
+
+
 # ============================================================
 # DISPLAY SPECIFICATION (FROZEN)
 # ============================================================
@@ -2058,14 +2065,14 @@ def start_mission_record(driver: str, plate: str, departure: str, update=None) -
         guid = str(uuid.uuid4())
 
         # ✅ 强制使用 Telegram username
-        tg_username = "UNKNOWN"
+        username = "UNKNOWN"
         if update and update.effective_user:
-            tg_username = (update.effective_user.username or update.effective_user.full_name)
+            username = (update.effective_user.username or update.effective_user.full_name)
 
         row = [""] * M_MANDATORY_COLS
         row[M_IDX_GUID] = guid
         row[M_IDX_NO] = next_no
-        row[M_IDX_NAME] = tg_username     # ✅ 写 username
+        row[M_IDX_NAME] = username     # ✅ 写 username
         row[M_IDX_PLATE] = plate
         row[M_IDX_START] = start_ts
         row[M_IDX_END] = ""
@@ -2090,9 +2097,9 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
         return {"ok": False, "message": "Could not open missions sheet: " + str(e)}
 
     # ===== 核心修改点：再次统一使用 Telegram username =====
-    tg_username = "UNKNOWN"
+    username = "UNKNOWN"
     if update and update.effective_user:
-        tg_username = (update.effective_user.username or update.effective_user.full_name)
+        username = (update.effective_user.username or update.effective_user.full_name)
 
     try:
         vals, start_idx = _missions_get_values_and_data_rows(ws)
@@ -2107,7 +2114,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
             rec_dep = str(row[M_IDX_DEPART]).strip()
 
             # ✅ 用 username 匹配
-            if rec_plate == plate and rec_name == tg_username and not rec_end:
+            if rec_plate == plate and rec_name == username and not rec_end:
                 row_number = i + 1
                 end_ts = now_str()
 
@@ -2138,7 +2145,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
 
                 logger.info(
                     "Mission end recorded: driver=%s plate=%s end=%s",
-                    tg_username, plate, end_ts
+                    username, plate, end_ts
                 )
 
                 s_dt = parse_ts(rec_start) if rec_start else None
@@ -2146,7 +2153,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                     return {
                         "ok": True,
                         "merged": False,
-                        "driver": tg_username,
+                        "driver": username,
                         "plate": plate,
                         "end_ts": end_ts,
                     }
@@ -2167,7 +2174,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                     rstart = str(r2[M_IDX_START]).strip()
                     rend = str(r2[M_IDX_END]).strip()
 
-                    if rn != tg_username or rp != plate:
+                    if rn != username or rp != plate:
                         continue
                     if not rstart or not rend:
                         continue
@@ -2203,7 +2210,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                     return {
                         "ok": True,
                         "merged": False,
-                        "driver": tg_username,
+                        "driver": username,
                         "plate": plate,
                         "end_ts": end_ts,
                     }
@@ -2231,7 +2238,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                 return {
                     "ok": True,
                     "merged": True,
-                    "driver": tg_username,
+                    "driver": username,
                     "plate": plate,
                     "end_ts": end_ts,
                 }
@@ -3285,7 +3292,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         _, plate = parts
         # show departure choices
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": tg_username}
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": username}
         kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"),
                InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
         await q.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
@@ -3308,7 +3315,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("mission_end_plate callback missing plate: %s", data)
             return
         _, plate = parts
-        context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": tg_username}
+        context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": username}
         # allow immediate end (auto arrival) button; callback includes plate for robustness
         kb = [[InlineKeyboardButton("End mission now (auto arrival)", callback_data=f"mission_end_now|{plate}")]]
         await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
@@ -3320,8 +3327,8 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("mission_depart callback missing fields: %s", data)
             return
         _, dep, plate = parts
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": tg_username}
-        res = start_mission_record(tg_username, plate, dep, update=update)
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
+        res = start_mission_record(username, plate, dep, update=update)
         if res.get("ok"):
             # mission_start_ok template already adjusted to not show the word "plate"
             await q.edit_message_text(t(user_lang, "mission_start_ok", driver=username, plate=plate, dep=dep, ts=res.get("start_ts")))
@@ -3369,7 +3376,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # arrival automatically opposite of departure
             arrival = "SHV" if found_dep == "PP" else "PP"
-            res = end_mission_record(tg_username, plate, arrival, update=update)
+            res = end_mission_record(username, plate, arrival, update=update)
 
             if not res.get("ok"):
                 await q.edit_message_text("❌ " + res.get("message", ""))
@@ -4045,7 +4052,8 @@ def schedule_daily_summary(application):
             else:
                 tz = None
             job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
-            application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
+            if application.job_queue:
+        application.job_queue.run_daily(send_daily_summary_job, time=job_time, context={"chat_id": SUMMARY_CHAT_ID}, name="daily_summary", tz=tz)
             logger.info("Scheduled daily summary at %02d:00 (%s) to %s", SUMMARY_HOUR, SUMMARY_TZ, SUMMARY_CHAT_ID)
         else:
             logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
@@ -4176,7 +4184,8 @@ def main():
     except Exception:
         persistence = None
 
-    application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
+    application.add_error_handler(global_error_handler)
+application = ApplicationBuilder().token(BOT_TOKEN).persistence(persistence).build()
     register_ui_handlers(application)
 
     # Schedule startup debug report (if MENU_CHAT_ID or SUMMARY_CHAT_ID configured)
@@ -4225,7 +4234,9 @@ def main():
             logger.exception("Error while attempting deleteWebhook; proceeding to polling.")
         logger.info("Starting driver-bot polling...")
         try:
-            application.run_polling()
+            if not globals().get('POLLING_STARTED'):
+        globals()['POLLING_STARTED']=True
+        application.run_polling()
         except Exception:
             logger.exception("Polling exited with exception.")
 
