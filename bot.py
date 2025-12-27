@@ -201,7 +201,7 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
         reply_markup=reply_markup,
     )
 async def ot_report_entry(update, context):
-    driver_map = get_driver_map()   # {system_driver: display_name}
+    driver_map = get_driver_map()   
     drivers = sorted(driver_map.keys())
     if not drivers:
         await reply_private(update, context, "❌ No drivers found.")
@@ -209,8 +209,8 @@ async def ot_report_entry(update, context):
 
     keyboard = [
         [InlineKeyboardButton(
-            driver_map.get(d) or d,          # 显示名
-            callback_data=f"OTR_DRIVER:{d}"  # system driver
+            d,         
+            callback_data=f"OTR_DRIVER:{d}" 
         )]
         for d in drivers
     ]
@@ -229,8 +229,7 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    driver = query.data.split(":", 1)[1]   # system driver
-    driver_map = get_driver_map()
+    driver = query.data.split(":", 1)[1] 
 
     ws = open_worksheet(OT_RECORD_TAB)
     rows = ws.get_all_values()
@@ -274,8 +273,7 @@ async def ot_report_driver_callback(update, context):
         try:
             start_dt = datetime.fromisoformat(r[idx_start].strip())
             end_dt = datetime.fromisoformat(r[idx_end].strip())
-            check_dt = end_dt if r[idx_type] == "200%" else start_dt
-            if not (start_window <= check_dt < end_window):
+            if not (start_window <= start_dt < end_window):
                 continue
         except Exception:
             continue
