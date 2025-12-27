@@ -268,7 +268,14 @@ async def ot_report_driver_callback(update, context):
         except Exception:
             continue
 
-        h = _calc_hours(r, idx_morning, idx_evening, idx_start, idx_end)
+        try:
+            m_h = float(r[idx_morning]) if r[idx_morning] else 0.0
+            e_h = float(r[idx_evening]) if r[idx_evening] else 0.0
+            h = m_h + e_h
+        except Exception:
+            continue
+
+        
         if h <= 0:
             continue
 
