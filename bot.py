@@ -235,7 +235,7 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    # Telegram 里选中的 Username
+    # Username = Name 列
     username = query.data.split(":", 1)[1].strip()
 
     ws = open_worksheet("OT Record")
@@ -245,13 +245,15 @@ async def ot_report_driver_callback(update, context):
         return
 
     header, data = rows[0], rows[1:]
+
     idx_name = header.index("Name")
     idx_type = header.index("Type")
     idx_start = header.index("Start Date")
+    idx_end = header.index("End Date")
     idx_morning = header.index("Morning OT")
     idx_evening = header.index("Evening OT")
 
-    # ===== 16 号周期（只算 Start Date）=====
+    # ===== 16 号周期（只看 Start Date）=====
     now = _now_dt().replace(tzinfo=None)
 
     start_window = now.replace(day=16, hour=4, minute=0, second=0, microsecond=0)
@@ -269,43 +271,47 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        # ✅ 唯一身份规则
+        # 1️⃣ Name 筛选
         if r[idx_name].strip() != username:
             continue
 
+        # 2️⃣ Start Date 筛选
         try:
             start_dt = datetime.fromisoformat(r[idx_start].strip())
         except Exception:
             continue
 
-        # ✅ 只用 Start Date 判断周期
         if not (start_window <= start_dt < end_window):
             continue
 
+        # 3️⃣ 直接取已算好的 OT
         try:
-            m_h = float(r[idx_morning]) if r[idx_morning] else 0.0
-            e_h = float(r[idx_evening]) if r[idx_evening] else 0.0
-            h = round(m_h + e_h, 2)
+            m = float(r[idx_morning]) if r[idx_morning] else 0.0
+            e = float(r[idx_evening]) if r[idx_evening] else 0.0
+            h = round(m + e, 2)
         except Exception:
             continue
 
         if h <= 0:
             continue
 
-        if r[idx_type] == "150%":
-            ot150.append([r[idx_start], "", f"{h:.2f}"])
-            t150 += h
+        row = [r[idx_start], r[idx_end], f"{h:.2f}"]
 
+        # 4️⃣ 按 Type 分组
+        if r[idx_type] == "150%":
+            ot150.append(row)
+            t150 += h
         elif r[idx_type] == "200%":
-            ot200.append([r[idx_start], "", f"{h:.2f}"])
+            ot200.append(row)
             t200 += h
 
     ot150.sort(key=lambda x: datetime.fromisoformat(x[0]))
     ot200.sort(key=lambda x: datetime.fromisoformat(x[0]))
 
-    # ===== 输出 CSV =====
+    # ===== 输出 CSV（等同 Excel 报表）=====
     out = io.StringIO()
     w = csv.writer(out)
+
     w.writerow(["Driver", username])
     w.writerow([
         "Period",
@@ -337,6 +343,7 @@ async def ot_report_driver_callback(update, context):
         bio,
         caption=f"OT report for {username}"
     )
+
 
 # ===== END FIX =====
 
