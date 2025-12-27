@@ -200,49 +200,6 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
         text=text,
         reply_markup=reply_markup,
     )
-def build_driver_alias_map():
-    """
-    从 Drivers 表构建：
-    {
-        username_lower: {所有可能出现在 OT Record.Name 里的值}
-    }
-    """
-    ws = open_worksheet("Drivers")
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        return {}
-
-    header = rows[0]
-    idx_username = header.index("Username")
-    idx_name = header.index("Name")   # 🔴 关键：显示名来源
-
-    alias_map = {}
-
-    for r in rows[1:]:
-        if len(r) <= max(idx_username, idx_name):
-            continue
-
-        username = r[idx_username].strip()
-        name = r[idx_name].strip()
-
-        if not username or not name:
-            continue
-
-        u = username.lower()
-        aliases = set()
-
-        # 显示名原样
-        aliases.add(name.lower())
-
-        # Mao Mong → Mao
-        parts = name.lower().split()
-        if len(parts) > 1:
-            aliases.add(parts[0])
-
-        alias_map[u] = aliases
-
-    return alias_map
-
 
 async def ot_report_entry(update, context):
     driver_map = get_driver_map()   # Drivers.Username
@@ -265,6 +222,7 @@ async def ot_report_entry(update, context):
     )
 
 
+
 async def ot_report_driver_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -274,19 +232,8 @@ async def ot_report_driver_callback(update, context):
     except Exception:
         pass
 
-    # Telegram 选中的 Username
-    username = query.data.split(":", 1)[1].strip().lower()
-
-    # Username → 显示名 alias 集合
-    alias_map = build_driver_alias_map()
-    valid_names = alias_map.get(username)
-
-    if not valid_names:
-        await context.bot.send_message(
-            query.from_user.id,
-            f"❌ No driver mapping for {username}"
-        )
-        return
+    # Telegram 里选中的 = Username
+    username = query.data.split(":", 1)[1].strip()
 
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
@@ -317,8 +264,8 @@ async def ot_report_driver_callback(update, context):
     t150 = t200 = 0.0
 
     for r in data:
-        name_in_sheet = r[idx_name].strip().lower()
-        if name_in_sheet not in valid_names:
+        # ✅ 唯一匹配条件：Username
+        if r[idx_name].strip() != username:
             continue
 
         try:
