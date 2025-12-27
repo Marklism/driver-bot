@@ -200,7 +200,27 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
         text=text,
         reply_markup=reply_markup,
     )
+async def ot_report_entry(update, context):
+    driver_map = get_driver_map()   # {system_driver: display_name}
+    drivers = sorted(driver_map.keys())
+    if not drivers:
+        await reply_private(update, context, "❌ No drivers found.")
+        return
 
+    keyboard = [
+        [InlineKeyboardButton(
+            driver_map.get(d) or d,          # 显示名
+            callback_data=f"OTR_DRIVER:{d}"  # system driver
+        )]
+        for d in drivers
+    ]
+
+    await reply_private(
+        update,
+        context,
+        "Select driver:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 async def ot_report_driver_callback(update, context):
     query = update.callback_query
     await query.answer()
@@ -632,88 +652,6 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         # Fallback: ignore edit errors
         pass
         
-async def ot_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /ot_report [driver] YYYY-MM """
-    args = context.args
-    if not args:
-        # guarded empty message removed (no-op)
-        return
-
-    if len(args) == 1:
-        driver = update.effective_user.username
-        ym = args[0]
-    else:
-        driver = args[0]
-        ym = args[1]
-
-    try:
-        year, month = map(int, ym.split("-"))
-        month_start = datetime(year, month, 1)
-        if month == 12:
-            month_end = datetime(year + 1, 1, 1)
-        else:
-            month_end = datetime(year, month + 1, 1)
-    except Exception:
-        await update.message.reply_text("Invalid month format. Use YYYY-MM.")
-        return
-
-    ws = open_worksheet(OT_TAB)
-    vals = ws.get_all_values()
-    if len(vals) <= 1:
-        await update.message.reply_text("No OT records.")
-        return
-
-    records = []
-    for row in vals[1:]:
-        if len(row) < 4:
-            continue
-        d = row[O_IDX_DATE]
-        r_driver = row[O_IDX_DRIVER]
-        ts = row[O_IDX_TIME]
-        if r_driver != driver:
-            continue
-        try:
-            dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            continue
-        if month_start <= dt < month_end:
-            records.append((dt, row))
-
-    if not records:
-        await update.message.reply_text(f"No OT for {driver} in {ym}.")
-        return
-
-    records.sort(key=lambda x: x[0])
-
-    shifts = []
-    pending_start = None
-
-    for dt, row in records:
-        action = row[O_IDX_ACTION]
-        if action == "IN":
-            pending_start = dt
-        elif action == "OUT":
-            if pending_start:
-                shifts.append((pending_start, dt))
-                pending_start = None
-
-    if pending_start:
-        shifts.append((pending_start, month_end))
-
-    total_ot = 0.0
-    detail_lines = []
-
-    for st, ed in shifts:
-        ot = compute_ot_for_shift(st, ed)
-        total_ot += ot
-        detail_lines.append(f"{st} → {ed}: {ot}h")
-
-    result = f"OT Report for {driver} ({ym}):\n"
-    result += "\n".join(detail_lines)
-    result += f"\n\nTotal OT: **{round(total_ot, 2)} hours**"
-
-    await update.message.reply_text(result)
-
 import json
 import base64
 import logging
