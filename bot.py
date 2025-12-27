@@ -223,6 +223,7 @@ def build_driver_alias_map():
     for r in rows[1:]:
         if len(r) <= idx_username:
             continue
+
         u = r[idx_username].strip()
         if not u:
             continue
@@ -231,7 +232,6 @@ def build_driver_alias_map():
         s = set()
         s.add(ul)
 
-        # Mao Mong -> Mao
         parts = ul.split()
         if len(parts) > 1:
             s.add(parts[0])
@@ -275,7 +275,7 @@ async def ot_report_driver_callback(update, context):
     username = query.data.split(":", 1)[1].strip()
     username_l = username.lower()
 
-    # 构建 Username → Name 别名集合
+    # Username → Name 别名集合
     alias_map = build_driver_alias_map()
     valid_names = alias_map.get(username_l, {username_l})
 
@@ -298,17 +298,22 @@ async def ot_report_driver_callback(update, context):
     if now < start_window:
         start_window = (start_window - timedelta(days=31)).replace(day=16)
 
-    end_window = (
-        start_window.replace(year=start_window.year + 1, month=1)
-        if start_window.month == 12
-        else start_window.replace(month=start_window.month + 1)
-    ).replace(hour=4, minute=0, second=0, microsecond=0)
+    if start_window.month == 12:
+        end_window = start_window.replace(
+            year=start_window.year + 1,
+            month=1,
+            hour=4, minute=0, second=0, microsecond=0
+        )
+    else:
+        end_window = start_window.replace(
+            month=start_window.month + 1,
+            hour=4, minute=0, second=0, microsecond=0
+        )
 
     ot150, ot200 = [], []
     t150 = t200 = 0.0
 
     for r in data:
-        # 🔴 关键修复点：用 alias 集合匹配 Name
         name_in_sheet = r[idx_name].strip().lower()
         if name_in_sheet not in valid_names:
             continue
@@ -376,6 +381,7 @@ async def ot_report_driver_callback(update, context):
         bio,
         caption=f"OT report for {username}"
     )
+
 
 # ===== END FIX =====
 
