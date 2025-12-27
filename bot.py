@@ -3729,112 +3729,79 @@ def check_deployment_requirements():
 def main():
     ensure_env()
     check_deployment_requirements()
-    # --- Set Telegram slash commands on startup (HTTP API, non-async) ---
+
+    # --- Set Telegram slash commands ---
     try:
         token_tmp = os.getenv("BOT_TOKEN")
         if token_tmp:
             cmds_payload = [
                 {"command": "start", "description": "Show menu"},
-                {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
+                {"command": "ot_report", "description": "OT report"},
                 {"command": "leave", "description": "Request leave"},
                 {"command": "finance", "description": "Add finance record"},
                 {"command": "mission_end", "description": "End mission"},
                 {"command": "clock_in", "description": "Clock In"},
                 {"command": "clock_out", "description": "Clock Out"},
             ]
-            try:
-                import json
-
-                url = f"https://api.telegram.org/bot{token_tmp}/setMyCommands"
-                data = json.dumps({"commands": cmds_payload}).encode("utf-8")
-                req = urllib.request.Request(
-                    url,
-                    data=data,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    resp_text = resp.read().decode("utf-8", errors="ignore")
-                    print("Set my commands via HTTP API:", resp_text[:200])
-            except Exception as e:
-                print("Warning: failed to set Telegram commands via HTTP API:", e)
+            import json, urllib.request
+            url = f"https://api.telegram.org/bot{token_tmp}/setMyCommands"
+            req = urllib.request.Request(
+                url,
+                data=json.dumps({"commands": cmds_payload}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=10)
     except Exception:
         pass
 
-    # --- Timezone sanity check ---
+    # --- Timezone check ---
     if LOCAL_TZ and ZoneInfo:
         try:
             ZoneInfo(LOCAL_TZ)
             logger.info("Using LOCAL_TZ=%s", LOCAL_TZ)
         except Exception:
-            logger.info("LOCAL_TZ=%s invalid; using system timezone.", LOCAL_TZ)
-    else:
-        logger.info("LOCAL_TZ not set; using system local time.")
+            logger.info("Invalid LOCAL_TZ, using system time.")
 
-    # --- Persistence (optional) ---
+    # --- Persistence (disabled by default on Railway) ---
     persistence = None
-    try:
-        persistence = PicklePersistence(filepath="driver_bot_persistence.pkl")
-    except Exception:
-        persistence = None
+    if os.getenv("ENABLE_PERSISTENCE") == "1":
+        try:
+            persistence = PicklePersistence("driver_bot_persistence.pkl")
+        except Exception:
+            persistence = None
 
-    # --- Build application ---
     application = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .persistence(persistence)
         .build()
     )
-    assert callable(ensure_env)
-    assert callable(check_deployment_requirements)
-    assert callable(register_ui_handlers)
-    assert callable(schedule_daily_summary)
-    # --- Error handler ---
-    application.add_error_handler(global_error_handler)
 
-    # --- Register handlers ---
+    application.add_error_handler(global_error_handler)
     register_ui_handlers(application)
 
-    # --- Startup debug report (fire-and-forget) ---
-    try:
-        if hasattr(application, "create_task"):
-            application.create_task(_send_startup_debug(application))
-    except Exception:
-        pass
+    # --- Startup debug ---
+    application.post_init = _send_startup_debug
 
-    # --- Schedule daily summary ---
     schedule_daily_summary(application)
 
-    # --- Start bot (webhook or polling) ---
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     PORT = int(os.getenv("PORT", "8443"))
 
     if WEBHOOK_URL:
-        logger.info("Starting in webhook mode. WEBHOOK_URL=%s", WEBHOOK_URL)
-        try:
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                webhook_url=WEBHOOK_URL,
-            )
-        except Exception:
-            logger.exception("Failed to start webhook mode.")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=WEBHOOK_URL,
+        )
     else:
         try:
-            logger.info("No WEBHOOK_URL set — attempting to delete existing webhook (if any).")
             _delete_telegram_webhook(BOT_TOKEN)
         except Exception:
-            logger.exception("Error while deleting webhook; proceeding to polling.")
+            pass
+        application.run_polling(drop_pending_updates=True)
 
-        logger.info("Starting driver-bot polling...")
-        try:
-            if not globals().get("POLLING_STARTED"):
-                globals()["POLLING_STARTED"] = True
-                application.run_polling()
-        except Exception:
-            logger.exception("Polling exited with exception.")
-if __name__ == "__main__":
-    main()
 
 
 # === BEGIN: OT Summary integration (added) ===
