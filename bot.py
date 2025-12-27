@@ -1,11 +1,4 @@
 
-async def global_error_handler(update, context):
-    try:
-        logger.exception("Unhandled exception", exc_info=context.error)
-    except Exception:
-        pass
-
-
 # ============================================================
 # DISPLAY SPECIFICATION (FROZEN)
 # ============================================================
@@ -103,8 +96,6 @@ def build_message(lines):
     """
     return "\n".join([str(line) for line in lines if line])
 
-
-
 # ============================================================
 # FROZEN BUSINESS RULES (MISSION / LEAVE / TRIP)
 # ============================================================
@@ -154,10 +145,6 @@ def build_message(lines):
 # - debug verbatim
 # ============================================================
 
-from datetime import time as dtime
-
-
-
 # ============================================================
 # SECTION 1 — Configuration & Environment
 # Purpose:
@@ -165,48 +152,7 @@ from datetime import time as dtime
 # - Global constants
 # Source:
 # - debug verbatim
-# ============================================================
-#!/usr/bin/env python3
-# FULL BOT (verbatim debug functionality)
-# This file directly loads the debug bot logic unchanged.
-
-import sys
-
-# ---- BEGIN DEBUG BOT CODE ----
-
-print("✅ NEW OT-STYLE MISSION REPORT LOADED (command: /mission_report)")
-
-from datetime import datetime, timedelta, time as time
-
-
-def determine_ot_rate(dt: datetime, is_holiday: bool = False) -> str:
-    """
-    OT rate rules:
-    - Holiday: always 200%
-    - Friday:
-        before 23:59:59 -> 150%
-        from Saturday 00:00 -> 200%
-    - Saturday/Sunday: 200%
-    - Weekday: 150%
-    """
-    if is_holiday:
-        return "200%"
-
-    weekday = dt.weekday()  # Mon=0 ... Sun=6
-
-    # Saturday or Sunday
-    if weekday >= 5:
-        return "200%"
-
-    # Friday special cut-off
-    if weekday == 4:  # Friday
-        if dt.time() <= time(23, 59, 59):
-            return "150%"
-        return "200%"
-
-    return "150%"
-
-
+from datetime import datetime, timedelta
 import io
 import csv
 # === /ot_report rewritten to DRIVER BUTTON MODE ===
@@ -254,55 +200,6 @@ async def reply_to_origin_chat(update, context, text, reply_markup=None):
         text=text,
         reply_markup=reply_markup,
     )
-
-async def ot_report_entry(update, context):
-    driver_map = get_driver_map()   # ✅ 正确的数据入口
-    drivers = sorted(driver_map.keys())
-
-    if not drivers:
-        await reply_private(update, context, "❌ No drivers found.")
-        return
-
-    keyboard = []
-    for d in drivers:
-        keyboard.append([
-            InlineKeyboardButton(
-                d,
-                callback_data=f"OTR_DRIVER:{d}"
-            )
-        ])
-
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-# ===== END helper =====
-
-import io, csv
-
-def _calc_hours(r, idx_morning, idx_evening, idx_start, idx_end):
-    """
-    Calculate OT hours from OT Record row.
-    Priority:
-    1. Morning OT + Evening OT
-    2. Fallback: End - Start datetime
-    """
-    try:
-        m = float(r[idx_morning] or 0)
-        e = float(r[idx_evening] or 0)
-        if m + e > 0:
-            return round(m + e, 2)
-    except Exception:
-        pass
-
-    try:
-        s = datetime.fromisoformat(r[idx_start])
-        en = datetime.fromisoformat(r[idx_end])
-        return round((en - s).total_seconds() / 3600, 2)
-    except Exception:
-        return 0.0
 
 async def ot_report_entry(update, context):
     driver_map = get_driver_map()
@@ -393,114 +290,10 @@ async def ot_report_driver_callback(update, context):
 
 # ===== END FIX =====
 
-# ===============================
-
-
 from telegram import Update
 from telegram.ext import ContextTypes
 import os
-from telegram import Bot, BotCommand
-"""
-Merged Driver Bot — usage notes (auto-inserted)
-
-
-# === BEGIN: Group-silent private reply helper ===
-
-async def reply_private(update, context, text):
-    chat = update.effective_chat
-    user = update.effective_user
-
-    # If triggered in group, reply via private chat
-    if chat and chat.type in ("group", "supergroup"):
-        await context.bot.send_message(chat_id=user.id, text=text)
-    else:
-        await context.bot.send_message(chat_id=chat.id, text=text)
-        
-# === END: Group-silent private reply helper ===
-Before running this script, set these environment variables (examples):
-
-BOT_TOKEN — Telegram bot token, e.g. export BOT_TOKEN="123:ABC..."
-SHEET_ID — Google Sheets ID, e.g. export SHEET_ID="1aBcD..." (required if using Google Sheets)
-GOOGLE_CREDS_B64 — base64 of service-account JSON (export GOOGLE_CREDS_B64="$(base64 -w0 creds.json)") (required if using Google Sheets)
-
-Optional tab names (if you customized them): DRIVERS_TAB, LEAVE_TAB, FINANCE_TAB, DRIVER_OT_TAB, DRIVER_OT_TAB
-
-Notes:
-- This file was auto-merged. I tried to avoid changing existing behavior.
-- If you hit runtime errors (ImportError, NameError, KeyError), copy the full error text and send it back — I'll repair it.
-"""
-
-def check_deployment_requirements():
-    """
-    Deployment check: prints warnings about missing environment variables and missing optional imports.
-    This runs at startup (inside main) to give clearer logs on Railway.
-    """
-    required_env = ["BOT_TOKEN", "SHEET_ID", "GOOGLE_CREDS_B64"]
-    missing = [v for v in required_env if not os.getenv(v)]
-    if missing:
-        print("=== DEPLOYMENT CHECK WARNING ===")
-        print("Missing required environment variables:", missing)
-        print("Please set them in your Railway project variables.")
-    else:
-        print("Deployment check: required env vars present (BOT_TOKEN, SHEET_ID, GOOGLE_CREDS_B64).")
-    # Try importing some optional modules to give clearer messages
-    optional_checks = ["gspread", "oauth2client", "zoneinfo", "httpx"]
-    for mod in optional_checks:
-        try:
-            __import__(mod)
-        except Exception as e:
-            print(f"Note: optional module import failed: {mod} -> {e}")
-    print("=== DEPLOYMENT CHECK COMPLETE ===")
-
-try:
-    from zoneinfo import ZoneInfo
-except Exception:
-    ZoneInfo = None
-
-from typing import Optional, Dict, List, Any
-
-# --- BEGIN: Inserted OT & Clock functionality (from Bot(包含OT和打卡).txt) ---
-# Added OT Table headers
-OT_HEADERS = ["Date", "Driver", "Action", "Timestamp", "ClockType", "Note"]
-
-# OT per-shift summary tab for calculated OT
-OT_RECORD_TAB = os.getenv("OT_RECORD_TAB", "OT Record")
-OT_RECORD_HEADERS = ["Name", "Type", "Start Date", "End Date", "Day", "Morning OT", "Evening OT", "Note"]
-
-# OT holidays configuration: default includes 2025-12-29; extend via OT_HOLIDAYS or HOLIDAYS env vars
-
-# =========================
-# HOLIDAY FREEZE (2026 = 26 DAYS) + ENV MERGE
-# =========================
-
-# --- FIX: ensure OT_HOLIDAYS is defined before use ---
-OT_HOLIDAYS = {
-    # 2026 — frozen 26 holidays
-    "2026-01-01",
-    "2026-01-07",
-    "2026-02-16","2026-02-17","2026-02-18",
-    "2026-03-08","2026-03-09",
-    "2026-04-14","2026-04-15","2026-04-16",
-    "2026-05-01","2026-05-05","2026-05-14",
-    "2026-06-18",
-    "2026-09-24",
-    "2026-10-10","2026-10-11","2026-10-12","2026-10-13","2026-10-15",
-    "2026-10-29",
-    "2026-11-09","2026-11-23","2026-11-24","2026-11-25",
-    "2026-12-29",
-}
-
-def _load_ot_holidays():
-    base = set(OT_HOLIDAYS)
-    raw = os.getenv("OT_HOLIDAYS") or os.getenv("HOLIDAYS")
-    if raw:
-        for d in raw.split(","):
-            d = d.strip()
-            if d:
-                base.add(d)
-    return base
-
-OT_HOLIDAYS = _load_ot_holidays()
+from telegram import BotCommand
 
 def _validate_2026_holidays():
     h2026 = [d for d in OT_HOLIDAYS if str(d).startswith("2026-")]
@@ -510,14 +303,6 @@ def _validate_2026_holidays():
         )
 
 _validate_2026_holidays()
-
-def is_holiday(dt):
-    return dt.strftime("%Y-%m-%d") in OT_HOLIDAYS
-_env_h = os.getenv("OT_HOLIDAYS") or os.getenv("HOLIDAYS", "")
-for _h in _env_h.split(","):
-    _h = _h.strip()
-    if _h:
-        OT_HOLIDAYS.add(_h)
 
 def _is_holiday(dt: datetime) -> bool:
     return dt.strftime("%Y-%m-%d") in OT_HOLIDAYS
@@ -690,7 +475,6 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     ot_type = ""
     note = ""
     should_notify = False
-    weekday_msg = True  # False → use "OT today: X" wording
 
     # Helper: append one OT record row
     def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
@@ -781,7 +565,6 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                     note = "Weekend/Holiday full-shift OT"
                     append_ot_record(start_dt, ts_dt_adj, 0.0, total_ot, ot_type, note)
                     should_notify = True
-                    weekday_msg = False  # use 'OT today' wording
 
     # --- Notifications & user feedback ---
     if should_notify and total_ot > 0 and chat is not None:
@@ -948,34 +731,19 @@ except Exception:
     # If application not available at import time, registration will be attempted in register_ui_handlers
     pass
 
-# --- END: Inserted OT & Clock functionality ---
-#!/usr/bin/env python3
 import json
 import base64
 import logging
 import uuid
 import re
-from typing import Optional, Dict, List, Any
-import urllib.request
-
+from typing import Optional, Dict, List
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
 try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
 
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    BotCommand,
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    ForceReply,
-)
-from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -990,8 +758,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("driver-bot")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GOOGLE_CREDS_BASE64 = os.getenv("GOOGLE_CREDS_BASE64")
-GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS_PATH")
 
 PLATE_LIST = os.getenv(
     "PLATE_LIST",
@@ -1009,35 +775,7 @@ else:
 PLATES = [p.strip() for p in PLATE_LIST.split(",") if p.strip()]
 DRIVER_PLATE_MAP_JSON = os.getenv("DRIVER_PLATE_MAP", "").strip() or None
 
-SUMMARY_CHAT_ID = os.getenv("SUMMARY_CHAT_ID")
-SUMMARY_HOUR = int(os.getenv("SUMMARY_HOUR", "20"))
-SUMMARY_TZ = os.getenv("SUMMARY_TZ", LOCAL_TZ or "Asia/Phnom_Penh")
-
 DEFAULT_LANG = os.getenv("LANG", "en").lower()
-
-# --- Added: Holiday list from environment variable ---
-# Format: HOLIDAYS="2025-12-25,2025-12-31"
-try:
-    _raw_holidays = os.getenv("HOLIDAYS", "") or ""
-    HOLIDAYS = {
-    # 2025
-    "2025-12-29",
-    # 2026
-    "2026-01-01",
-    "2026-01-07",
-    "2026-02-16", "2026-02-17", "2026-02-18",
-    "2026-03-08", "2026-03-09",
-    "2026-04-14", "2026-04-15", "2026-04-16",
-    "2026-05-01", "2026-05-05", "2026-05-14",
-    "2026-06-18",
-    "2026-09-24",
-    "2026-10-10", "2026-10-11", "2026-10-12",
-    "2026-10-13", "2026-10-15", "2026-10-29",
-    "2026-11-09", "2026-11-23", "2026-11-24", "2026-11-25",
-    "2026-12-29",
-}
-except Exception:
-    HOLIDAYS = set()
 
 SUPPORTED_LANGS = ("en", "km")
 
@@ -1122,168 +860,112 @@ ROUNDTRIP_WINDOW_HOURS = int(os.getenv("ROUNDTRIP_WINDOW_HOURS", "24"))
 # --- BEGIN: Google Sheets API queue, caching and Worksheet proxy helpers ---
 import threading
 import queue
-import time
 from typing import Callable, Any, Optional, Dict, Tuple
-
-# --- BEGIN: Bot state persistence to Google Sheets (mission_cycle) ---
-import base64, json, io
-from google.oauth2 import service_account
-import gspread
-
 # --- BEGIN: ENV NAMES NORMALIZATION & Bot-state persistence helpers ---
-import base64, json
 from google.oauth2 import service_account
-import gspread
-if not os.getenv('GOOGLE_CREDS_B64') and os.getenv('GOOGLE_CREDS_BASE64'):
-    os.environ['GOOGLE_CREDS_B64'] = os.getenv('GOOGLE_CREDS_BASE64')
-_GSPREAD_SCOPES = ['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive']
+# --- Normalize env names (legacy compatibility) ---
+if not os.getenv("GOOGLE_CREDS_B64") and os.getenv("GOOGLE_CREDS_BASE64"):
+    os.environ["GOOGLE_CREDS_B64"] = os.getenv("GOOGLE_CREDS_BASE64")
+
+# --- Bot-state in-memory cache (SINGLE SOURCE OF TRUTH) ---
 _LOADED_MISSION_CYCLES = {}
+
+# --- Google Sheets client (single, authoritative implementation) ---
 def _get_gspread_client():
-    b64 = os.getenv('GOOGLE_CREDS_B64') or os.getenv('GOOGLE_CREDS_BASE64')
+    b64 = os.getenv("GOOGLE_CREDS_B64")
     if not b64:
-        raise RuntimeError('Google credentials not provided (GOOGLE_CREDS_B64 / GOOGLE_CREDS_BASE64)')
+        raise RuntimeError(
+            "Google credentials not provided (GOOGLE_CREDS_B64 / GOOGLE_CREDS_BASE64)"
+        )
+
     info = json.loads(base64.b64decode(b64))
+
     try:
-        creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive'])
+        creds = service_account.Credentials.from_service_account_info(
+            info,
+            scopes=[
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive",
+            ],
+        )
     except Exception:
+        # Fallback for legacy credentials without scopes
         creds = service_account.Credentials.from_service_account_info(info)
-    return gspread.authorize(creds)
-def open_bot_state_worksheet():
-    gc = _get_gspread_client()
-    sheet_name = os.getenv('GOOGLE_SHEET_NAME'); sheet_id = os.getenv('SHEET_ID')
 
-    if sheet_name: sh = gc.open(sheet_name)
-    elif sheet_id: sh = gc.open_by_key(sheet_id)
-    else: raise RuntimeError('Provide GOOGLE_SHEET_NAME or SHEET_ID')
-    tab = os.getenv('BOT_STATE_TAB') or 'Bot_State'
-    try: ws = sh.worksheet(tab)
-    except Exception:
-        ws = sh.add_worksheet(tab, rows=100, cols=10); ws.update('A1:B1',[['Key','Value']])
-    return ws
-def load_mission_cycles_from_sheet():
-    global _LOADED_MISSION_CYCLES
-    try:
-        ws = open_bot_state_worksheet(); records = ws.get_all_records()
-        for r in records:
-            k = r.get('Key') or r.get('key'); v = r.get('Value') or r.get('value')
-            if k == 'mission_cycle' and v:
-                _LOADED_MISSION_CYCLES = json.loads(v); return _LOADED_MISSION_CYCLES
-    except Exception:
-        pass
-    _LOADED_MISSION_CYCLES = {}; return _LOADED_MISSION_CYCLES
-def save_mission_cycles_to_sheet(mdict):
-    try:
-        ws = open_bot_state_worksheet(); records = ws.get_all_records(); found=None
-        for idx,r in enumerate(records,start=2):
-            k = r.get('Key') or r.get('key')
-            if k == 'mission_cycle': found=idx; break
-        j=json.dumps(mdict, ensure_ascii=False)
-        if found: ws.update(f'B{found}', j)
-        else: ws.append_row(['mission_cycle', j])
-    except Exception:
-        try: logger.exception('Failed to save mission cycles to sheet')
-        except Exception: pass
-# --- END: ENV NAMES NORMALIZATION & Bot-state persistence helpers ---
-
-# Top-level OT writer (moved out of nested scope to avoid indentation issues)
-def _write_ot_rows(rows):
-    logger.info("Entering _write_ot_rows")
-    try:
-        # Prefer the configured OT_RECORD_TAB; fall back to legacy OT_SUM_TAB or default "OT record"
-        tab_name = OT_RECORD_TAB or os.getenv("OT_SUM_TAB") or "OT record"
-        ws = open_worksheet(tab_name)
-        headers = OT_RECORD_HEADERS
-        try:
-            ensure_sheet_headers_match(ws, headers)
-        except Exception:
-            try:
-                logger.exception("Failed to ensure/update OT record headers")
-            except Exception:
-                pass
-        for r in rows:
-            try:
-                ws.append_row(r, value_input_option='USER_ENTERED')
-            except Exception:
-                try:
-                    ws.append_row(r)
-                except Exception:
-                    logger.exception("Failed to append OT calc row %s", r)
-    except Exception:
-        logger.exception("Failed writing OT calc rows")
-
-_LOADED_MISSION_CYCLES = {}
-
-def _get_gspread_client():
-    # Accept either GOOGLE_CREDS_BASE64 or GOOGLE_CREDS_B64 env var
-    b64 = os.getenv("GOOGLE_CREDS_BASE64") or os.getenv("GOOGLE_CREDS_B64")
-    if not b64:
-        raise RuntimeError("Google credentials not provided in environment (GOOGLE_CREDS_BASE64 / GOOGLE_CREDS_B64)")
-    cred_json = base64.b64decode(b64)
-    creds = service_account.Credentials.from_service_account_info(json.loads(cred_json))
     return gspread.authorize(creds)
 
+# --- Bot-state worksheet helper ---
 def open_bot_state_worksheet():
     gc = _get_gspread_client()
-    # prefer GOOGLE_SHEET_NAME, else fall back to SHEET_ID
+
     sheet_name = os.getenv("GOOGLE_SHEET_NAME")
     sheet_id = os.getenv("SHEET_ID")
+
     if sheet_name:
         sh = gc.open(sheet_name)
     elif sheet_id:
         sh = gc.open_by_key(sheet_id)
     else:
         raise RuntimeError("Neither GOOGLE_SHEET_NAME nor SHEET_ID provided")
+
     tab = os.getenv("BOT_STATE_TAB") or "Bot_State"
+
     try:
         ws = sh.worksheet(tab)
     except Exception:
-        # create worksheet if missing
         ws = sh.add_worksheet(tab, rows=100, cols=10)
-        # set headers
-        ws.update("A1:B1", [["Key","Value"]])
+        ws.update("A1:B1", [["Key", "Value"]])
+
     return ws
 
+# --- Load mission cycles from Bot_State sheet ---
 def load_mission_cycles_from_sheet():
     global _LOADED_MISSION_CYCLES
     try:
         ws = open_bot_state_worksheet()
         records = ws.get_all_records()
+
         for r in records:
             k = r.get("Key") or r.get("key")
             v = r.get("Value") or r.get("value")
-            if k and v:
-                if k == "mission_cycle":
-                    try:
-                        _LOADED_MISSION_CYCLES = json.loads(v)
-                    except Exception:
-                        _LOADED_MISSION_CYCLES = {}
-                    return _LOADED_MISSION_CYCLES
-        # if not found, keep empty dict
-        _LOADED_MISSION_CYCLES = {}
-        return _LOADED_MISSION_CYCLES
-    except Exception:
-        # don't crash startup; leave empty
+            if k == "mission_cycle" and v:
+                try:
+                    _LOADED_MISSION_CYCLES = json.loads(v)
+                except Exception:
+                    _LOADED_MISSION_CYCLES = {}
+                return _LOADED_MISSION_CYCLES
+
         _LOADED_MISSION_CYCLES = {}
         return _LOADED_MISSION_CYCLES
 
+    except Exception:
+        _LOADED_MISSION_CYCLES = {}
+        return _LOADED_MISSION_CYCLES
+
+# --- Save mission cycles to Bot_State sheet ---
 def save_mission_cycles_to_sheet(mdict):
     try:
         ws = open_bot_state_worksheet()
         records = ws.get_all_records()
+
         found_row = None
         for idx, r in enumerate(records, start=2):
             k = r.get("Key") or r.get("key")
             if k == "mission_cycle":
                 found_row = idx
                 break
+
         json_val = json.dumps(mdict, ensure_ascii=False)
+
         if found_row:
             ws.update(f"B{found_row}", json_val)
         else:
             ws.append_row(["mission_cycle", json_val])
+
     except Exception as e:
         logger.exception("Failed to save mission cycles to sheet: %s", e)
-# --- END: Bot state persistence ---
+
+
 
 # Simple thread-based serial executor to avoid 429s.
 class GoogleApiQueue:
@@ -1445,8 +1127,6 @@ class WorksheetProxy:
         return getattr(self._ws, name)
 # --- END: Google Sheets API queue, caching and Worksheet proxy helpers ---
 
-SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
 HEADERS_BY_TAB: Dict[str, List[str]] = {
     RECORDS_TAB: ["Date", "Driver", "Plate", "Start DateTime", "End DateTime", "Duration"],
     MISSIONS_TAB: ["GUID", "No.", "Name", "Plate", "Start Date", "End Date", "Departure", "Arrival", "Staff Name", "Roundtrip", "Return Start", "Return End"],
@@ -1537,45 +1217,6 @@ def t(user_lang: Optional[str], key: str, **kwargs) -> str:
         lang = "en"
     return TR.get(lang, TR["en"]).get(key, TR["en"].get(key, "")).format(**kwargs)
 
-def _load_creds_from_base64(encoded: str) -> dict:
-    try:
-        if encoded.strip().startswith("{"):
-            return json.loads(encoded)
-        padded = "".join(encoded.split())
-        missing = len(padded) % 4
-        if missing:
-            padded += "=" * (4 - missing)
-        decoded = base64.b64decode(padded)
-        return json.loads(decoded)
-    except Exception:
-        logger.exception("Failed to decode GOOGLE_CREDS_BASE64")
-        raise
-
-def get_gspread_client():
-    creds_json = None
-    if GOOGLE_CREDS_BASE64:
-        creds_json = _load_creds_from_base64(GOOGLE_CREDS_BASE64)
-    elif GOOGLE_CREDS_PATH and os.path.exists(GOOGLE_CREDS_PATH):
-        with open(GOOGLE_CREDS_PATH, "r", encoding="utf-8") as f:
-            creds_json = json.load(f)
-    else:
-        fallback = "credentials.json"
-        if os.path.exists(fallback):
-            with open(fallback, "r", encoding="utf-8") as f:
-                creds_json = json.load(f)
-    if not creds_json:
-        raise RuntimeError("Google credentials not found.")
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, SCOPES)
-    client = gspread.authorize(creds)
-    return client
-
-def ensure_sheet_has_headers_conservative(ws, headers: List[str]):
-    try:
-        values = ws.get_all_values()
-        if not values:
-            ws.insert_row(headers, index=1)
-    except Exception:
-        logger.exception("Failed to ensure headers on %s", getattr(ws, "title", "<ws>"))
 
 def ensure_sheet_headers_match(ws, headers: List[str]):
     try:
@@ -1643,7 +1284,7 @@ def open_worksheet(tab: str = ""):
             # If proxying somehow fails, fall back to raw worksheet
             return ws
 
-    gc = get_gspread_client()
+    gc = _get_gspread_client()
     sh = gc.open(GOOGLE_SHEET_NAME)
 
     def _create_tab(name: str, headers: Optional[List[str]] = None):
@@ -1686,109 +1327,6 @@ def open_worksheet(tab: str = ""):
                 return _create_tab(GOOGLE_SHEET_TAB, headers=None)
         # Default to first sheet, wrapped
         return _wrap_ws(sh.sheet1)
-
-
-# === BEGIN: Monthly OT and Mission Reports ===
-def _add_months(year:int, month:int, months:int):
-    y = year + (month - 1 + months) // 12
-    m = (month - 1 + months) % 12 + 1
-    return y, m
-
-def _parse_ym(ym:str):
-    try:
-        parts = ym.split("-")
-        y = int(parts[0]); m = int(parts[1])
-        return y,m
-    except Exception:
-        return None
-
-async def ot_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /ot_monthly_report YYYY-MM username
-    Window: YYYY-MM-16 04:00 -> next month 16 04:00
-    """
-    args = context.args
-    if not args or len(args) < 2:
-        await update.effective_chat.send_message("Usage: /ot_monthly_report YYYY-MM username")
-        return
-    ym = args[0]
-    username = args[1]
-    ym_parsed = _parse_ym(ym)
-    if not ym_parsed:
-        await update.effective_chat.send_message("Invalid YYYY-MM")
-        return
-    y,m = ym_parsed
-    start_dt = datetime(y,m,16,4,0)
-    ny, nm = _add_months(y,m,1)
-    end_dt = datetime(ny,nm,16,4,0)
-    try:
-        ws = open_worksheet(OT_RECORD_TAB)
-        vals = ws.get_all_values()
-    except Exception:
-        await update.effective_chat.send_message("Failed to open OT records sheet.")
-        return
-    if not vals or len(vals) < 2:
-        await update.effective_chat.send_message("No OT records.")
-        return
-    headers = vals[0]
-    # map headers
-    idx_name = headers.index("Name") if "Name" in headers else 0
-    idx_type = headers.index("Type") if "Type" in headers else 1
-    idx_start = headers.index("Start Date") if "Start Date" in headers else 2
-    idx_morning = headers.index("Morning OT") if "Morning OT" in headers else None
-    idx_evening = headers.index("Evening OT") if "Evening OT" in headers else None
-    # collect
-    entries = {}
-    for row in vals[1:]:
-        try:
-            name = row[idx_name].strip()
-            if name != username:
-                continue
-            typ = row[idx_type].strip()
-            start_raw = row[idx_start].strip() if len(row) > idx_start else ""
-            sd = None
-            try:
-                sd = datetime.strptime(start_raw, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                try:
-                    sd = datetime.strptime(start_raw, "%Y-%m-%d")
-                except Exception:
-                    continue
-            if not (start_dt <= sd < end_dt):
-                continue
-            h = 0.0
-            if idx_morning is not None and len(row) > idx_morning:
-                try: h += float(row[idx_morning] or 0)
-                except: pass
-
-            if idx_evening is not None and len(row) > idx_evening:
-                try: h += float(row[idx_evening] or 0)
-                except: pass
-            entries.setdefault((name,typ), []).append((sd, h))
-        except Exception:
-            continue
-    if not entries:
-        await update.effective_chat.send_message("No OT records in window for user.")
-        return
-    # format message
-    lines=[]
-    for (name,typ), recs in entries.items():
-        recs.sort(key=lambda x: x[0])
-        date_parts = "; ".join([f"{r[0].strftime('%Y-%m-%d %H:%M:%S')} ({r[1]:.2f}h)" for r in recs])
-        total = sum(r[1] for r in recs)
-        lines.append(f"{name}, {typ}, {date_parts}, Total: {total:.2f}h")
-    text = "\n".join(lines)
-    # send as file if too long
-    if len(text) > 4000:
-        bio = io.BytesIO(text.encode("utf-8"))
-        bio.name = f"ot_report_{ym}_{username}.txt"
-        bio.seek(0)
-        await update.effective_chat.send_document(bio)
-    else:
-        await update.effective_chat.send_message(text)
-
-# [DISABLED LEGACY MISSION REPORT]
-# (removed per request)
-
 
 async def process_leave_entry(ws, driver, start, end, reason, notes, update, context, pending_leave, user):
     """Helper to append leave row with Leave Days, check duplicates and exclude weekends/holidays."""
@@ -2043,22 +1581,6 @@ def _ensure_row_length(row: List[Any], length: int) -> List[Any]:
     while len(r) < length:
         r.append("")
     return r
-
-def calc_mission_days(start_dt: datetime, end_dt: datetime) -> int:
-    """
-    Mission day calculation:
-    - Same day return => 1 day
-    - Cross day => day difference + 1
-    - Return before 04:00 counts as previous day
-    """
-    # 如果结束时间在 04:00 之前，算作前一天
-    if end_dt.hour < 4:
-        end_date = (end_dt - timedelta(days=1)).date()
-    else:
-        end_date = end_dt.date()
-
-    start_date = start_dt.date()
-    return (end_date - start_date).days + 1
 
 def start_mission_record(driver: str, plate: str, departure: str, update=None) -> dict:
     ws = open_worksheet(MISSIONS_TAB)
@@ -2442,30 +1964,83 @@ def _find_last_mileage_for_plate(plate: str) -> Optional[int]:
         logger.exception("Failed to find last mileage for plate")
         return None
 
-def record_finance_odo_fuel(plate: str, mileage: str, fuel_cost: str, by_user: str = "", invoice: str = "", driver_paid: str = "") -> dict:
+def record_finance_odo_fuel(
+    plate: str,
+    mileage: str,
+    fuel_cost: str,
+    by_user: str = "",
+    invoice: str = "",
+    driver_paid: str = "",
+) -> dict:
     try:
         ws = open_worksheet(FUEL_TAB)
-        prev_m = _find_last_mileage_for_plate(plate)
+
+        # —— 强制触发一次读，避免 WorksheetProxy 缓存 / header 不同步 ——
+        _ = ws.get_all_values()
+
+        # —— 确保 Fuel header 正确 ——
+        try:
+            ensure_sheet_headers_match(ws, HEADERS_BY_TAB[FUEL_TAB])
+        except Exception:
+            pass
+
+        # —— 解析当前里程 ——
         m_int = None
         try:
-            m_int = int(re.search(r'(\d+)', str(mileage)).group(1))
+            m_int = int(re.search(r"(\d+)", str(mileage)).group(1))
         except Exception:
             m_int = None
+
+        # —— 仅从 Fuel 表查上一次里程（逻辑闭环） ——
+        prev_m = None
+        try:
+            rows = ws.get_all_values()
+            if len(rows) > 1:
+                for r in reversed(rows[1:]):
+                    if len(r) >= 4 and r[0] == plate:
+                        try:
+                            prev_m = int(re.search(r"(\d+)", r[3]).group(1))
+                            break
+                        except Exception:
+                            continue
+        except Exception:
+            prev_m = None
+
         delta = ""
         if prev_m is not None and m_int is not None:
-            try:
-                delta_val = m_int - prev_m
-                delta = str(delta_val)
-            except Exception:
-                delta = ""
+            delta = str(m_int - prev_m)
+
         dt = now_str()
-        row = [plate, by_user or "Unknown", dt, str(m_int) if m_int is not None else str(mileage), delta, str(fuel_cost), invoice or "", driver_paid or ""]
+
+        row = [
+            plate,
+            by_user or "Unknown",
+            dt,
+            str(m_int) if m_int is not None else str(mileage),
+            delta,
+            str(fuel_cost),
+            invoice or "",
+            driver_paid or "",
+        ]
+
         ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info("Recorded combined ODO+Fuel: plate=%s mileage=%s delta=%s fuel=%s invoice=%s paid=%s", plate, m_int, delta, fuel_cost, invoice, driver_paid)
-        return {"ok": True, "delta": delta, "mileage": m_int, "fuel": fuel_cost}
+
+        logger.info(
+            "Recorded FUEL: plate=%s mileage=%s delta=%s fuel=%s invoice=%s paid=%s",
+            plate, m_int, delta, fuel_cost, invoice, driver_paid
+        )
+
+        return {
+            "ok": True,
+            "delta": delta,
+            "mileage": m_int,
+            "fuel": fuel_cost,
+        }
+
     except Exception as e:
-        logger.exception("Failed to append combined odo+fuel row: %s", e)
+        logger.exception("Failed to append fuel row: %s", e)
         return {"ok": False, "message": str(e)}
+
 
 def record_parking(plate: str, amount: str, by_user: str = "", notes: str = "") -> dict:
     try:
@@ -3966,18 +3541,6 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     bio.name = f"Mission_Report_{driver}.csv"
     await context.bot.send_document(chat_id=query.from_user.id, document=bio, caption=f"Mission report for {driver}")
 
-
-# ===== HARD DISABLE LEGACY MISSION REPORT =====
-def _legacy_mission_report_killed(*args, **kwargs):
-    raise RuntimeError("LEGACY MISSION REPORT DISABLED")
-
-for _name in list(globals().keys()):
-    if "mission" in _name and "report" in _name and _name not in (
-        "mission_report_entry",
-        "mission_report_driver_callback",
-    ):
-        globals()[_name] = _legacy_mission_report_killed
-
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler(["start_trip", "start"], start_trip_command))
@@ -4001,8 +3564,6 @@ def register_ui_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(AUTO_KEYWORD_PATTERN) & filters.ChatType.GROUPS, auto_menu_listener))
     application.add_handler(MessageHandler(filters.COMMAND, delete_command_message), group=1)
     application.add_handler(CommandHandler("help", lambda u, c: u.message.reply_text(t(c.user_data.get("lang", DEFAULT_LANG), "help"))))
-    
-    # ===============================
     
     # Debug command for runtime self-check
     application.add_handler(CommandHandler('debug_bot', debug_bot_command))
@@ -4043,47 +3604,6 @@ def register_ui_handlers(application):
     except Exception:
         logger.exception("Could not schedule set_my_commands.")
 
-def ensure_env():
-    if not BOT_TOKEN:
-        raise RuntimeError(t(DEFAULT_LANG, "no_bot_token"))
-
-def schedule_daily_summary(application):
-    try:
-        if not SUMMARY_CHAT_ID:
-            logger.info("SUMMARY_CHAT_ID not configured; scheduled jobs disabled.")
-            return
-
-        if not getattr(application, "job_queue", None):
-            logger.warning("Job queue not available; daily summary not scheduled.")
-            return
-
-        tz = None
-        if ZoneInfo and SUMMARY_TZ:
-            try:
-                tz = ZoneInfo(SUMMARY_TZ)
-            except Exception:
-                logger.exception("Invalid SUMMARY_TZ: %s; fallback to system timezone", SUMMARY_TZ)
-                tz = None
-
-        job_time = dtime(hour=SUMMARY_HOUR, minute=0, second=0)
-
-        application.job_queue.run_daily(
-            send_daily_summary_job,
-            time=job_time,
-            context={"chat_id": SUMMARY_CHAT_ID},
-            name="daily_summary",
-            tz=tz,
-        )
-
-        logger.info(
-            "Scheduled daily summary at %02d:00 (%s) to %s",
-            SUMMARY_HOUR,
-            SUMMARY_TZ,
-            SUMMARY_CHAT_ID,
-        )
-
-    except Exception:
-        logger.exception("Failed to schedule daily summary.")
 
 def _delete_telegram_webhook(token: str) -> bool:
     try:
@@ -4178,7 +3698,6 @@ def main():
             ]
             try:
                 import json
-                import urllib.request
 
                 url = f"https://api.telegram.org/bot{token_tmp}/setMyCommands"
                 data = json.dumps({"commands": cmds_payload}).encode("utf-8")
@@ -4267,38 +3786,6 @@ def main():
             logger.exception("Polling exited with exception.")
 if __name__ == "__main__":
     main()
-
-# === In-memory override for mission cycle persistence ===
-# We deliberately avoid any Google Sheets I/O for mission_cycle state
-# to reduce API usage and prevent OAuth scope issues. The mission
-# cycle information is kept only in memory for the lifetime of the
-# bot process.
-
-_MISSION_CYCLE_STORE = {}
-
-
-def load_mission_cycles_from_sheet():
-    """Return current in-memory mission cycle mapping.
-
-    This overrides the earlier implementation that read from Google
-    Sheets. The return value is a shallow copy so callers can't
-    accidentally mutate the internal store without calling the
-    save helper.
-    """
-    return dict(_MISSION_CYCLE_STORE)
-
-
-def save_mission_cycles_to_sheet(mission_cycles):
-    """Update the in-memory mission cycle mapping.
-
-    This overrides the earlier implementation that wrote to Google
-    Sheets. It simply keeps everything in process memory.
-    """
-    _MISSION_CYCLE_STORE.clear()
-    _MISSION_CYCLE_STORE.update(mission_cycles or {})
-
-
-
 
 
 # === BEGIN: OT Summary integration (added) ===
@@ -4506,66 +3993,6 @@ try:
 except Exception:
     pass
 # === END: OT Summary integration ===
-
-
-
-
-# === BEGIN: lightweight /chatid command (added) ===
-async def chatid_command(update, context):
-    """Return the current chat's ID. Safe, non-intrusive addition."""
-    try:
-        chat = None
-        # Prefer effective_chat when available
-        if hasattr(update, "effective_chat") and update.effective_chat is not None:
-            chat = update.effective_chat
-        elif hasattr(update, "message") and update.message and update.message.chat:
-            chat = update.message.chat
-        elif hasattr(update, "callback_query") and update.callback_query and update.callback_query.message and update.callback_query.message.chat:
-            chat = update.callback_query.message.chat
-
-        if not chat:
-            # best-effort fallback
-            try:
-                await update.effective_chat.send_message("Could not determine chat id.")
-            except Exception:
-                try:
-                    await update.message.reply_text("Could not determine chat id.")
-                except Exception:
-                    pass
-            return
-
-        cid = getattr(chat, "id", None)
-        title = getattr(chat, "title", None) or getattr(chat, "username", None) or "this chat"
-        text = f"Chat ID for {title}: {cid}"
-        try:
-            await update.effective_chat.send_message(text)
-        except Exception:
-            try:
-                await update.message.reply_text(text)
-            except Exception:
-                pass
-    except Exception as e:
-        try:
-            await update.effective_chat.send_message(f"Error retrieving chat id: {e}")
-        except Exception:
-            try:
-                await update.message.reply_text(f"Error retrieving chat id: {e}")
-            except Exception:
-                pass
-
-# Register handler if dispatcher/application exists
-try:
-    application.add_handler(CommandHandler("chatid", chatid_command))
-except Exception:
-    try:
-        # older style: dispatcher
-        dispatcher.add_handler(CommandHandler("chatid", chatid_command))
-    except Exception:
-        pass
-# === END: lightweight /chatid command (added) ===
-
-
-
 
 # === BEGIN: lightweight /chatid command (added) ===
 async def chatid_command(update, context):
@@ -4909,7 +4336,6 @@ for k, v in list(TR.get("en", {}).items()):
 # - Generates CSV files per driver in /tmp and sends them as documents when possible.
 # - Does not change any existing logic elsewhere.
 #
-import csv
 
 def _parse_date_guess(val):
     if not val:
@@ -4970,89 +4396,6 @@ def _safe_get_col_index(rowkeys, candidates):
             return i
     return -1
 
-async def ot_report_command(update, context):
-    # delete invoking message if possible
-    try:
-        if update.effective_message:
-            await update.effective_message.delete()
-    except Exception:
-        pass
-    start, end = _compute_16_to_16_period(datetime.utcnow())
-    # read OT sheet
-    try:
-        ws = open_ot_worksheet()  # expected helper in original code; if missing, try open_worksheet("OT")
-    except Exception:
-        try:
-            ws = open_worksheet_by_name("OT")
-        except Exception:
-            await update.effective_chat.send_message(t(context, "ot_report_no_sheet"))
-            return
-    try:
-        rows = ws.get_all_values()
-        if not rows or len(rows) < 2:
-            await update.effective_chat.send_message(t(context, "ot_report_no_data"))
-            return
-        headers = [c.strip().lower() for c in rows[0]]
-        idx_username = _safe_get_col_index(headers, ["username", "user", "driver", "id"])
-        idx_name = _safe_get_col_index(headers, ["name", "fullname", "driver_name"])
-        idx_date = _safe_get_col_index(headers, ["date", "ot_date", "datetime"])
-        idx_hours = _safe_get_col_index(headers, ["hours", "hour", "ot_hours"])
-        idx_ot_type = _safe_get_col_index(headers, ["ot_type", "type", "ot"])
-
-        per_driver = {}
-        for r in rows[1:]:
-            try:
-                username = r[idx_username].strip() if idx_username!=-1 and idx_username < len(r) else ""
-                name = r[idx_name].strip() if idx_name!=-1 and idx_name < len(r) else ""
-                date_raw = r[idx_date].strip() if idx_date!=-1 and idx_date < len(r) else ""
-                hours_raw = r[idx_hours].strip() if idx_hours!=-1 and idx_hours < len(r) else ""
-                ot_type_raw = r[idx_ot_type].strip() if idx_ot_type!=-1 and idx_ot_type < len(r) else ""
-                dt = _parse_date_guess(date_raw)
-                if not dt:
-                    continue
-                # consider timezone? assume sheet times are local; compare naive UTC ranges by converting start/end to dates
-                if not (start <= dt < end):
-                    continue
-                hours = float(hours_raw) if hours_raw else 0.0
-                ot_type = ot_type_raw or ""
-                per_driver.setdefault(username, {"name": name or username, "entries": []})
-                per_driver[username]["entries"].append((dt, ot_type, hours))
-            except Exception:
-                continue
-        if not per_driver:
-            await update.effective_chat.send_message(t(context, "ot_report_no_records", start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")))
-            return
-        # For each driver generate CSV and send
-        sent = 0
-        files = []
-        for username, data in per_driver.items():
-            name = data.get("name") or username
-            entries = sorted(data.get("entries", []), key=lambda x: x[0])
-            csv_path = f"/tmp/ot_report_{username}_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.csv"
-            with open(csv_path, "w", newline='', encoding="utf-8") as cf:
-                writer = csv.writer(cf)
-                writer.writerow(["Name","OT Type","OT Date","OT(Hour)"])
-                for dt, ot_type, hours in entries:
-                    writer.writerow([name, ot_type, dt.strftime("%Y-%m-%d %H:%M"), f"{hours:.2f}"])
-            files.append(csv_path)
-            sent += 1
-        # Create zip of all CSVs
-        zip_path = f"/tmp/ot_reports_{start.strftime('%Y%m%d')}_{end.strftime('%Y%m%d')}.zip"
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for p in files:
-                zf.write(p, arcname=os.path.basename(p))
-        # send zip to chat
-        try:
-            await update.effective_chat.send_document(open(zip_path, "rb"))
-        except Exception:
-            await update.effective_chat.send_message(t(context, "ot_report_sent_files", count=sent))
-        # cleanup left to host environment
-    except Exception as e:
-        try:
-            logger.exception("ot_report failed: %s", e)
-        except Exception:
-            pass
-        await update.effective_chat.send_message(t(context, "ot_report_failed"))
 
 async def mission_report_command(update, context):
     try:
@@ -5509,12 +4852,6 @@ except Exception:
 globals().setdefault("register_bot_commands", _register_bot_commands)
 
 
-
-# ===============================
-# === C FINAL SAFE ADDON
-# ===============================
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, CallbackQueryHandler
 
 # === Unified private reply helper (A-approved) ===
@@ -5589,11 +4926,6 @@ try:
 except Exception:
     pass
 
-# ======================
-# OT REPORT PATCH V7
-# ======================
-import io, csv
-
 # =============================
 # OT Holiday Base (FROZEN)
 # =============================
@@ -5664,145 +4996,6 @@ def _auto_close_previous_in(ws, driver, new_in_time):
 
 # === CLOCK HANDLER END ===
 
-
-
-# ============================================================
-# ULTIMATE FROZEN APPENDIX (NON-INVASIVE)
-# ============================================================
-# This appendix freezes and documents all agreed V9 policies,
-# audit rules, replay/backfill procedures, payroll mappings,
-# audit packs, and governance constructs.
-#
-# IMPORTANT:
-# - No runtime logic is modified here.
-# - All executable integrations already live in the baseline.
-# - This section provides the immutable specification layer
-#   required for audits, replay, legal discovery, and regulators.
-#
-# --------------------
-# A. OT V9 Equivalence
-# --------------------
-# - Mission pairing: M-27 state machine (single open trip, override on conflict)
-# - Mission day boundary: 04:00 local time
-# - Clock-out priority for autofix: Driver_OT OUT > 23:59:59 fallback
-#
-# --------------------
-# B. Replay / Backfill
-# --------------------
-# - B-7.1 Replay scanner (read-only)
-# - B-7.2 Deterministic validation
-# - B-7.3 Explicit backfill with preview hash + signed apply (FROZEN)
-#
-# --------------------
-# C. OT × Mission × Payroll
-# --------------------
-# - Minute-level slicing
-# - OT verdict table (minutes → hours)
-# - Leave / Holiday conflict arbitration
-#
-# --------------------
-# D. Policy & Versioning
-# --------------------
-# - Policy hash anchoring
-# - Versioned, immutable rules
-#
-# --------------------
-# E. Payroll & Accounting
-# --------------------
-# - Payroll export schema frozen
-# - Accounting mapping (COA)
-# - Reconciliation report
-#
-# --------------------
-# F. Audit Pack
-# --------------------
-# - Full evidence chain export
-# - Third-party verifier
-# - Verifier signatures
-#
-# --------------------
-# G. Immutability
-# --------------------
-# - WORM / Object Lock ready
-# - Blockchain hash anchoring
-#
-# --------------------
-# H. Legal / Regulatory
-# --------------------
-# - Legal discovery mode
-# - Regulator-specific profiles
-#
-# --------------------
-# I. Cross-chain Anchors
-# --------------------
-# - Multi-chain redundancy
-# - Court evidence procedures
-#
-# --------------------
-# J. System Constitution
-# --------------------
-# - Supreme frozen layer
-# - Production constitution published
-#
-# ============================================================
-# END ULTIMATE FROZEN APPENDIX
-# ============================================================
-
-
-# ============================================================
-# B-7 REPLAY / BACKFILL SCANNER (FROZEN, NON-INVASIVE)
-# ============================================================
-def replay_scan_delta_km(rows):
-    '''
-    Scan fuel/odo rows and report anomalies where:
-    delta_km != current_odo - previous_odo
-    READ-ONLY, no mutation.
-    '''
-    issues = []
-    prev_odo = None
-    for i, r in enumerate(rows):
-        odo = r.get("odo")
-        delta = r.get("delta_km")
-        if odo is None:
-            continue
-        if prev_odo is not None:
-            expected = odo - prev_odo
-            if delta != expected:
-                issues.append({
-                    "row": i,
-                    "odo": odo,
-                    "delta_km": delta,
-                    "expected": expected,
-                })
-        prev_odo = odo
-    return issues
-
-
-# ============================================================
-# C-4.16 MISSION × OT MINUTE SPLIT (FROZEN BASE)
-# ============================================================
-def split_mission_ot_minutes(mission_start, mission_end, ot_segments):
-    '''
-    Split mission duration into OT minutes.
-    mission_start/end: datetime
-    ot_segments: list of (seg_start, seg_end)
-    '''
-    minutes = 0
-    for s, e in ot_segments:
-        overlap_start = max(mission_start, s)
-        overlap_end = min(mission_end, e)
-        if overlap_start < overlap_end:
-            minutes += int((overlap_end - overlap_start).total_seconds() // 60)
-    return minutes
-
-# === END B-7 + C-4.16 ===
-
-
-# ===============================
-# NEW MISSION REPORT (OT-STYLE, DRIVER BUTTON + CSV)
-# ===============================
-import io, csv
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler, CommandHandler
 
 
