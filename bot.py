@@ -231,7 +231,6 @@ async def ot_report_driver_callback(update, context):
 
     driver = query.data.split(":", 1)[1]   # system driver
     driver_map = get_driver_map()
-    display_name = driver_map.get(driver) or driver
 
     ws = open_worksheet(OT_RECORD_TAB)
     rows = ws.get_all_values()
@@ -269,7 +268,7 @@ async def ot_report_driver_callback(update, context):
 
     for r in data:
         # 按显示名筛选（与写入 OT Record 的 Name 列一致）
-        if r[idx_name].strip() != display_name:
+        if r[idx_name].strip() != driver:
             continue
 
         try:
