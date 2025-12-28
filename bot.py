@@ -3476,9 +3476,9 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     out = io.StringIO()
     writer = csv.writer(out)
 
-    # === Header（严格按图片）===
+    # Header（8 列，含 Return）
     writer.writerow(
-        ["Driver", "Plate", "Start", "End", "Mission days", "Departure", "Arrival"]
+        ["Driver", "Plate", "Start", "End", "Mission days", "Departure", "Arrival", "Return"]
     )
 
     total_mission_days = 0
@@ -3487,9 +3487,15 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     for r in rows:
         if r[0] != driver:
             continue
+
         found = True
-        if isinstance(r[4], int):
-            total_mission_days += r[4]
+
+        # ✅ Mission days：字符串直接转 int 相加
+        try:
+            total_mission_days += int(str(r[4]).strip())
+        except Exception:
+            pass
+
         writer.writerow(r)
 
     if not found:
@@ -3499,15 +3505,24 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
         )
         return
 
-    # === Period 行（图片格式）===
+    # Period 行
     last_day = (end - timedelta(days=1)).day
     period_text = f"1st to {last_day}th {start.strftime('%b %Y')}"
     writer.writerow([])
     writer.writerow(["Period", period_text])
 
-    # === Total Mission days 行（对齐）===
+    # Total Mission days（8 列，对齐 Mission days 列）
     writer.writerow(
-        ["Total Mission days", "", "", "", total_mission_days, "", ""]
+        [
+            "Total Mission days",  # A
+            "",                    # B
+            "",                    # C
+            "",                    # D
+            total_mission_days,    # E
+            "",                    # F
+            "",                    # G
+            "",                    # H
+        ]
     )
 
     bio = io.BytesIO(out.getvalue().encode("utf-8"))
@@ -3518,6 +3533,7 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
         document=bio,
         caption=f"Mission report for {driver} ({period_label})"
     )
+
 
 
 def register_ui_handlers(application):
