@@ -1842,56 +1842,24 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
     try:
         ws = open_worksheet(MISSIONS_REPORT_TAB)
 
-        # Report
         ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
+        ws.append_row(["Period", period_label, "", "", "", "", ""], value_input_option="USER_ENTERED")
 
-        # Period（按图片：A 列显示 Period，B 列显示范围）
         ws.append_row(
-            ["Period", period_label, "", "", "", "", ""],
+            ["Driver", "Plate", "Start", "End", "Mission days", "Departure", "Arrival"],
             value_input_option="USER_ENTERED"
         )
 
-        # Header（按图片顺序）
-        header = [
-            "Driver",
-            "Plate",
-            "Start",
-            "End",
-            "Mission days",
-            "Departure",
-            "Arrival",
-        ]
-        ws.append_row(header, value_input_option="USER_ENTERED")
-
         total_mission_days = 0
 
-        # Data rows
         for r in rows:
-            r = _ensure_row_length(r, M_MANDATORY_COLS)
+            # r 已经是 Mission Report 结构：
+            # [Driver, Plate, Start, End, Mission days, Departure, Arrival]
+            if len(r) >= 5 and isinstance(r[4], int):
+                total_mission_days += r[4]
 
-            try:
-                start_dt = datetime.fromisoformat(str(r[M_IDX_START]).strip())
-                end_dt = datetime.fromisoformat(str(r[M_IDX_END]).strip())
-                md = calc_mission_days(start_dt, end_dt)
-            except Exception:
-                md = ""
+            ws.append_row(r, value_input_option="USER_ENTERED")
 
-            if isinstance(md, int):
-                total_mission_days += md
-
-            row_out = [
-                r[M_IDX_NAME],     # Driver
-                r[M_IDX_PLATE],    # Plate
-                r[M_IDX_START],    # Start
-                r[M_IDX_END],      # End
-                md,                # Mission days
-                r[M_IDX_DEPART],   # Departure
-                r[M_IDX_ARRIVAL],  # Arrival
-            ]
-
-            ws.append_row(row_out, value_input_option="USER_ENTERED")
-
-        # Total Mission days（按图片位置）
         ws.append_row(
             ["Total Mission days", "", "", "", total_mission_days, "", ""],
             value_input_option="USER_ENTERED"
