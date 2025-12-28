@@ -1838,7 +1838,59 @@ def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[Li
     except Exception:
         logger.exception("Failed to fetch mission rows")
         return []
+def count_trips_for_day(driver: str, date_dt: datetime) -> int:
+    cnt = 0
+    try:
+        ws = open_worksheet(RECORDS_TAB)
+        vals = ws.get_all_values()
+        if not vals:
+            return 0
+        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
+        for r in vals[start_idx:]:
+            if len(r) < COL_START:
+                continue
+            dr = r[1] if len(r) > 1 else ""
+            start_ts = r[3] if len(r) > 3 else ""
+            end_ts = r[4] if len(r) > 4 else ""
+            if dr != driver:
+                continue
+            if not start_ts or not end_ts:
+                continue
+            s_dt = parse_ts(start_ts)
+            if not s_dt:
+                continue
+            if s_dt.date() == date_dt.date():
+                cnt += 1
+    except Exception:
+        logger.exception("Failed to count trips for day")
+    return cnt
 
+def count_trips_for_month(driver: str, month_start: datetime, month_end: datetime) -> int:
+    cnt = 0
+    try:
+        ws = open_worksheet(RECORDS_TAB)
+        vals = ws.get_all_values()
+        if not vals:
+            return 0
+        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
+        for r in vals[start_idx:]:
+            if len(r) < COL_START:
+                continue
+            dr = r[1] if len(r) > 1 else ""
+            start_ts = r[3] if len(r) > 3 else ""
+            end_ts = r[4] if len(r) > 4 else ""
+            if dr != driver:
+                continue
+            if not start_ts or not end_ts:
+                continue
+            s_dt = parse_ts(start_ts)
+            if not s_dt:
+                continue
+            if month_start <= s_dt < month_end:
+                cnt += 1
+    except Exception:
+        logger.exception("Failed to count trips for month")
+    return cnt
 
 def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
     try:
@@ -2796,34 +2848,6 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
         context.user_data.pop("pending_leave", None)
         return
-def count_trips_for_day(username: str, day: datetime) -> int:
-    """
-    统计某个司机在某一天内的出车次数
-    """
-    ws = open_worksheet(MISSIONS_TAB)
-    count = 0
-
-    vals, start_idx = _missions_get_values_and_data_rows(ws)
-    target_date = day.date()
-
-    for r in vals[start_idx:]:
-        r = _ensure_row_length(r, M_MANDATORY_COLS)
-
-        if str(r[M_IDX_NAME]).strip() != username:
-            continue
-
-        start_raw = str(r[M_IDX_START]).strip()
-        if not start_raw:
-            continue
-
-        s_dt = parse_ts(start_raw)
-        if not s_dt:
-            continue
-
-        if s_dt.date() == target_date:
-            count += 1
-
-    return count
 
 async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await process_force_reply(update, context)
