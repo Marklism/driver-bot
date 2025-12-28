@@ -1866,7 +1866,7 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
             ws.append_row(r, value_input_option="USER_ENTERED")
 
         ws.append_row(
-            ["Total Mission days", "", "", "", total_mission_days, "", "", ""],
+            ["Total Mission days", "", "", "", total_mission_days, "",  "", "",],
             value_input_option="USER_ENTERED"
         )
 
