@@ -1859,8 +1859,10 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
         total_mission_days = 0
 
         for r in rows:
-            if len(r) >= 5 and str(r[4]).strip().isdigit():
-                total_mission_days += int(r[4])
+            try:
+                total_mission_days += int(str(r[4]).strip())
+            except Exception:
+                pass
             ws.append_row(r, value_input_option="USER_ENTERED")
 
         ws.append_row(
