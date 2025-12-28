@@ -1591,6 +1591,20 @@ def _ensure_row_length(row: List[Any], length: int) -> List[Any]:
         r.append("")
     return r
 
+def calc_mission_days(start_dt: datetime, end_dt: datetime) -> int:
+    if not start_dt or not end_dt or end_dt < start_dt:
+        return 0
+
+    def day_anchor(dt):
+        if dt.hour < 4:
+            return (dt - timedelta(days=1)).date()
+        return dt.date()
+
+    start_day = day_anchor(start_dt)
+    end_day = day_anchor(end_dt)
+
+    return (end_day - start_day).days + 1
+
 def start_mission_record(driver: str, plate: str, departure: str, update=None) -> dict:
     ws = open_worksheet(MISSIONS_TAB)
     start_ts = now_str()
@@ -1598,7 +1612,6 @@ def start_mission_record(driver: str, plate: str, departure: str, update=None) -
         next_no = _missions_next_no(ws)
         guid = str(uuid.uuid4())
 
-        # ✅ 强制使用 Telegram username
         username = "UNKNOWN"
         if update and update.effective_user:
             username = (update.effective_user.username or update.effective_user.full_name)
@@ -1606,7 +1619,7 @@ def start_mission_record(driver: str, plate: str, departure: str, update=None) -
         row = [""] * M_MANDATORY_COLS
         row[M_IDX_GUID] = guid
         row[M_IDX_NO] = next_no
-        row[M_IDX_NAME] = username     # ✅ 写 username
+        row[M_IDX_NAME] = username
         row[M_IDX_PLATE] = plate
         row[M_IDX_START] = start_ts
         row[M_IDX_END] = ""
@@ -1630,7 +1643,6 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
         logger.exception("Failed to open MISSIONS_TAB: %s", e)
         return {"ok": False, "message": "Could not open missions sheet: " + str(e)}
 
-    # ===== 核心修改点：再次统一使用 Telegram username =====
     username = "UNKNOWN"
     if update and update.effective_user:
         username = (update.effective_user.username or update.effective_user.full_name)
@@ -1647,7 +1659,6 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
             rec_start = str(row[M_IDX_START]).strip()
             rec_dep = str(row[M_IDX_DEPART]).strip()
 
-            # ✅ 用 username 匹配
             if rec_plate == plate and rec_name == username and not rec_end:
                 row_number = i + 1
                 end_ts = now_str()
@@ -1655,7 +1666,6 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                 try:
                     ws.update_cell(row_number, M_IDX_END + 1, end_ts)
                     ws.update_cell(row_number, M_IDX_ARRIVAL + 1, arrival)
-                    # ===== 新增：Mission days =====
                     try:
                         start_dt = datetime.fromisoformat(rec_start)
                         end_dt = datetime.fromisoformat(end_ts)
@@ -1806,17 +1816,45 @@ def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[Li
 def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
     try:
         ws = open_worksheet(MISSIONS_REPORT_TAB)
+
         ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
-        ws.append_row(HEADERS_BY_TAB.get(MISSIONS_REPORT_TAB, []), value_input_option="USER_ENTERED")
+        ws.append_row([f"Period: {period_label}"], value_input_option="USER_ENTERED")
+
+        header = HEADERS_BY_TAB.get(MISSIONS_REPORT_TAB, []).copy()
+        if "Mission days" not in header:
+            header.append("Mission days")
+        ws.append_row(header, value_input_option="USER_ENTERED")
+
+        total_mission_days = 0
+
         for r in rows:
             r = _ensure_row_length(r, M_MANDATORY_COLS)
-            ws.append_row(r, value_input_option="USER_ENTERED")
+            try:
+                start_dt = datetime.fromisoformat(str(r[M_IDX_START]).strip())
+                end_dt = datetime.fromisoformat(str(r[M_IDX_END]).strip())
+                md = calc_mission_days(start_dt, end_dt)
+            except Exception:
+                md = ""
+
+            if isinstance(md, int):
+                total_mission_days += md
+
+            row_out = r.copy()
+            row_out.append(md)
+            ws.append_row(row_out, value_input_option="USER_ENTERED")
+
+        ws.append_row(
+            ["Total Mission days", total_mission_days],
+            value_input_option="USER_ENTERED"
+        )
+
         rt_counts: Dict[str, int] = {}
         for r in rows:
             name = r[2] if len(r) > 2 else ""
             roundtrip = str(r[9]).strip().lower() if len(r) > 9 else ""
             if name and roundtrip == "yes":
                 rt_counts[name] = rt_counts.get(name, 0) + 1
+
         ws.append_row(["Roundtrip Summary by Driver:"], value_input_option="USER_ENTERED")
         if rt_counts:
             ws.append_row(["Driver", "Roundtrip Count"], value_input_option="USER_ENTERED")
@@ -1824,7 +1862,9 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
                 ws.append_row([driver, cnt], value_input_option="USER_ENTERED")
         else:
             ws.append_row(["No roundtrips found in this period."], value_input_option="USER_ENTERED")
+
         return True
+
     except Exception:
         logger.exception("Failed to write mission report to sheet.")
         return False
@@ -1850,60 +1890,6 @@ def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) 
     except Exception:
         logger.exception("Failed to count roundtrips per driver")
     return counts
-
-def count_trips_for_day(driver: str, date_dt: datetime) -> int:
-    cnt = 0
-    try:
-        ws = open_worksheet(RECORDS_TAB)
-        vals = ws.get_all_values()
-        if not vals:
-            return 0
-        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
-        for r in vals[start_idx:]:
-            if len(r) < COL_START:
-                continue
-            dr = r[1] if len(r) > 1 else ""
-            start_ts = r[3] if len(r) > 3 else ""
-            end_ts = r[4] if len(r) > 4 else ""
-            if dr != driver:
-                continue
-            if not start_ts or not end_ts:
-                continue
-            s_dt = parse_ts(start_ts)
-            if not s_dt:
-                continue
-            if s_dt.date() == date_dt.date():
-                cnt += 1
-    except Exception:
-        logger.exception("Failed to count trips for day")
-    return cnt
-
-def count_trips_for_month(driver: str, month_start: datetime, month_end: datetime) -> int:
-    cnt = 0
-    try:
-        ws = open_worksheet(RECORDS_TAB)
-        vals = ws.get_all_values()
-        if not vals:
-            return 0
-        start_idx = 1 if any("date" in c.lower() for c in vals[0] if c) else 0
-        for r in vals[start_idx:]:
-            if len(r) < COL_START:
-                continue
-            dr = r[1] if len(r) > 1 else ""
-            start_ts = r[3] if len(r) > 3 else ""
-            end_ts = r[4] if len(r) > 4 else ""
-            if dr != driver:
-                continue
-            if not start_ts or not end_ts:
-                continue
-            s_dt = parse_ts(start_ts)
-            if not s_dt:
-                continue
-            if month_start <= s_dt < month_end:
-                cnt += 1
-    except Exception:
-        logger.exception("Failed to count trips for month")
-    return cnt
 
 AMOUNT_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*$', re.I)
 ODO_RE = re.compile(r'^\s*(\d+)(?:\s*km)?\s*$', re.I)
