@@ -3489,73 +3489,67 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     await query.answer()
     driver = query.data.split(":", 1)[1]
 
-    ws = open_worksheet(MISSIONS_TAB)
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ No mission records.")
+    # === 1. 确定期间（当前自然月）===
+    now = _now_dt()
+    start = datetime(now.year, now.month, 1)
+    if now.month == 12:
+        end = datetime(now.year + 1, 1, 1)
+    else:
+        end = datetime(now.year, now.month + 1, 1)
+
+    period_label = start.strftime("%Y-%m")
+
+    # === 2. 生成 Mission Report（必须先写报表）===
+    rows = mission_rows_for_period(start, end)
+    ok = write_mission_report_rows(rows, period_label)
+    if not ok:
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text="❌ Failed to generate mission report."
+        )
         return
 
-    header = rows[0]
-    data = rows[1:]
+    # === 3. 从 Mission Report 表读取数据 ===
+    ws = open_worksheet(MISSIONS_REPORT_TAB)
+    values = ws.get_all_values()
+    if len(values) < 4:
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text="❌ Mission report is empty."
+        )
+        return
 
-    # Expected columns (fallback by index constants)
-    try:
-        idx_driver = header.index("Name")
-        idx_plate = header.index("Plate")
-        idx_start = header.index("Start Date")
-        idx_end = header.index("End Date")
-        idx_depart = header.index("Departure")
-        idx_arrival = header.index("Arrival")
-    except Exception:
-        idx_driver = M_IDX_NAME
-        idx_plate = M_IDX_PLATE
-        idx_start = M_IDX_START
-        idx_end = M_IDX_END
-        idx_depart = M_IDX_DEPART
-        idx_arrival = M_IDX_ARRIVAL
+    # 跳过 Report / Period / Header
+    data_rows = values[3:]
 
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["Driver", "Plate", "Start", "End", "Departure", "Arrival"])
 
-    now = _now_dt()
-    for i, r in enumerate(data):
-        try:
-            if not r[M_IDX_END] and r[M_IDX_START]:
-                start_dt = datetime.fromisoformat(r[M_IDX_START])
-                # 第二天 04:00
-                cutoff = start_dt.replace(hour=4, minute=0, second=0) + timedelta(days=1)
-                if now >= cutoff:
-                    end_dt = start_dt.replace(hour=23, minute=59)
-                    ws.update_cell(i + 2, M_IDX_END + 1, end_dt.isoformat())
-                    days = calc_mission_days(start_dt, end_dt)
-                    ws.update_cell(i + 2, M_IDX_MISSION_DAYS + 1, days)
-        except Exception as e:
-            logger.warning("Auto mission end failed: %s", e)
-    
+    # CSV = Mission Report 原样结构
+    writer.writerow(values[2])  # Header 行
+
     found = False
-    for r in data:
-        if len(r) <= idx_driver:
-            continue
-        if str(r[idx_driver]).strip() != driver:
+    for r in data_rows:
+        if not r or r[0] != driver:
             continue
         found = True
-        writer.writerow([
-            r[idx_driver],
-            r[idx_plate] if len(r) > idx_plate else "",
-            r[idx_start] if len(r) > idx_start else "",
-            r[idx_end] if len(r) > idx_end else "",
-            r[idx_depart] if len(r) > idx_depart else "",
-            r[idx_arrival] if len(r) > idx_arrival else "",
-        ])
+        writer.writerow(r)
 
     if not found:
-        await context.bot.send_message(chat_id=query.from_user.id, text=f"❌ No missions for {driver}.")
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text=f"❌ No missions for {driver} in {period_label}."
+        )
         return
 
     bio = io.BytesIO(out.getvalue().encode("utf-8"))
-    bio.name = f"Mission_Report_{driver}.csv"
-    await context.bot.send_document(chat_id=query.from_user.id, document=bio, caption=f"Mission report for {driver}")
+    bio.name = f"Mission_Report_{driver}_{period_label}.csv"
+
+    await context.bot.send_document(
+        chat_id=query.from_user.id,
+        document=bio,
+        caption=f"Mission report for {driver} ({period_label})"
+    )
 
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
