@@ -1817,18 +1817,28 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
     try:
         ws = open_worksheet(MISSIONS_REPORT_TAB)
 
+        # Report + Period
         ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
         ws.append_row([f"Period: {period_label}"], value_input_option="USER_ENTERED")
 
-        header = HEADERS_BY_TAB.get(MISSIONS_REPORT_TAB, []).copy()
-        if "Mission days" not in header:
-            header.append("Mission days")
+        # Header（严格按图片顺序）
+        header = [
+            "Driver",
+            "Plate",
+            "Start",
+            "End",
+            "Mission days",
+            "Departure",
+            "Arrival",
+        ]
         ws.append_row(header, value_input_option="USER_ENTERED")
 
         total_mission_days = 0
 
+        # Data rows
         for r in rows:
             r = _ensure_row_length(r, M_MANDATORY_COLS)
+
             try:
                 start_dt = datetime.fromisoformat(str(r[M_IDX_START]).strip())
                 end_dt = datetime.fromisoformat(str(r[M_IDX_END]).strip())
@@ -1839,35 +1849,30 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
             if isinstance(md, int):
                 total_mission_days += md
 
-            row_out = r.copy()
-            row_out.append(md)
+            row_out = [
+                r[M_IDX_NAME],        # Driver
+                r[M_IDX_PLATE],       # Plate
+                r[M_IDX_START],       # Start
+                r[M_IDX_END],         # End
+                md,                   # Mission days
+                r[M_IDX_DEPART],      # Departure
+                r[M_IDX_ARRIVAL],     # Arrival
+            ]
+
             ws.append_row(row_out, value_input_option="USER_ENTERED")
 
+        # Total Mission days（位置严格按图片）
         ws.append_row(
-            ["Total Mission days", total_mission_days],
+            ["Total Mission days", "", "", "", total_mission_days],
             value_input_option="USER_ENTERED"
         )
-
-        rt_counts: Dict[str, int] = {}
-        for r in rows:
-            name = r[2] if len(r) > 2 else ""
-            roundtrip = str(r[9]).strip().lower() if len(r) > 9 else ""
-            if name and roundtrip == "yes":
-                rt_counts[name] = rt_counts.get(name, 0) + 1
-
-        ws.append_row(["Roundtrip Summary by Driver:"], value_input_option="USER_ENTERED")
-        if rt_counts:
-            ws.append_row(["Driver", "Roundtrip Count"], value_input_option="USER_ENTERED")
-            for driver, cnt in sorted(rt_counts.items(), key=lambda x: (-x[1], x[0])):
-                ws.append_row([driver, cnt], value_input_option="USER_ENTERED")
-        else:
-            ws.append_row(["No roundtrips found in this period."], value_input_option="USER_ENTERED")
 
         return True
 
     except Exception:
         logger.exception("Failed to write mission report to sheet.")
         return False
+
 
 def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) -> Dict[str, int]:
     counts: Dict[str, int] = {}
