@@ -1800,15 +1800,40 @@ def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[Li
         vals, start_idx = _missions_get_values_and_data_rows(ws)
         for r in vals[start_idx:]:
             r = _ensure_row_length(r, M_MANDATORY_COLS)
+
             start = str(r[M_IDX_START]).strip()
-            if not start:
+            end = str(r[M_IDX_END]).strip()
+            if not start or not end:
                 continue
+
             s_dt = parse_ts(start)
-            if not s_dt:
+            e_dt = parse_ts(end)
+            if not s_dt or not e_dt:
                 continue
-            if start_date <= s_dt < end_date:
-                out.append([r[M_IDX_GUID], r[M_IDX_NO], r[M_IDX_NAME], r[M_IDX_PLATE], r[M_IDX_START], r[M_IDX_END], r[M_IDX_DEPART], r[M_IDX_ARRIVAL], r[M_IDX_STAFF], r[M_IDX_ROUNDTRIP], r[M_IDX_RETURN_START], r[M_IDX_RETURN_END]])
+
+            # Period 过滤仍然基于 Start
+            if not (start_date <= s_dt < end_date):
+                continue
+
+            # ✅ 在这里统一计算 Mission days
+            try:
+                md = calc_mission_days(s_dt, e_dt)
+            except Exception:
+                md = ""
+
+            # ✅ 返回“Mission Report 专用结构”
+            out.append([
+                r[M_IDX_NAME],     # Driver
+                r[M_IDX_PLATE],    # Plate
+                r[M_IDX_START],    # Start
+                r[M_IDX_END],      # End
+                md,                # Mission days
+                r[M_IDX_DEPART],   # Departure
+                r[M_IDX_ARRIVAL],  # Arrival
+            ])
+
         return out
+
     except Exception:
         logger.exception("Failed to fetch mission rows")
         return []
