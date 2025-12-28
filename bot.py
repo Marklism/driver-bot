@@ -2796,6 +2796,34 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
         context.user_data.pop("pending_leave", None)
         return
+def count_trips_for_day(username: str, day: datetime) -> int:
+    """
+    统计某个司机在某一天内的出车次数
+    """
+    ws = open_worksheet(MISSIONS_TAB)
+    count = 0
+
+    vals, start_idx = _missions_get_values_and_data_rows(ws)
+    target_date = day.date()
+
+    for r in vals[start_idx:]:
+        r = _ensure_row_length(r, M_MANDATORY_COLS)
+
+        if str(r[M_IDX_NAME]).strip() != username:
+            continue
+
+        start_raw = str(r[M_IDX_START]).strip()
+        if not start_raw:
+            continue
+
+        s_dt = parse_ts(start_raw)
+        if not s_dt:
+            continue
+
+        if s_dt.date() == target_date:
+            count += 1
+
+    return count
 
 async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await process_force_reply(update, context)
