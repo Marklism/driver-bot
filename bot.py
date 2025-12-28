@@ -1842,6 +1842,9 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
     try:
         ws = open_worksheet(MISSIONS_REPORT_TAB)
 
+        # ✅ 关键修复：每次生成前先清空 Report 表
+        ws.clear()
+
         ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
         ws.append_row(["Period", period_label, "", "", "", "", ""], value_input_option="USER_ENTERED")
 
@@ -1853,11 +1856,8 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
         total_mission_days = 0
 
         for r in rows:
-            # r 已经是 Mission Report 结构：
-            # [Driver, Plate, Start, End, Mission days, Departure, Arrival]
             if len(r) >= 5 and isinstance(r[4], int):
                 total_mission_days += r[4]
-
             ws.append_row(r, value_input_option="USER_ENTERED")
 
         ws.append_row(
@@ -1870,6 +1870,7 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
     except Exception:
         logger.exception("Failed to write mission report to sheet.")
         return False
+
 
 
 def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) -> Dict[str, int]:
@@ -3252,37 +3253,6 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_private(update, context, "Language set to English.")
     else:
         await reply_private(update, context, "បានកំណត់ភាសាជាភាសាខ្មែរ。")
-#async def mission_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#    try:
-#        if update.effective_message:
-#            await update.effective_message.delete()
-#    except Exception:
-#        pass
-#    args = context.args
-#    if not args or len(args) < 2:
-#        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
-#        return
-    mode = args[0].lower()
-    if mode == "month":
-        try:
-            y_m = args[1]
-            dt = datetime.strptime(y_m + "-01", "%Y-%m-%d")
-            start = datetime(dt.year, dt.month, 1)
-            if dt.month == 12:
-                end = datetime(dt.year + 1, 1, 1)
-            else:
-                end = datetime(dt.year, dt.month + 1, 1)
-            rows = mission_rows_for_period(start, end)
-            ok = write_mission_report_rows(rows, period_label=start.strftime("%Y-%m"))
-            counts = count_roundtrips_per_driver_month(start, end)
-            if ok:
-                await update.effective_chat.send_message(f"Monthly mission report for {start.strftime('%Y-%m')} created.")
-            else:
-                await update.effective_chat.send_message("❌ Failed to write mission report.")
-        except Exception:
-            await update.effective_chat.send_message("Invalid command. Usage: /mission_report month YYYY-MM")
-    else:
-        await update.effective_chat.send_message("Usage: /mission_report month YYYY-MM")
 
 async def debug_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -3489,7 +3459,6 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
     await query.answer()
     driver = query.data.split(":", 1)[1]
 
-    # === 1. 确定期间（当前自然月）===
     now = _now_dt()
     start = datetime(now.year, now.month, 1)
     if now.month == 12:
@@ -3499,48 +3468,44 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
 
     period_label = start.strftime("%Y-%m")
 
-    # === 2. 生成 Mission Report（必须先写报表）===
     rows = mission_rows_for_period(start, end)
-    ok = write_mission_report_rows(rows, period_label)
-    if not ok:
-        await context.bot.send_message(
-            chat_id=query.from_user.id,
-            text="❌ Failed to generate mission report."
-        )
-        return
-
-    # === 3. 从 Mission Report 表读取数据 ===
-    ws = open_worksheet(MISSIONS_REPORT_TAB)
-    values = ws.get_all_values()
-    if len(values) < 4:
-        await context.bot.send_message(
-            chat_id=query.from_user.id,
-            text="❌ Mission report is empty."
-        )
-        return
-
-    # 跳过 Report / Period / Header
-    data_rows = values[3:]
 
     out = io.StringIO()
     writer = csv.writer(out)
 
-    # CSV = Mission Report 原样结构
-    writer.writerow(values[2])  # Header 行
+    # === Header（严格按图片）===
+    writer.writerow(
+        ["Driver", "Plate", "Start", "End", "Mission days", "Departure", "Arrival"]
+    )
 
+    total_mission_days = 0
     found = False
-    for r in data_rows:
-        if not r or r[0] != driver:
+
+    for r in rows:
+        if r[0] != driver:
             continue
         found = True
+        if isinstance(r[4], int):
+            total_mission_days += r[4]
         writer.writerow(r)
 
     if not found:
         await context.bot.send_message(
             chat_id=query.from_user.id,
-            text=f"❌ No missions for {driver} in {period_label}."
+            text=f"❌ No missions for {driver} in this month."
         )
         return
+
+    # === Period 行（图片格式）===
+    last_day = (end - timedelta(days=1)).day
+    period_text = f"1st to {last_day}th {start.strftime('%b %Y')}"
+    writer.writerow([])
+    writer.writerow(["Period", period_text])
+
+    # === Total Mission days 行（对齐）===
+    writer.writerow(
+        ["Total Mission days", "", "", "", total_mission_days, "", ""]
+    )
 
     bio = io.BytesIO(out.getvalue().encode("utf-8"))
     bio.name = f"Mission_Report_{driver}_{period_label}.csv"
@@ -3550,6 +3515,7 @@ async def mission_report_driver_callback(update: Update, context: ContextTypes.D
         document=bio,
         caption=f"Mission report for {driver} ({period_label})"
     )
+
 
 def register_ui_handlers(application):
     application.add_handler(CommandHandler("menu", menu_command))
