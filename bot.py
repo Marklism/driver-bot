@@ -1801,35 +1801,36 @@ def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[Li
         for r in vals[start_idx:]:
             r = _ensure_row_length(r, M_MANDATORY_COLS)
 
-            start = str(r[M_IDX_START]).strip()
-            end = str(r[M_IDX_END]).strip()
-            if not start or not end:
+            # Period 仍然按 Start Date 判断
+            start_raw = str(r[M_IDX_START]).strip()
+            if not start_raw:
                 continue
 
-            s_dt = parse_ts(start)
-            e_dt = parse_ts(end)
-            if not s_dt or not e_dt:
+            s_dt = parse_ts(start_raw)
+            if not s_dt or not (start_date <= s_dt < end_date):
                 continue
 
-            # Period 过滤仍然基于 Start
-            if not (start_date <= s_dt < end_date):
-                continue
+            # ✅ Start：直接引用 Start Date
+            start_val = r[M_IDX_START]
 
-            # ✅ 在这里统一计算 Mission days
-            try:
-                md = calc_mission_days(s_dt, e_dt)
-            except Exception:
-                md = ""
+            # ✅ End：改为引用 Return End
+            end_val = r[M_IDX_RETURN_END]
 
-            # ✅ 返回“Mission Report 专用结构”
+            # ✅ Mission Days：直接引用 Missions 表
+            md = r[M_IDX_MISSION_DAYS]
+
+            # ✅ Return = Departure
+            ret = r[M_IDX_DEPART]
+
             out.append([
                 r[M_IDX_NAME],     # Driver
                 r[M_IDX_PLATE],    # Plate
-                r[M_IDX_START],    # Start
-                r[M_IDX_END],      # End
-                md,                # Mission days
+                start_val,         # Start (Start Date)
+                end_val,           # End (Return End)
+                md,                # Mission days（直接引用）
                 r[M_IDX_DEPART],   # Departure
                 r[M_IDX_ARRIVAL],  # Arrival
+                ret,               # Return（= Departure）
             ])
 
         return out
@@ -1838,30 +1839,32 @@ def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[Li
         logger.exception("Failed to fetch mission rows")
         return []
 
+
 def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
     try:
         ws = open_worksheet(MISSIONS_REPORT_TAB)
 
-        # ✅ 关键修复：每次生成前先清空 Report 表
+        # 每次生成前清空
         ws.clear()
 
         ws.append_row([f"Report: {period_label}"], value_input_option="USER_ENTERED")
-        ws.append_row(["Period", period_label, "", "", "", "", ""], value_input_option="USER_ENTERED")
+        ws.append_row(["Period", period_label, "", "", "", "", "", ""], value_input_option="USER_ENTERED")
 
+        # ✅ Header（新增 Return）
         ws.append_row(
-            ["Driver", "Plate", "Start", "End", "Mission days", "Departure", "Arrival"],
+            ["Driver", "Plate", "Start", "End", "Mission days", "Departure", "Arrival", "Return"],
             value_input_option="USER_ENTERED"
         )
 
         total_mission_days = 0
 
         for r in rows:
-            if len(r) >= 5 and isinstance(r[4], int):
-                total_mission_days += r[4]
+            if len(r) >= 5 and str(r[4]).strip().isdigit():
+                total_mission_days += int(r[4])
             ws.append_row(r, value_input_option="USER_ENTERED")
 
         ws.append_row(
-            ["Total Mission days", "", "", "", total_mission_days, "", ""],
+            ["Total Mission days", "", "", "", total_mission_days, "", "", ""],
             value_input_option="USER_ENTERED"
         )
 
@@ -1870,8 +1873,6 @@ def write_mission_report_rows(rows: List[List[Any]], period_label: str) -> bool:
     except Exception:
         logger.exception("Failed to write mission report to sheet.")
         return False
-
-
 
 def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) -> Dict[str, int]:
     counts: Dict[str, int] = {}
