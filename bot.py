@@ -513,10 +513,6 @@ def split_ot_segments(start_dt, end_dt):
 def weekday_ot(start_dt, end_dt):
     records = []
 
-    if 4 < start_dt.hour < 7:
-        ot_end = start_dt.replace(hour=8, minute=0, second=0)
-        records.append(("150%", start_dt, ot_end, hours(ot_end-start_dt), 0))
-
     if end_dt.hour > 18 or (end_dt.hour == 18 and end_dt.minute >= 30):
         ot_start = end_dt.replace(hour=18, minute=0, second=0)
         records.append(("150%", ot_start, end_dt, 0, hours(end_dt-ot_start)))
