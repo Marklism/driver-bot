@@ -617,7 +617,6 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     Weekend (Sat 00:00 – Sun 23:59) and holidays:
       6) For a shift (IN → OUT) fully on weekend/holiday → OT = end - start (200%)
-         (Clock IN: no message; Clock OUT: record & notify "OT today: X hour(s)")
     """
     query = update.callback_query
     await query.answer()
@@ -682,6 +681,26 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             logger.exception("Failed to append OT record row for %s", driver)
 
     # ===== OT calculation starts here =====
+    if action == "IN" and is_normal_weekday:
+        try:
+            # 04:00 < IN < 07:00
+            if ts_dt.hour > 4 and ts_dt.hour < 7:
+                ot_start = ts_dt
+                ot_end = ts_dt.replace(hour=8, minute=0, second=0)
+
+                if ot_end > ot_start:
+                    ot_hours = round((ot_end - ot_start).total_seconds() / 3600, 2)
+
+                    append_ot_record(
+                        ot_start,
+                        ot_end,
+                        ot_hours,   # morning OT
+                        0,          # evening OT
+                        "150%",
+                        "Auto OT (Morning IN)"
+                    )
+        except Exception:
+            logger.exception("Morning OT calculation at clock-in failed")
     if action == "OUT":
 
         if not last or last[O_IDX_ACTION] != "IN":
