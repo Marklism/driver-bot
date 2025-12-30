@@ -3151,8 +3151,65 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         month_label = month_start.strftime('%B')
                         line1 = t(user_lang, 'roundtrip_merged_notify', driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
                         # Build line2 and line3 explicitly
-                        line2 = f"🚹Driver {username} has {md_month} mission day(s) in {month_label} {nowdt.year}."
-                        line3 = f"🚘{plate} completed {plate_counts_month} mission(s) in {month_label} and {plate_counts_year} mission(s) in {nowdt.year}."
+                        # === Step 1: 读取 Missions 表 ===
+                        ws = open_worksheet(MISSIONS_TAB)
+                        rows = ws.get_all_values()
+
+                        # 跳过表头
+                        data_rows = rows[1:]
+                        # === Step 2: 统计 Driver 本月 Mission Days（直接用 M 列）===
+                        driver_mission_days = 0
+
+                        for r in data_rows:
+                            # 防止列不够导致崩溃
+                            if len(r) <= M_IDX_MISSION_DAYS:
+                                continue
+
+                            name = str(r[M_IDX_NAME]).strip()
+                            start_raw = str(r[M_IDX_START]).strip()
+
+                            # 只算当前司机
+                            if name != username or not start_raw:
+                                continue
+
+                            start_dt = parse_ts(start_raw)
+                            if not start_dt:
+                                continue
+
+                            # 只算当月
+                            if not (month_start <= start_dt < month_end):
+                                continue
+
+                            try:
+                                driver_mission_days += int(r[M_IDX_MISSION_DAYS] or 0)
+                            except Exception:
+                                pass
+
+                        # === Step 3: 统计 Plate 本月 Mission 次数（按 Missions 行数）===
+                        plate_mission_count = 0
+
+                        for r in data_rows:
+                            if len(r) <= M_IDX_PLATE:
+                                continue
+
+                            name = str(r[M_IDX_NAME]).strip()
+                            plate_val = str(r[M_IDX_PLATE]).strip()
+                            start_raw = str(r[M_IDX_START]).strip()
+
+                            if name != username or plate_val != plate or not start_raw:
+                                continue
+
+                            start_dt = parse_ts(start_raw)
+                            if not start_dt:
+                                continue
+
+                            if not (month_start <= start_dt < month_end):
+                                continue
+
+                            plate_mission_count += 1
+
+                        line2 = (f"🚹Driver {username} has {driver_mission_days} mission day(s) "f"in {month_label} {nowdt.year}.")
+                        line3 = (f"🚘{plate} completed {plate_mission_count} mission(s) "f"in {month_label} {nowdt.year}.")
                         try:
                             if line1 and line1.strip():
                                 await q.message.chat.send_message(line1)
