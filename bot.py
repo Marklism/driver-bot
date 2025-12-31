@@ -3889,11 +3889,13 @@ def main():
 
         while True:
             try:
+                WEBHOOK_PATH = f"/{BOT_TOKEN}"
+
                 application.run_webhook(
                     listen="0.0.0.0",
                     port=PORT,
-                    url_path=WEBHOOK_PATH,  
-                    webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+                    url_path=WEBHOOK_PATH,                 # ← 必须加
+                    webhook_url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",  # ← 必须一致
                 )
                 break  # 正常退出（极少发生）
             except (TimedOut, NetworkError) as e:
