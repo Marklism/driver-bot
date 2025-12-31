@@ -3900,31 +3900,33 @@ def main():
     # --- Start bot (webhook or polling) ---
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
     PORT = int(os.getenv("PORT", "8443"))
+    
+    IS_RAILWAY = bool(os.getenv("RAILWAY_ENVIRONMENT"))
+    PORT = int(os.getenv("PORT", "8080"))
+    if IS_RAILWAY:
+        # ===== Railway: webhook only =====
+        WEBHOOK_URL = os.getenv("PUBLIC_URL")
+        if not WEBHOOK_URL:
+            raise RuntimeError("PUBLIC_URL is required in Railway webhook mode")
 
-    if WEBHOOK_URL:
-        logger.info("Starting in webhook mode. WEBHOOK_URL=%s", WEBHOOK_URL)
-        try:
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                webhook_url=WEBHOOK_URL,
-            )
-        except Exception:
-            logger.exception("Failed to start webhook mode.")
+        logger.info("Starting driver-bot in RAILWAY webhook mode: %s", WEBHOOK_URL)
+
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+        )
     else:
+        # ===== Local: polling only =====
+        logger.info("Starting driver-bot in LOCAL polling mode")
+
         try:
-            logger.info("No WEBHOOK_URL set — attempting to delete existing webhook (if any).")
             _delete_telegram_webhook(BOT_TOKEN)
         except Exception:
-            logger.exception("Error while deleting webhook; proceeding to polling.")
+            logger.warning("Failed to delete webhook; continuing polling")
 
-        logger.info("Starting driver-bot polling...")
-        try:
-            if not globals().get("POLLING_STARTED"):
-                globals()["POLLING_STARTED"] = True
-                application.run_polling()
-        except Exception:
-            logger.exception("Polling exited with exception.")
+        application.run_polling()
+        
 if __name__ == "__main__":
     main()
 
