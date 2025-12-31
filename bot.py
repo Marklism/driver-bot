@@ -3884,29 +3884,15 @@ def main():
             WEBHOOK_URL,
         )
 
-        while True:
-            application = build_application(persistence)
+        application = build_application(persistence)
 
-            try:
-                application.run_webhook(
-                    listen="0.0.0.0",
-                    port=PORT,
-                    url_path=WEBHOOK_PATH,
-                    webhook_url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
-                    stop_signals=None,
-                )
-                break  # 正常情况下不会走到这里
-
-            except (TimedOut, NetworkError) as e:
-                logger.warning(
-                    "Telegram network error on startup, retrying in 10s: %s",
-                    e,
-                )
-                time.sleep(10)
-
-            except Exception:
-                logger.exception("Fatal startup error, retrying in 15s")
-                time.sleep(15)
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=WEBHOOK_PATH,
+            webhook_url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
+            stop_signals=None,
+        )
 
     else:
         # ===== Local: polling mode =====
