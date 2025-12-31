@@ -152,9 +152,12 @@ def build_message(lines):
 # - Global constants
 # Source:
 # - debug verbatim
-from datetime import datetime, timedelta
+
 import io
 import csv
+import time
+from datetime import datetime, timedelta
+from telegram.error import TimedOut, NetworkError
 # === /ot_report rewritten to DRIVER BUTTON MODE ===
 # Old parameter-based logic removed
 # New flow: /ot_report -> private driver selection -> callback generates CSV
@@ -3884,11 +3887,20 @@ def main():
 
         logger.info("Starting driver-bot in RAILWAY webhook mode: %s", WEBHOOK_URL)
 
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-        )
+        while True:
+            try:
+                application.run_webhook(
+                    listen="0.0.0.0",
+                    port=PORT,
+                    webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+                )
+                break  # 正常退出（极少发生）
+            except (TimedOut, NetworkError) as e:
+                logger.warning("Telegram network error on startup, retrying in 10s: %s", e)
+                time.sleep(10)
+            except Exception as e:
+                logger.exception("Fatal startup error, retrying in 15s")
+                time.sleep(15)
     else:
         # ===== Local: polling only =====
         logger.info("Starting driver-bot in LOCAL polling mode")
