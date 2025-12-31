@@ -177,7 +177,7 @@ import csv
 # ===== FIXED ORDER: OT REPORT DRIVER BUTTON =====
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
-
+from telegram.request import HTTPXRequest
 
 async def reply_private(update, context, text, reply_markup=None):
     await context.bot.send_message(
@@ -3841,9 +3841,16 @@ def main():
         persistence = None
 
     # --- Build application ---
+    request = HTTPXRequest(
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0,
+    )
     application = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
+        .request(request)
         .persistence(persistence)
         .post_init(safe_post_init)
         .build()
