@@ -3698,29 +3698,25 @@ def register_ui_handlers(application):
         except Exception:
             logger.exception("Failed to set bot commands.")
 
-    # Schedule _set_cmds safely using the running event loop if available.
-    try:
-        import asyncio
-        loop = None
-        try:
-            loop = asyncio.get_running_loop()
-        except Exception:
-            try:
-                loop = asyncio.get_event_loop()
-            except Exception:
-                loop = None
-        if loop and hasattr(loop, "create_task"):
-            loop.create_task(_set_cmds())
-        else:
-            # Fallback: try to call application.create_task if provided by library
-            try:
-                if hasattr(application, "create_task"):
-                    application.create_task(_set_cmds())
-            except Exception:
-                logger.exception("Could not schedule set_my_commands.")
-    except Exception:
-        logger.exception("Could not schedule set_my_commands.")
+async def safe_post_init(application):
+    """
+    Startup initialization that MUST NOT crash the app
+    if Telegram API is temporarily unreachable.
+    """
 
+    try:
+        await application.bot.set_my_commands([
+            BotCommand("start", "Start the bot"),
+            BotCommand("help", "Show help"),
+        ])
+    except Exception as e:
+        logger.warning("Startup: failed to set bot commands: %s", e)
+
+    try:
+        me = await application.bot.get_me()
+        logger.info("Bot connected as @%s (%s)", me.username, me.id)
+    except Exception as e:
+        logger.warning("Startup: failed to get bot info: %s", e)
 
 def _delete_telegram_webhook(token: str) -> bool:
     try:
@@ -3875,6 +3871,7 @@ def main():
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .persistence(persistence)
+        .post_init(safe_post_init)
         .build()
     )
     assert callable(ensure_env)
