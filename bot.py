@@ -3821,11 +3821,37 @@ def check_deployment_requirements():
     """Deployment requirements check (no-op placeholder)."""
     pass
     
+def build_application(persistence):
+    request = HTTPXRequest(
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0,
+    )
+
+    application = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .request(request)
+        .persistence(persistence)
+        .post_init(safe_post_init)
+        .build()
+    )
+
+    # register handlers
+    register_ui_handlers(application)
+    schedule_daily_summary(application)
+
+    # error handler
+    application.add_error_handler(global_error_handler)
+
+    return application
+
+
 def main():
     ensure_env()
     check_deployment_requirements()
-    # --- Set Telegram slash commands on startup (HTTP API, non-async) ---
-    
+
     # --- Timezone sanity check ---
     if LOCAL_TZ and ZoneInfo:
         try:
@@ -3837,75 +3863,52 @@ def main():
         logger.info("LOCAL_TZ not set; using system local time.")
 
     # --- Persistence (optional) ---
-    persistence = None
     try:
         persistence = PicklePersistence(filepath="driver_bot_persistence.pkl")
     except Exception:
         persistence = None
 
-    # --- Build application ---
-    request = HTTPXRequest(
-        connect_timeout=30.0,
-        read_timeout=30.0,
-        write_timeout=30.0,
-        pool_timeout=30.0,
-    )
-    application = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .request(request)
-        .persistence(persistence)
-        .post_init(safe_post_init)
-        .build()
-    )
-    assert callable(ensure_env)
-    assert callable(check_deployment_requirements)
-    assert callable(register_ui_handlers)
-    assert callable(schedule_daily_summary)
-    # --- Error handler ---
-    application.add_error_handler(global_error_handler)
-
-    # --- Register handlers ---
-    register_ui_handlers(application)
-
-    
-
-    # --- Schedule daily summary ---
-    schedule_daily_summary(application)
-
-    # --- Start bot (webhook or polling) ---
-    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-    PORT = int(os.getenv("PORT", "8443"))
-    
     IS_RAILWAY = bool(os.getenv("RAILWAY_ENVIRONMENT"))
     PORT = int(os.getenv("PORT", "8080"))
+
     if IS_RAILWAY:
-        # ===== Railway: webhook only =====
+        # ===== Railway: webhook mode =====
         WEBHOOK_URL = os.getenv("PUBLIC_URL")
         if not WEBHOOK_URL:
             raise RuntimeError("PUBLIC_URL is required in Railway webhook mode")
 
-        logger.info("Starting driver-bot in RAILWAY webhook mode: %s", WEBHOOK_URL)
+        WEBHOOK_PATH = f"/{BOT_TOKEN}"
+
+        logger.info(
+            "Starting driver-bot in RAILWAY webhook mode: %s",
+            WEBHOOK_URL,
+        )
 
         while True:
-            try:
-                WEBHOOK_PATH = f"/{BOT_TOKEN}"
+            application = build_application(persistence)
 
+            try:
                 application.run_webhook(
                     listen="0.0.0.0",
                     port=PORT,
-                    url_path=WEBHOOK_PATH,                 # ← 必须加
-                    webhook_url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",  # ← 必须一致
+                    url_path=WEBHOOK_PATH,
+                    webhook_url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
                 )
-                break  # 正常退出（极少发生）
+                break  # 正常情况下不会走到这里
+
             except (TimedOut, NetworkError) as e:
-                logger.warning("Telegram network error on startup, retrying in 10s: %s", e)
+                logger.warning(
+                    "Telegram network error on startup, retrying in 10s: %s",
+                    e,
+                )
                 time.sleep(10)
-            except Exception as e:
+
+            except Exception:
                 logger.exception("Fatal startup error, retrying in 15s")
                 time.sleep(15)
+
     else:
-        # ===== Local: polling only =====
+        # ===== Local: polling mode =====
         logger.info("Starting driver-bot in LOCAL polling mode")
 
         try:
@@ -3913,10 +3916,13 @@ def main():
         except Exception:
             logger.warning("Failed to delete webhook; continuing polling")
 
+        application = build_application(persistence)
         application.run_polling()
-        
+
+
 if __name__ == "__main__":
     main()
+
 
 
 # === BEGIN: OT Summary integration (added) ===
