@@ -3893,6 +3893,7 @@ def main():
                     port=PORT,
                     url_path=WEBHOOK_PATH,
                     webhook_url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
+                    stop_signals=None,
                 )
                 break  # 正常情况下不会走到这里
 
