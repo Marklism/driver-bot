@@ -3892,6 +3892,7 @@ def main():
                 application.run_webhook(
                     listen="0.0.0.0",
                     port=PORT,
+                    url_path=WEBHOOK_PATH,  
                     webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
                 )
                 break  # 正常退出（极少发生）
