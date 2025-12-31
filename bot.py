@@ -3718,6 +3718,10 @@ async def safe_post_init(application):
     except Exception as e:
         logger.warning("Startup: failed to get bot info: %s", e)
 
+    try:
+        await _send_startup_debug(application)
+    except Exception as e:
+        logger.warning("Startup: debug report failed: %s", e)
 def _delete_telegram_webhook(token: str) -> bool:
     try:
         url = f"https://api.telegram.org/bot{token}/deleteWebhook"
@@ -3803,9 +3807,7 @@ async def global_error_handler(update, context):
     """
     logger.exception("Unhandled exception in handler", exc_info=context.error)
 
-async def _send_startup_debug(application):
-    """Startup debug task (no-op)."""
-    return
+
 def schedule_daily_summary(application):
     """Schedule daily summary (no-op placeholder)."""
     return
@@ -3818,37 +3820,7 @@ def main():
     ensure_env()
     check_deployment_requirements()
     # --- Set Telegram slash commands on startup (HTTP API, non-async) ---
-    try:
-        token_tmp = os.getenv("BOT_TOKEN")
-        if token_tmp:
-            cmds_payload = [
-                {"command": "start", "description": "Show menu"},
-                {"command": "ot_report", "description": "OT report: /ot_report [username] YYYY-MM"},
-                {"command": "leave", "description": "Request leave"},
-                {"command": "finance", "description": "Add finance record"},
-                {"command": "mission_end", "description": "End mission"},
-                {"command": "clock_in", "description": "Clock In"},
-                {"command": "clock_out", "description": "Clock Out"},
-            ]
-            try:
-                import json
-
-                url = f"https://api.telegram.org/bot{token_tmp}/setMyCommands"
-                data = json.dumps({"commands": cmds_payload}).encode("utf-8")
-                req = urllib.request.Request(
-                    url,
-                    data=data,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    resp_text = resp.read().decode("utf-8", errors="ignore")
-                    print("Set my commands via HTTP API:", resp_text[:200])
-            except Exception as e:
-                print("Warning: failed to set Telegram commands via HTTP API:", e)
-    except Exception:
-        pass
-
+    
     # --- Timezone sanity check ---
     if LOCAL_TZ and ZoneInfo:
         try:
@@ -3884,12 +3856,7 @@ def main():
     # --- Register handlers ---
     register_ui_handlers(application)
 
-    # --- Startup debug report (fire-and-forget) ---
-    try:
-        if hasattr(application, "create_task"):
-            application.create_task(_send_startup_debug(application))
-    except Exception:
-        pass
+    
 
     # --- Schedule daily summary ---
     schedule_daily_summary(application)
