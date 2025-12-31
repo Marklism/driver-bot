@@ -3749,25 +3749,27 @@ async def _send_startup_debug(application):
         lines = []
         lines.append("Driver Bot startup debug report:")
         lines.append(f"Bot token present: {'Yes' if bot_token else 'No'}")
-        lines.append(f"SHEET_ID present: {'Yes' if (os.getenv('SHEET_ID') or os.getenv('GOOGLE_SHEET_NAME')) else 'No'}")
-        lines.append(f"Google creds present: {'Yes' if (os.getenv('GOOGLE_CREDS_B64') or os.getenv('GOOGLE_CREDS_BASE64') or os.getenv('GOOGLE_CREDS_PATH')) else 'No'}")
+        lines.append(
+            f"SHEET_ID present: {'Yes' if (os.getenv('SHEET_ID') or os.getenv('GOOGLE_SHEET_NAME')) else 'No'}"
+        )
+        lines.append(
+            f"Google creds present: {'Yes' if (os.getenv('GOOGLE_CREDS_B64') or os.getenv('GOOGLE_CREDS_BASE64') or os.getenv('GOOGLE_CREDS_PATH')) else 'No'}"
+        )
+
         # list commands
         try:
-            if bot_token:
-                b = Bot(bot_token)
-                cmds = await b.get_my_commands()
-                if cmds:
-                    lines.append("Registered commands:")
-                    for c in cmds:
-                        lines.append(f" - /{c.command}: {c.description}")
+            cmds = await application.bot.get_my_commands()
+            if cmds:
+                lines.append("Registered commands:")
+                for c in cmds:
+                    lines.append(f" - /{c.command}: {c.description}")
         except Exception as e:
             lines.append("Failed to fetch commands: " + str(e))
-        text = "\
-".join(lines)
+
+        text = "\n".join(lines)
         await application.bot.send_message(chat_id=chat_id, text=text)
     except Exception:
         pass
-
 
 # ===============================
 # REPORT HANDLER SELF-CHECK (LTS)
