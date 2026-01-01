@@ -357,6 +357,9 @@ async def ot_report_driver_callback(update, context):
 
     ws = open_worksheet("OT Record")
     rows = ws.get_all_values()
+    if not rows or len(rows) < 2:
+        # 空表或只有 header，直接返回，不生成文件
+        return
     header, data = rows[0], rows[1:]
 
     start_window, end_window = get_period_window(_now_dt())
@@ -405,6 +408,7 @@ async def ot_report_driver_callback(update, context):
                     username, start_window, end_window, ot150, ot200, t150, t200
                 )
                 zf.writestr(f"OT_Report_{username}.csv", csv_text)
+                del csv_text
 
         zip_buf.seek(0)
         zip_buf.name = "OT_Report_ALL_Drivers.zip"
