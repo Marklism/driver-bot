@@ -381,6 +381,9 @@ async def ot_report_driver_callback(update, context):
             bio,
             caption=f"OT report for {username}"
         )
+        bio.close()
+        del bio
+        del csv_text
         return
 
     # ---------- 所有司机 ----------
@@ -411,7 +414,8 @@ async def ot_report_driver_callback(update, context):
             zip_buf,
             caption="OT report for ALL drivers"
         )
-
+        zip_buf.close()
+        del zip_buf
 
 
 # ===== END FIX =====
@@ -737,16 +741,10 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         else:
             records = weekend_ot(start_dt, end_dt, True)
 
-        if records:
-            for ot_type, s, e, m_h, e_h in records:
-                append_ot_record(
-                    s,
-                    e,
-                    m_h,
-                    e_h,
-                    ot_type,
-                    "Auto OT"
-                )
+        if not records:
+            return
+        for ot_type, s, e, m_h, e_h in records:
+            append_ot_record(s,e,m_h,e_h,ot_type,"Auto OT")
 
 
 # Edit the inline-button message as a confirmation
@@ -785,7 +783,9 @@ from telegram.ext import (
 )
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("driver-bot")
+
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -1084,6 +1084,7 @@ class WorksheetProxy:
             return cache[1]
         # call
         vals = self._submit("get_all_values", *args, **kwargs)
+        _sheets_read_cache.clear()
         _sheets_read_cache[self._key] = (time.time(), vals)
         return vals
 
