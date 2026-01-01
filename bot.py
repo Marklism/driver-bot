@@ -527,17 +527,27 @@ def weekday_crossday_ot(start_dt, end_dt):
     cur = start_dt
 
     while cur < end_dt:
+        cut = None  # ✅ 强制初始化，保证永远存在
+
         if cur.hour >= 18:
             cut = cur.replace(hour=23, minute=59, second=59)
             if cut > end_dt:
                 cut = end_dt
-            records.append(("150%", cur, cut, 0, hours(cut-cur)))
+            records.append(("150%", cur, cut, 0, hours(cut - cur)))
+
         elif cur.hour < 4:
             ot_type = "200%" if _is_weekend(cur) or _is_holiday(cur) else "150%"
             cut = cur.replace(hour=4, minute=0, second=0)
             if cut > end_dt:
                 cut = end_dt
-            records.append((ot_type, cur, cut, hours(cut-cur), 0))
+            records.append((ot_type, cur, cut, hours(cut - cur), 0))
+
+        else:
+            # ✅ 兜底：4:00–18:00 非 OT 时间段，直接跳到 18:00
+            cut = cur.replace(hour=18, minute=0, second=0)
+            if cut <= cur:
+                cut = end_dt if end_dt > cur else cur
+
         cur = cut
 
     return records
@@ -618,7 +628,10 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
       6) For a shift (IN → OUT) fully on weekend/holiday → OT = end - start (200%)
     """
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()   # ✅ 立即应答，防止超时
+    except Exception:
+        pass
 
     user = update.effective_user
     driver = user.username or user.first_name
@@ -700,8 +713,8 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                     )
         except Exception:
             logger.exception("Morning OT calculation at clock-in failed")
+            
     if action == "OUT":
-
         if not last or last[O_IDX_ACTION] != "IN":
             append_ot_record(
                 None,
