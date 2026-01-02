@@ -626,6 +626,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if query:
         try:
             await query.answer()
+            await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
             pass
 
@@ -660,6 +661,11 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # ===== IN：只记录，不算 OT =====
     if action == "IN":
+        if chat_id:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"☀️ {driver} clock in {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
         return
 
     # ===== OUT：开始算 OT =====
@@ -779,7 +785,10 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
         for ot_type, s, e, m_h, e_h in records:
             append_ot_record(s,e,m_h,e_h,ot_type,"Auto OT")
-
+        if chat_id:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🌟 {driver} clock out {end_dt.strftime('%Y-%m-%d %H:%M:%S')}"
 
 # Edit the inline-button message as a confirmation
 
