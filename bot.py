@@ -522,7 +522,7 @@ def split_ot_segments(start_dt, end_dt):
 
     return segments
 
-def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
+def append_ot_record(driver, start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
         try:
             tab_name = OT_RECORD_TAB
             ws = open_worksheet(tab_name)
@@ -701,6 +701,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     # ===== OUT：开始算 OT =====
     if not last or last[O_IDX_ACTION] != "IN":
         append_ot_record(
+            driver
             None,
             ts_dt,
             0,
@@ -727,7 +728,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     for ot_type, s, e, m_h, e_h in records:
-        append_ot_record(s, e, m_h, e_h, ot_type, "Auto OT")
+        append_ot_record(driver, s, e, m_h, e_h, ot_type, "Auto OT")
 
     if chat_id:
         await context.bot.send_message(
@@ -750,6 +751,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                     ot_hours = round((ot_end - ot_start).total_seconds() / 3600, 2)
 
                     append_ot_record(
+                        driver,
                         ot_start,
                         ot_end,
                         ot_hours,   # morning OT
@@ -763,6 +765,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if action == "OUT":
         if not last or last[O_IDX_ACTION] != "IN":
             append_ot_record(
+                driver
                 None,
                 ts_dt,
                 0,
