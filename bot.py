@@ -701,7 +701,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     # ===== OUT：开始算 OT =====
     if not last or last[O_IDX_ACTION] != "IN":
         append_ot_record(
-            driver
+            driver,
             None,
             ts_dt,
             0,
