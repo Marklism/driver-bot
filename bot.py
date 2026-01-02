@@ -765,7 +765,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if action == "OUT":
         if not last or last[O_IDX_ACTION] != "IN":
             append_ot_record(
-                driver
+                driver,
                 None,
                 ts_dt,
                 0,
@@ -789,7 +789,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         if not records:
             return
         for ot_type, s, e, m_h, e_h in records:
-            append_ot_record(s,e,m_h,e_h,ot_type,"Auto OT")
+            append_ot_record(driver,s,e,m_h,e_h,ot_type,"Auto OT")
         if chat_id:
             await context.bot.send_message(
                 chat_id=chat_id,
