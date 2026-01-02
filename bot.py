@@ -622,6 +622,7 @@ def _is_weekend(dt: datetime) -> bool:
 
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global append_ot_record
     query = update.callback_query
     if query:
         try:
