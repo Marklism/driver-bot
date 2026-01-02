@@ -521,6 +521,36 @@ def split_ot_segments(start_dt, end_dt):
         cur = cut
 
     return segments
+
+def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
+        try:
+            tab_name = OT_RECORD_TAB
+            ws = open_worksheet(tab_name)
+            try:
+                ensure_sheet_headers_match(ws, OT_RECORD_HEADERS)
+            except Exception:
+                pass
+
+            day_str = (start_dt or end_dt).strftime("%Y-%m-%d") if (start_dt or end_dt) else ""
+            row = [
+                driver,
+                ot_type_str,
+                start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
+                end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
+                day_str,
+                f"{morning_h:.2f}" if morning_h > 0 else "",
+                f"{evening_h:.2f}" if evening_h > 0 else "",
+                note_str,
+            ]
+
+            try:
+                ws.append_row(row, value_input_option="USER_ENTERED")
+            except Exception:
+                ws.append_row(row)
+
+        except Exception:
+            logger.exception("Failed to append OT record row for %s", driver)
+
 def weekday_ot(start_dt, end_dt):
     records = []
 
@@ -622,7 +652,6 @@ def _is_weekend(dt: datetime) -> bool:
 
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global append_ot_record
     query = update.callback_query
     if query:
         try:
@@ -708,35 +737,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 
     # Helper: append one OT record row
-    def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
-        try:
-            tab_name = OT_RECORD_TAB
-            ws = open_worksheet(tab_name)
-            try:
-                ensure_sheet_headers_match(ws, OT_RECORD_HEADERS)
-            except Exception:
-                pass
-
-            day_str = (start_dt or end_dt).strftime("%Y-%m-%d") if (start_dt or end_dt) else ""
-            row = [
-                driver,
-                ot_type_str,
-                start_dt.strftime("%Y-%m-%d %H:%M:%S") if start_dt else "",
-                end_dt.strftime("%Y-%m-%d %H:%M:%S") if end_dt else "",
-                day_str,
-                f"{morning_h:.2f}" if morning_h > 0 else "",
-                f"{evening_h:.2f}" if evening_h > 0 else "",
-                note_str,
-            ]
-
-            try:
-                ws.append_row(row, value_input_option="USER_ENTERED")
-            except Exception:
-                ws.append_row(row)
-
-        except Exception:
-            logger.exception("Failed to append OT record row for %s", driver)
-
+    
     # ===== OT calculation starts here =====
     if action == "IN" and is_normal_weekday:
         try:
