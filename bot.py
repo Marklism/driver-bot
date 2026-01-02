@@ -788,7 +788,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         if chat_id:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🌟 {driver} clock out {end_dt.strftime('%Y-%m-%d %H:%M:%S')}"
+                text=f"🌟 {driver} clock out {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # Edit the inline-button message as a confirmation
 
