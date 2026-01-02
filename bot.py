@@ -331,7 +331,7 @@ async def ot_report_entry(update, context):
     await context.bot.send_message(
         chat_id=update.effective_user.id,
         text="Select driver:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # -----------------------------
