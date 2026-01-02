@@ -622,28 +622,16 @@ def _is_weekend(dt: datetime) -> bool:
 
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Unified Clock In/Out + OT calculation handler.
-
-    Rules (Mon–Fri, non-holiday):
-      1) If action=OUT and 00:00 <= ts < 04:00 → OT = ts - 00:00 (same day)  (morning OT)
-      2) If action=IN and 04:00 < ts < 07:00 → OT = 08:00 - ts              (morning OT)
-      3) If action=IN and ts >= 07:00      → no OT
-      4) If action=OUT and ts < 18:30      → no OT
-      5) If action=OUT and ts >= 18:30     → OT = ts - 18:00                (evening OT)
-
-    Weekend (Sat 00:00 – Sun 23:59) and holidays:
-      6) For a shift (IN → OUT) fully on weekend/holiday → OT = end - start (200%)
-    """
     query = update.callback_query
-    try:
-        await query.answer()   # ✅ 立即应答，防止超时
-    except Exception:
-        pass
+    if query and not query._answered:
+        try:
+            await query.answer()
+        except Exception:
+            pass
 
     user = update.effective_user
     driver = user.username or user.first_name
-    chat = query.message.chat if query.message else None
+    chat_id = update.effective_chat.id if update.effective_chat else None
 
     # previous entry for this driver
     last = get_last_clock_entry(driver)
@@ -658,6 +646,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         ts_dt = datetime.strptime(rec[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
     except Exception:
         ts_dt = _now_dt()
+
     shift_ref_dt = ts_dt
     if last and len(last) > O_IDX_ACTION and last[O_IDX_ACTION] == "IN":
         try:
@@ -668,7 +657,48 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     is_weekend = _is_weekend(shift_ref_dt)
     is_holiday = _is_holiday(shift_ref_dt)
     is_normal_weekday = (not is_weekend) and (not is_holiday)
-    records = []
+
+    # ===== IN：只记录，不算 OT =====
+    if action == "IN":
+        return
+
+    # ===== OUT：开始算 OT =====
+    if not last or last[O_IDX_ACTION] != "IN":
+        append_ot_record(
+            None,
+            ts_dt,
+            0,
+            0,
+            "200%",
+            "Missing clock-in, manual adjustment required"
+        )
+        return
+
+    start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
+    end_dt = ts_dt
+    if end_dt < start_dt:
+        end_dt += timedelta(days=1)
+
+    if is_normal_weekday:
+        if end_dt.date() == start_dt.date():
+            records = weekday_ot(start_dt, end_dt)
+        else:
+            records = weekday_crossday_ot(start_dt, end_dt)
+    else:
+        records = weekend_ot(start_dt, end_dt, True)
+
+    if not records:
+        return
+
+    for ot_type, s, e, m_h, e_h in records:
+        append_ot_record(s, e, m_h, e_h, ot_type, "Auto OT")
+
+    if chat_id:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="OT recorded successfully."
+        )
+
 
     # Helper: append one OT record row
     def append_ot_record(start_dt, end_dt, morning_h, evening_h, ot_type_str, note_str):
@@ -5139,37 +5169,3 @@ from telegram.ext import CallbackQueryHandler, CommandHandler
 
 # ===================== HOTFIX OVERRIDES (AUTO-GENERATED) =====================
 # This section intentionally overrides logic without touching original code.
-
-
-# ---- FIX 2: Weekend / Holiday OT must be calculated ----
-_original_clock_handler = clock_callback_handler
-
-async def clock_callback_handler(update, context):
-    await _original_clock_handler(update, context)
-    try:
-        user = update.effective_user.username
-        ws = open_worksheet(OT_TAB)
-        rows = ws.get_all_values()
-        if len(rows) < 2:
-            return
-        last = rows[-1]
-        if last[O_IDX_ACTION] != "OUT":
-            return
-
-        start = datetime.strptime(rows[-2][O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-        end = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-        if end < start:
-            end += timedelta(days=1)
-
-        if _is_weekend(start) or _is_holiday(start):
-            dur = round((end - start).total_seconds() / 3600, 2)
-            if dur > 0:
-                append_ot_record(start, end, 0.0, dur, "200%", "Weekend/Holiday OT")
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"OT Summary: {dur} hour(s) @ 200%"
-                )
-    except Exception:
-        logger.exception("Weekend OT hotfix failed")
-
-# =================== END HOTFIX OVERRIDES ===================
