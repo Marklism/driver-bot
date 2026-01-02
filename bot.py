@@ -733,67 +733,8 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if chat_id:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="OT recorded successfully."
+            text=f"🌟 {driver} clock out {end_dt.strftime('%Y-%m-%d %H:%M:%S')}"
         )
-
-
-    # Helper: append one OT record row
-    
-    # ===== OT calculation starts here =====
-    if action == "IN" and is_normal_weekday:
-        try:
-            # 04:00 < IN < 07:00
-            if ts_dt.hour > 4 and ts_dt.hour < 7:
-                ot_start = ts_dt
-                ot_end = ts_dt.replace(hour=8, minute=0, second=0)
-
-                if ot_end > ot_start:
-                    ot_hours = round((ot_end - ot_start).total_seconds() / 3600, 2)
-
-                    append_ot_record(
-                        driver,
-                        ot_start,
-                        ot_end,
-                        ot_hours,   # morning OT
-                        0,          # evening OT
-                        "150%",
-                        "Auto OT (Morning IN)"
-                    )
-        except Exception:
-            logger.exception("Morning OT calculation at clock-in failed")
-            
-    if action == "OUT":
-        if not last or last[O_IDX_ACTION] != "IN":
-            append_ot_record(
-                driver,
-                None,
-                ts_dt,
-                0,
-                0,
-                "200%",
-                "Missing clock-in, manual adjustment required"
-            )
-            return
-
-        start_dt = datetime.strptime(last[O_IDX_TIME], "%Y-%m-%d %H:%M:%S")
-        end_dt = ts_dt
-
-        if is_normal_weekday:
-            if end_dt.date() == start_dt.date():
-                records = weekday_ot(start_dt, end_dt)
-            else:
-                records = weekday_crossday_ot(start_dt, end_dt)
-        else:
-            records = weekend_ot(start_dt, end_dt, True)
-
-        if not records:
-            return
-        for ot_type, s, e, m_h, e_h in records:
-            append_ot_record(driver,s,e,m_h,e_h,ot_type,"Auto OT")
-        if chat_id:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"🌟 {driver} clock out {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # Edit the inline-button message as a confirmation
 
