@@ -182,12 +182,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
 from telegram.request import HTTPXRequest
 
-async def reply_private(update, context, text, reply_markup=None):
-    await context.bot.send_message(
-        chat_id=update.effective_user.id,
-        text=text,
-        reply_markup=reply_markup,
-    )
 
 async def reply_to_origin_chat(update, context, text, reply_markup=None):
     """
