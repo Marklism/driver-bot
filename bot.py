@@ -328,12 +328,10 @@ async def ot_report_entry(update, context):
         [InlineKeyboardButton("📦 Export ALL Drivers", callback_data="OTR_ALL")]
     )
 
-    await reply_private(
-        update,
-        context,
-        "Select driver:",
+    await context.bot.send_message(
+        chat_id=update.effective_user.id,
+        text="Select driver:",
         reply_markup=InlineKeyboardMarkup(keyboard)
-    )
 
 
 # -----------------------------
@@ -1439,7 +1437,7 @@ async def process_leave_entry(ws, driver, start, end, reason, notes, update, con
             
             # 检查是否是跨年假期
             if ym_days:
-                first_line = f"Driver {driver} {start} to {end} AL ({leave_days} days)"
+                first_line = f"🏝Driver {driver} {start} to {end} AL ({leave_days} days)"
                 await reply_to_origin_chat(update, context, first_line)
                 
                 for (y, m) in sorted(ym_days.keys()):
@@ -1627,14 +1625,14 @@ def start_mission_record(driver: str, plate: str, departure: str, update=None) -
         next_no = _missions_next_no(ws)
         guid = str(uuid.uuid4())
 
-        username = "UNKNOWN"
-        if update and update.effective_user:
-            username = (update.effective_user.username or update.effective_user.full_name)
+        #username = "UNKNOWN"
+        #if update and update.effective_user:
+            #username = (update.effective_user.username or update.effective_user.full_name)
 
         row = [""] * M_MANDATORY_COLS
         row[M_IDX_GUID] = guid
         row[M_IDX_NO] = next_no
-        row[M_IDX_NAME] = username
+        row[M_IDX_NAME] = driver
         row[M_IDX_PLATE] = plate
         row[M_IDX_START] = start_ts
         row[M_IDX_END] = ""
@@ -1651,16 +1649,13 @@ def start_mission_record(driver: str, plate: str, departure: str, update=None) -
         logger.exception("Failed to append mission start")
         return {"ok": False, "message": str(e)}
 
+
 def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> dict:
     try:
         ws = open_worksheet(MISSIONS_TAB)
     except Exception as e:
         logger.exception("Failed to open MISSIONS_TAB: %s", e)
         return {"ok": False, "message": "Could not open missions sheet: " + str(e)}
-
-    username = "UNKNOWN"
-    if update and update.effective_user:
-        username = (update.effective_user.username or update.effective_user.full_name)
 
     try:
         vals, start_idx = _missions_get_values_and_data_rows(ws)
@@ -1674,7 +1669,8 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
             rec_start = str(row[M_IDX_START]).strip()
             rec_dep = str(row[M_IDX_DEPART]).strip()
 
-            if rec_plate == plate and rec_name == username and not rec_end:
+            # ✅ 这里：username → driver
+            if rec_plate == plate and rec_name == driver and not rec_end:
                 row_number = i + 1
                 end_ts = now_str()
 
@@ -1704,7 +1700,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
 
                 logger.info(
                     "Mission end recorded: driver=%s plate=%s end=%s",
-                    username, plate, end_ts
+                    driver, plate, end_ts
                 )
 
                 s_dt = parse_ts(rec_start) if rec_start else None
@@ -1712,7 +1708,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                     return {
                         "ok": True,
                         "merged": False,
-                        "driver": username,
+                        "driver": driver,
                         "plate": plate,
                         "end_ts": end_ts,
                     }
@@ -1733,7 +1729,8 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                     rstart = str(r2[M_IDX_START]).strip()
                     rend = str(r2[M_IDX_END]).strip()
 
-                    if rn != username or rp != plate:
+                    # ✅ 这里：username → driver
+                    if rn != driver or rp != plate:
                         continue
                     if not rstart or not rend:
                         continue
@@ -1762,14 +1759,16 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                         break
 
                 if not found_pair and candidates:
-                    candidates.sort(key=lambda x: abs((x["start"] - s_dt).total_seconds()))
+                    candidates.sort(
+                        key=lambda x: abs((x["start"] - s_dt).total_seconds())
+                    )
                     found_pair = candidates[0]
 
                 if not found_pair:
                     return {
                         "ok": True,
                         "merged": False,
-                        "driver": username,
+                        "driver": driver,
                         "plate": plate,
                         "end_ts": end_ts,
                     }
@@ -1797,7 +1796,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
                 return {
                     "ok": True,
                     "merged": True,
-                    "driver": username,
+                    "driver": driver,
                     "plate": plate,
                     "end_ts": end_ts,
                 }
@@ -1807,6 +1806,7 @@ def end_mission_record(driver: str, plate: str, arrival: str, update=None) -> di
     except Exception as e:
         logger.exception("Failed to update mission end: %s", e)
         return {"ok": False, "message": str(e)}
+
 
 def mission_rows_for_period(start_date: datetime, end_date: datetime) -> List[List[Any]]:
     ws = open_worksheet(MISSIONS_TAB)
