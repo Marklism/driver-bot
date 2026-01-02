@@ -656,7 +656,7 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if query:
         try:
             await query.answer()
-            await query.edit_message_reply_markup(reply_markup=None)
+            await query.delete_message()
         except Exception:
             pass
 
