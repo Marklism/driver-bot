@@ -623,7 +623,7 @@ def _is_weekend(dt: datetime) -> bool:
 
 async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if query and not query._answered:
+    if query:
         try:
             await query.answer()
         except Exception:
