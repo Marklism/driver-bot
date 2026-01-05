@@ -2992,11 +2992,11 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("mission_depart callback missing fields: %s", data)
             return
         _, dep, plate = parts
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": username}
-        res = start_mission_record(username, plate, dep, update=update)
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "departure": dep, "driver": driver}
+        res = start_mission_record(driver, plate, dep, update=update)
         if res.get("ok"):
             # mission_start_ok template already adjusted to not show the word "plate"
-            await q.edit_message_text(t(user_lang, "mission_start_ok", driver=username, plate=plate, dep=dep, ts=res.get("start_ts")))
+            await q.edit_message_text(t(user_lang, "mission_start_ok", driver=driver, plate=plate, dep=dep, ts=res.get("start_ts")))
         else:
             await q.edit_message_text("❌ " + res.get("message", ""))
         return
@@ -3031,7 +3031,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rp = str(r[M_IDX_PLATE]).strip()
                 rend = str(r[M_IDX_END]).strip()
                 dep = str(r[M_IDX_DEPART]).strip()
-                if rn == username and rp == plate and not rend:
+                if rn == driver and rp == plate and not rend:
                     found_idx = i
                     found_dep = dep
                     break
@@ -3041,7 +3041,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # arrival automatically opposite of departure
             arrival = "SHV" if found_dep == "PP" else "PP"
-            res = end_mission_record(username, plate, arrival, update=update)
+            res = end_mission_record(driver, plate, arrival, update=update)
 
             if not res.get("ok"):
                 await q.edit_message_text("❌ " + res.get("message", ""))
@@ -3050,10 +3050,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Show standardized arrival message
             end_ts = res.get("end_ts") or ""
             try:
-                await q.edit_message_text(t(user_lang, "mission_end_ok", driver=username, plate=plate, arr=arrival, ts=end_ts))
+                await q.edit_message_text(t(user_lang, "mission_end_ok", driver=driver, plate=plate, arr=arrival, ts=end_ts))
             except Exception:
                 try:
-                    await q.message.chat.send_message(t(user_lang, "mission_end_ok", driver=username, plate=plate, arr=arrival, ts=end_ts))
+                    await q.message.chat.send_message(t(user_lang, "mission_end_ok", driver=driver, plate=plate, arr=arrival, ts=end_ts))
                     await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
                 except Exception:
                     pass
