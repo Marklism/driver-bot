@@ -692,6 +692,11 @@ async def clock_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # ===== OUT：开始算 OT =====
     if not last or last[O_IDX_ACTION] != "IN":
+        if chat_id:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🌟 {driver} clock out {ts_dt.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
         append_ot_record(
             driver,
             None,
