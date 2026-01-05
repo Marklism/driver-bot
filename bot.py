@@ -3007,11 +3007,20 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # try to get plate from pending_mission
             pending = context.user_data.get("pending_mission") or {}
             plate = pending.get("plate")
-            if not plate:
+            driver = pending.get("driver")
+            if not plate or not driver:
                 logger.warning("mission_end_now callback without plate and no pending_mission: %s", data)
                 return
         else:
             _, plate = data.split("|", 1)
+            pending = context.user_data.get("pending_mission") or {}
+            driver = pending.get("driver")   # ✅ 这里也要取
+            if not driver:
+                logger.warning(
+                    "mission_end_now callback without driver in pending_mission: %s",
+                    data
+                )
+                return
 
         # permission check
         driver_map = get_driver_map()
@@ -3565,7 +3574,10 @@ async def lang_command(update, context):
 
     lang = context.args[0].lower()
     if lang not in ("en", "km"):
-        await reply_private(update,context,"Supported languages: en, km")
+        await context.bot.send_message(
+            chat_id=update.effective_user.id,
+            text="Supported languages: en, km"
+        )
         return
 
     context.user_data["lang"] = lang
