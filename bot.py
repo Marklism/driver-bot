@@ -3039,7 +3039,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # permission check
         driver_map = get_driver_map()
-        allowed = driver_map.get(username, []) if username else []
+        allowed = driver_map.get(driver, []) if driver else []
         if allowed and plate not in allowed:
             await q.edit_message_text(t(user_lang, "not_allowed", plate=plate))
             return
