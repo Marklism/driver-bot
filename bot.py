@@ -2892,7 +2892,11 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     data = q.data
     user = q.from_user
-    username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
+    if user:
+        driver = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
+    else:
+        driver = ""
+        
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
     if data == "show_start":
