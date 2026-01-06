@@ -181,7 +181,12 @@ from telegram.error import TimedOut, NetworkError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
 from telegram.request import HTTPXRequest
-
+from telegram.error import Forbidden
+try:
+    await context.bot.send_message(...)
+except Forbidden:
+    logger.warning("Forbidden: cannot message this chat")
+    return
 
 async def reply_to_origin_chat(update, context, text, reply_markup=None):
     """
@@ -3569,19 +3574,29 @@ async def handle_clock_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.exception("Error in handle_clock_button")
 async def lang_command(update, context):
     if not context.args:
-        await reply_private(update,context,"Usage: /lang en | /lang km")
+        await reply_to_origin_chat(
+            update,
+            context,
+            "Usage: /lang en | /lang km"
+        )
         return
 
     lang = context.args[0].lower()
     if lang not in ("en", "km"):
-        await context.bot.send_message(
-            chat_id=update.effective_user.id,
-            text="Supported languages: en, km"
+        await reply_to_origin_chat(
+            update,
+            context,
+            "Supported languages: en, km"
         )
         return
 
     context.user_data["lang"] = lang
-    await reply_private(update,context,f"Language set to {lang}")
+
+    await reply_to_origin_chat(
+        update,
+        context,
+        f"Language set to {lang}"
+    )
 
 async def mission_report_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Entry command similar to ot_report_entry
@@ -4976,13 +4991,15 @@ from telegram.ext import CommandHandler, CallbackQueryHandler
 
 # === Unified private reply helper (A-approved) ===
 async def reply_private(update, context, text, **kwargs):
-    user_id = update.effective_user.id
+    chat = update.effective_chat
+    if not chat or chat.type != "private":
+        return   # ❗️不是私聊，直接不发
+
     await context.bot.send_message(
-        chat_id=user_id,
+        chat_id=chat.id,
         text=text,
         **kwargs
     )
-
 
 # ---- Language command ----
 async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
