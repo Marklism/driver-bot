@@ -2972,7 +2972,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         _, plate = parts
         # show departure choices
-        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": username}
+        context.user_data["pending_mission"] = {"action": "start", "plate": plate, "driver": driver}
         kb = [[InlineKeyboardButton("PP", callback_data=f"mission_depart|PP|{plate}"),
                InlineKeyboardButton("SHV", callback_data=f"mission_depart|SHV|{plate}")]]
         await q.edit_message_text(t(user_lang, "mission_start_prompt_depart"), reply_markup=InlineKeyboardMarkup(kb))
@@ -2995,7 +2995,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("mission_end_plate callback missing plate: %s", data)
             return
         _, plate = parts
-        context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": username}
+        context.user_data["pending_mission"] = {"action": "end", "plate": plate, "driver": driver}
         # allow immediate end (auto arrival) button; callback includes plate for robustness
         kb = [[InlineKeyboardButton("End mission now (auto arrival)", callback_data=f"mission_end_now|{plate}")]]
         await q.edit_message_text(t(user_lang, "mission_end_prompt_plate"), reply_markup=InlineKeyboardMarkup(kb))
