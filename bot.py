@@ -544,7 +544,19 @@ def append_ot_record(driver, start_dt, end_dt, morning_h, evening_h, ot_type_str
 
 def weekday_ot(start_dt, end_dt):
     records = []
-
+    # ===== Morning OT (04:00 < clock in < 07:00) =====
+    if 4 < start_dt.hour < 7 or (start_dt.hour == 4 and start_dt.minute > 0):
+        morning_end = start_dt.replace(hour=8, minute=0, second=0)
+        if morning_end > start_dt:
+            m_hours = hours(morning_end - start_dt)
+            if m_hours > 0:
+                records.append((
+                    "150%",
+                    start_dt,
+                    morning_end,
+                    m_hours,
+                    0
+                ))
     if end_dt.hour > 18 or (end_dt.hour == 18 and end_dt.minute >= 30):
         ot_start = end_dt.replace(hour=18, minute=0, second=0)
         records.append(("150%", ot_start, end_dt, 0, hours(end_dt-ot_start)))
