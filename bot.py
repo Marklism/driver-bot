@@ -3287,18 +3287,18 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("Invalid selection.")
             return
         driver_map = get_driver_map()
-        allowed = driver_map.get(username, []) if username else []
+        allowed = driver_map.get(driver, []) if driver else []
         if allowed and plate not in allowed:
             await q.edit_message_text(t(user_lang, "not_allowed", plate=plate))
             return
         if action == "start":
-            res = record_start_trip(username, plate)
+            res = record_start_trip(driver, plate)
             if res.get("ok"):
                 try:
-                    await q.edit_message_text(t(user_lang, "start_ok", driver=username, plate=plate, ts=res.get("ts")))
+                    await q.edit_message_text(t(user_lang, "start_ok", driver=driver, plate=plate, ts=res.get("ts")))
                 except Exception:
                     try:
-                        await q.message.chat.send_message(t(user_lang, "start_ok", driver=username, plate=plate, ts=res.get("ts")))
+                        await q.message.chat.send_message(t(user_lang, "start_ok", driver=driver, plate=plate, ts=res.get("ts")))
                         await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
                     except Exception:
                         pass
@@ -3309,22 +3309,22 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             return
         elif action == "end":
-            res = record_end_trip(username, plate)
+            res = record_end_trip(driver, plate)
             if res.get("ok"):
                 ts = res.get("ts")
                 dur = res.get("duration") or ""
                 nowdt = _now_dt()
-                n_today = count_trips_for_day(username, nowdt)
+                n_today = count_trips_for_day(driver, nowdt)
                 month_start = datetime(nowdt.year, nowdt.month, 1)
                 if nowdt.month == 12:
                     month_end = datetime(nowdt.year + 1, 1, 1)
                 else:
                     month_end = datetime(nowdt.year, nowdt.month + 1, 1)
-                n_month = count_trips_for_month(username, month_start, month_end)
+                n_month = count_trips_for_month(driver, month_start, month_end)
                 # year counts
                 year_start = datetime(nowdt.year, 1, 1)
                 year_end = datetime(nowdt.year + 1, 1, 1)
-                n_year = count_trips_for_month(username, year_start, year_end)
+                n_year = count_trips_for_month(driver, year_start, year_end)
                 # plate counts
                 p_today = 0
                 p_month = 0
@@ -3357,16 +3357,16 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     logger.exception("Failed to compute plate trip counts")
                 try:
-                    await q.edit_message_text(t(user_lang, "end_ok", driver=username, plate=plate, ts=ts))
+                    await q.edit_message_text(t(user_lang, "end_ok", driver=driver, plate=plate, ts=ts))
                 except Exception:
                     try:
-                        await q.message.chat.send_message(t(user_lang, "end_ok", driver=username, plate=plate, ts=ts))
+                        await q.message.chat.send_message(t(user_lang, "end_ok", driver=driver, plate=plate, ts=ts))
                         await safe_delete_message(context.bot, q.message.chat.id, q.message.message_id)
                     except Exception:
                         pass
                 try:
                     month_label = month_start.strftime("%B")
-                    await q.message.chat.send_message(t(user_lang, "trip_summary", driver=username, n_today=n_today, n_month=n_month, month=month_label, n_year=n_year, plate=plate, p_today=p_today, p_month=p_month, p_year=p_year, year=nowdt.year))
+                    await q.message.chat.send_message(t(user_lang, "trip_summary", driver=driver, n_today=n_today, n_month=n_month, month=month_label, n_year=n_year, plate=plate, p_today=p_today, p_month=p_month, p_year=p_year, year=nowdt.year))
                 except Exception:
                     logger.exception("Failed to send trip summary")
             else:
