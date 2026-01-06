@@ -181,12 +181,6 @@ from telegram.error import TimedOut, NetworkError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
 from telegram.request import HTTPXRequest
-from telegram.error import Forbidden
-try:
-    await context.bot.send_message(...)
-except Forbidden:
-    logger.warning("Forbidden: cannot message this chat")
-    return
 
 async def reply_to_origin_chat(update, context, text, reply_markup=None):
     """
