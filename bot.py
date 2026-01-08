@@ -3248,7 +3248,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             start_raw = str(r[M_IDX_START]).strip()
 
                             # 只算当前司机
-                            if name != username or not start_raw:
+                            if name != driver or not start_raw:
                                 continue
 
                             start_dt = parse_ts(start_raw)
