@@ -846,6 +846,7 @@ EXPENSE_TAB = os.getenv("EXPENSE_TAB", "Trip_Expenses")
 
 # new separate finance tabs
 FUEL_TAB = os.getenv("FUEL_TAB", "Fuel")
+TOLL_TAB = os.getenv("TOLL_TAB", "Toll")
 PARKING_TAB = os.getenv("PARKING_TAB", "Parking")
 WASH_TAB = os.getenv("WASH_TAB", "Wash")
 REPAIR_TAB = os.getenv("REPAIR_TAB", "Repair")
@@ -1173,6 +1174,7 @@ HEADERS_BY_TAB: Dict[str, List[str]] = {
     PARKING_TAB: ["Plate", "Driver", "DateTime", "Amount", "Notes"],
     WASH_TAB: ["Plate", "Driver", "DateTime", "Amount", "Notes"],
     REPAIR_TAB: ["Plate", "Driver", "DateTime", "Amount", "Notes"],
+    TOLL_TAB: ["Plate", "Driver", "DateTime", "Amount", "Notes"],
     ODO_TAB: ["Plate", "Driver", "DateTime", "Mileage", "Notes"],
 }
 try:
@@ -1978,14 +1980,30 @@ def count_roundtrips_per_driver_month(start_date: datetime, end_date: datetime) 
 
 AMOUNT_RE = re.compile(r'^\s*(\d+(?:\.\d+)?)\s*$', re.I)
 ODO_RE = re.compile(r'^\s*(\d+)(?:\s*km)?\s*$', re.I)
-FIN_TYPES = {"odo", "fuel", "parking", "wash", "repair"}
+
+# Finance types:
+# - odo / fuel  : used ONLY by ODO+Fuel flow
+# - parking / wash / repair / toll : simple finance entries
+FIN_TYPES = {"odo", "fuel", "parking", "wash", "repair", "toll"}
 
 FIN_TYPE_ALIASES = {
+    # ODO
     "odo": "odo", "km": "odo", "odometer": "odo",
+
+    # Fuel (kept ONLY for ODO+Fuel compound flow)
     "fuel": "fuel", "fu": "fuel", "gas": "fuel", "diesel": "fuel",
+
+    # Parking
     "parking": "parking", "park": "parking", "pk": "parking",
+
+    # Wash
     "wash": "wash", "carwash": "wash",
+
+    # Repair
     "repair": "repair", "rep": "repair", "service": "repair", "maint": "repair",
+
+    # Toll (NEW)
+    "toll": "toll", "tollfee": "toll", "highway": "toll",
 }
 
 INV_RE = re.compile(r'(?i)\binv[:#\s]*([^\s,;]+)')
@@ -2162,6 +2180,24 @@ def record_repair(plate: str, amount: str, by_user: str = "", notes: str = "") -
         logger.exception("Failed to record repair: %s", e)
         return {"ok": False, "message": str(e)}
 
+def record_toll(plate: str, amount: str, by_user: str = "", notes: str = "") -> dict:
+    try:
+        ws = open_worksheet(TOLL_TAB)
+        dt = now_str()
+        row = [
+            plate,
+            by_user or "Unknown",
+            dt,
+            str(amount),
+            notes or "",
+        ]
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        return {"ok": True}
+    except Exception as e:
+        logger.exception("Failed to record toll: %s", e)
+        return {"ok": False, "message": str(e)}
+
+
 BOT_ADMINS = set([u.strip() for u in os.getenv("BOT_ADMINS", BOT_ADMINS_DEFAULT).split(",") if u.strip()])
 BOT_ADMINS.add("markpeng1,kmnyy,ClaireRin777")
 
@@ -2277,27 +2313,43 @@ async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_finance_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     user = query.from_user
     username = user.username or (user.first_name or "")
+
     if username not in BOT_ADMINS:
         try:
             await query.edit_message_text("❌ You are not an admin.")
         except Exception:
             pass
         return
+
     kb = [
-        [InlineKeyboardButton("ODO+Fuel", callback_data="fin_type|odo_fuel"), InlineKeyboardButton("Fuel (solo)", callback_data="fin_type|fuel")],
-        [InlineKeyboardButton("Parking", callback_data="fin_type|parking"), InlineKeyboardButton("Wash", callback_data="fin_type|wash")],
-        [InlineKeyboardButton("Repair", callback_data="fin_type|repair")],
+        [
+            InlineKeyboardButton("ODO+Fuel", callback_data="fin_type|odo_fuel"),
+            InlineKeyboardButton("Toll Fee", callback_data="fin_type|toll"),
+        ],
+        [
+            InlineKeyboardButton("Parking", callback_data="fin_type|parking"),
+            InlineKeyboardButton("Wash", callback_data="fin_type|wash"),
+        ],
+        [
+            InlineKeyboardButton("Repair", callback_data="fin_type|repair"),
+        ],
     ]
+
     try:
-        await query.edit_message_text("Select finance type:", reply_markup=InlineKeyboardMarkup(kb))
+        await query.edit_message_text(
+            "Select finance type:",
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
     except Exception:
         logger.exception("Failed to prompt finance options.")
         try:
             await query.edit_message_text("Failed to prompt for finance entry.")
         except Exception:
             pass
+
 
 async def admin_fin_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2545,6 +2597,9 @@ async def process_force_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
             elif typ == "repair":
                 res = record_repair(plate, amt, by_user=user.username or "")
                 msg_pub = f"🛠{plate} repair fee ${amt} on {today_date_str()} paid by Mark."
+            elif typ == "toll":
+                res = record_toll(plate, amt, by_user=user.username or "")
+                msg_pub = f"🛣{plate} toll fee ${amt} on {today_date_str()} paid by Mark."
             else:
                 msg_pub = f"{plate} {typ} recorded ${amt}."
             try:
@@ -2942,7 +2997,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 logger.exception("Failed to edit message for pending odo_fuel entry.")
             return
-        if typ in ("parking", "wash", "repair", "fuel"):
+        if typ in ("parking", "wash", "repair", "toll"):
             # Set pending simple state but DO NOT send a separate "Enter amount..." ForceReply message.
             context.user_data["pending_fin_simple"] = {"type": typ, "plate": plate, "origin": origin_info}
             try:
