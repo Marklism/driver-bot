@@ -3145,7 +3145,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _ensure_mission_cycle_loaded(context.chat_data)
                 except Exception:
                     pass
-                key_cycle = f"mission_cycle|{username}|{plate}"
+                key_cycle = f"mission_cycle|{driver}|{plate}"
                 cur_cycle = context.chat_data.get("mission_cycle", {}).get(key_cycle, 0) + 1
                 context.chat_data.setdefault("mission_cycle", {})[key_cycle] = cur_cycle
                 logger.info("Mission cycle for %s now %d", key_cycle, cur_cycle)
@@ -3167,10 +3167,10 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         month_end = datetime(nowdt.year, nowdt.month + 1, 1)
                     counts = count_roundtrips_per_driver_month(month_start, month_end)
-                    d_month = counts.get(username, 0)
+                    d_month = counts.get(driver, 0)
                     year_start = datetime(nowdt.year, 1, 1)
                     counts_year = count_roundtrips_per_driver_month(year_start, datetime(nowdt.year + 1, 1, 1))
-                    d_year = counts_year.get(username, 0)
+                    d_year = counts_year.get(driver, 0)
                     plate_counts_month = 0
                     plate_counts_year = 0
                     try:
@@ -3197,7 +3197,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         except Exception:
                             pass
                     month_label = month_start.strftime("%B")
-                    msg = t(user_lang, "roundtrip_merged_notify", driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                    msg = t(user_lang, "roundtrip_merged_notify", driver=driver, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
                     
                     try:
                         md_month = 0
@@ -3208,7 +3208,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             for r in vals_all[sidx:]:
                                 r = _ensure_row_length(r, M_MANDATORY_COLS)
                                 ruser = str(r[M_IDX_NAME]).strip() if len(r) > M_IDX_NAME else ''
-                                if not ruser or ruser != username:
+                                if not ruser or ruser != driver:
                                     continue
                                 rstart = parse_ts(str(r[M_IDX_START]).strip()) if len(r) > M_IDX_START else None
                                 rend = parse_ts(str(r[M_IDX_END]).strip()) if len(r) > M_IDX_END else None
@@ -3228,7 +3228,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             except Exception:
                                 pass
                         month_label = month_start.strftime('%B')
-                        line1 = t(user_lang, 'roundtrip_merged_notify', driver=username, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
+                        line1 = t(user_lang, 'roundtrip_merged_notify', driver=driver, d_month=d_month, month=month_label, d_year=d_year, year=nowdt.year, plate=plate, p_month=plate_counts_month, p_year=plate_counts_year)
                         # Build line2 and line3 explicitly
                         # === Step 1: 读取 Missions 表 ===
                         ws = open_worksheet(MISSIONS_TAB)
@@ -3287,13 +3287,13 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                             plate_mission_count += 1
 
-                        line2 = (f"🚹Driver {username} has {driver_mission_days} mission day(s) "f"in {month_label} {nowdt.year}.")
+                        line2 = (f"🚹Driver {driver} has {driver_mission_days} mission day(s) "f"in {month_label} {nowdt.year}.")
                         line3 = (f"🚘{plate} completed {plate_mission_count} mission(s) "f"in {month_label} {nowdt.year}.")
                         try:
                             if line1 and line1.strip():
                                 await q.message.chat.send_message(line1)
                             else:
-                                summary_line1 = f"🛫Driver {username} completed {d_month} mission(s) in {month_label} and {d_year} mission(s) in {nowdt.year}."
+                                summary_line1 = f"🛫Driver {driver} completed {d_month} mission(s) in {month_label} and {d_year} mission(s) in {nowdt.year}."
                             await q.message.chat.send_message(line2)
                             await q.message.chat.send_message(line3)
                         except Exception as e:
@@ -3301,7 +3301,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         # record sent time and reset cycle counter
                         try:
                             last_map = context.chat_data.get("last_merge_sent", {})
-                            last_map[f"{username}|{plate}"] = nowdt.isoformat()
+                            last_map[f"{driver}|{plate}"] = nowdt.isoformat()
                             context.chat_data["last_merge_sent"] = last_map
                             context.chat_data["mission_cycle"][key_cycle] = 0
                             try:
