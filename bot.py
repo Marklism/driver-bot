@@ -3275,7 +3275,7 @@ async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             plate_val = str(r[M_IDX_PLATE]).strip()
                             start_raw = str(r[M_IDX_START]).strip()
 
-                            if name != username or plate_val != plate or not start_raw:
+                            if name != driver or plate_val != plate or not start_raw:
                                 continue
 
                             start_dt = parse_ts(start_raw)
