@@ -2935,23 +2935,33 @@ async def location_or_staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def plate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    # If this callback is for clock buttons, delegate to the clock handler immediately.
+    if not q:
+        return
+
+    # If this callback is for clock buttons, delegate immediately
     try:
         data_check = (q.data or "").strip()
     except Exception:
         data_check = ""
     if data_check.startswith("clock_"):
-        # call dedicated handler to avoid being handled as invalid selection by plate_callback
         return await handle_clock_button(update, context)
 
-    await q.answer()
+    # 🔴 关键修复：callback_query.answer 必须兜异常并 return
+    from telegram.error import BadRequest, Forbidden
+
+    try:
+        await q.answer()
+    except (BadRequest, Forbidden):
+        logger.warning("CallbackQuery expired or invalid, handler terminated")
+        return
+
     data = q.data
     user = q.from_user
     if user:
         driver = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
     else:
         driver = ""
-        
+
     user_lang = context.user_data.get("lang", DEFAULT_LANG)
 
     if data == "show_start":
