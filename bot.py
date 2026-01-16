@@ -229,6 +229,31 @@ def get_period_window(now):
     end = end.replace(hour=4, minute=0, second=0, microsecond=0)
     return start, end
 
+def get_last_16th_period(now):
+    """
+    上个月16日04:00（含） → 本月16日04:00（不含）
+    """
+    now = now.replace(tzinfo=None)
+
+    # 本月16日04:00
+    this_16 = now.replace(
+        day=16, hour=4, minute=0, second=0, microsecond=0
+    )
+
+    # 如果当前时间还没到本月16日04:00，就回退到上一个月
+    if now < this_16:
+        if this_16.month == 1:
+            this_16 = this_16.replace(year=this_16.year - 1, month=12)
+        else:
+            this_16 = this_16.replace(month=this_16.month - 1)
+
+    # 上个月16日04:00
+    if this_16.month == 1:
+        last_16 = this_16.replace(year=this_16.year - 1, month=12)
+    else:
+        last_16 = this_16.replace(month=this_16.month - 1)
+
+    return last_16, this_16
 
 def collect_driver_ot(username, rows, header, start_window, end_window):
     idx = {h: header.index(h) for h in header}
@@ -323,6 +348,13 @@ async def ot_report_entry(update, context):
         [InlineKeyboardButton(d, callback_data=f"OTR_ONE:{d}")]
         for d in drivers
     ]
+    keyboard.insert(
+        0,
+        [InlineKeyboardButton(
+            "📅 上月16日04:00 → 本月16日04:00",
+            callback_data="OTR_LAST_16"
+        )]
+    )
     keyboard.append(
         [InlineKeyboardButton("📦 Export ALL Drivers", callback_data="OTR_ALL")]
     )
