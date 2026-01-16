@@ -411,7 +411,56 @@ async def ot_report_driver_callback(update, context):
         del bio
         del csv_text
         return
+    # ---------- 上个月16日 → 本月16日（历史 OT） ----------
+    if query.data == "OTR_LAST_16":
+        ws = open_worksheet("OT Record")
+        rows = ws.get_all_values()
+        if not rows or len(rows) < 2:
+            return
 
+        header, data = rows[0], rows[1:]
+
+        start_window, end_window = get_last_16th_period(_now_dt())
+
+        driver_map = get_driver_map()
+        drivers = sorted(driver_map.keys())
+
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for username in drivers:
+                ot150, ot200, t150, t200 = collect_driver_ot(
+                    username, data, header, start_window, end_window
+                )
+    
+                if not ot150 and not ot200:
+                    continue
+
+                csv_text = build_csv(
+                    username,
+                    start_window,
+                    end_window,
+                    ot150,
+                    ot200,
+                    t150,
+                    t200
+                )
+
+                zf.writestr(
+                    f"OT_Report_{username}.csv",
+                    csv_text
+                )
+
+        zip_buf.seek(0)
+        zip_buf.name = "OT_Report_Last_16th_Period.zip"
+
+        await context.bot.send_document(
+            query.from_user.id,
+            zip_buf,
+            caption="OT report: last 16th period"
+        )
+
+        zip_buf.close()
+        return
     # ---------- 所有司机 ----------
     if query.data == "OTR_ALL":
         driver_map = get_driver_map()
