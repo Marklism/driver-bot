@@ -1,6 +1,0 @@
-venv/
-credentials.json
-credentials.b64.txt
-__pycache__/
-*.pyc
-.DS_Store
